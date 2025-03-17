@@ -1,3 +1,4 @@
+запуск
 ```bash
 docker run -d -p 80:80 --volume ".:/app/example:rw" altrap/imager:v0.0.2
 ```
@@ -42,4 +43,8 @@ func main() {
 	img.GetConvert("my_path_image3.png", "gif") // return uri image to gif format
 }
 ```
-[http://github.com/pkg-ru/imager/pkg/imager/imager-encode](GIT)
+[GIT](https://github.com/pkg-ru/imager/tree/master/pkg/imager/imager-encode) / [GO](https://pkg.go.dev/github.com/pkg-ru/imager/pkg/imager/imager-encode)
+# PHP
+> dev
+# JS/TS
+> dev
