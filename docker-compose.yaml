@@ -1,0 +1,29 @@
+services:
+  imager:
+    build:
+      context: ./
+    restart: always
+    stop_signal: INT
+    stop_grace_period: 5s
+    # command:
+    #   - sh
+    #   - '-c'
+    #   - |
+    #       trap 'exit 0' INT
+    #       trap 'exit 1' TERM
+    #       while true; do :; done
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./example:/app/example:rw
+    working_dir: /app
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.172.100.0/24
