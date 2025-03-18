@@ -18,7 +18,7 @@ func encode(img *imageEncode) string {
 	newData := [][]byte{f}
 	for _, name := range FlagsSorted {
 		flag := Flags[name]
-		// [2]uint8
+		// [3]uint8
 		if name == "color" && img._color {
 			myFlag = myFlag | flag
 			newData = append(newData, img.color[0:])
