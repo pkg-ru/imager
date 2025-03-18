@@ -103,13 +103,13 @@ func main() {
 ## PHP
 
 ```bash
-php composer.phar require --prefer-dist ru-pkg/imager-php "*"
+php composer.phar require --prefer-dist pkg-ru/imager-php "*"
 ```
 
 ```php
 <?php
 
-use ruPkg\imagerPhp\NewImage;
+use pkgRu\imagerPhp\NewImage;
 
 $imager = new NewImage;
 $imager->quality(75)->size(150, 150)->trim(true, 10);
