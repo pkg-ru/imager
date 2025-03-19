@@ -122,7 +122,7 @@ echo $imager->getConvert("my_path_image3.png", "gif"), "\n";  // return: my_path
 ?>
 ```
 
-[GIT](https://github.com/pkg-ru/imager-php)
+[GIT](https://github.com/pkg-ru/imager-php) / [Packagist]https://packagist.org/packages/pkg-ru/imager-php
 
 ## JS/TS
 
