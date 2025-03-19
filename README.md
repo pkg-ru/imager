@@ -32,7 +32,7 @@ services:
 ## Один из примеров настройки микро-сервиса с nginx
 
 ```bash
-docker run -d -p 80:8181 --volume ".:/app/example:rw" --restart=always altrap/imager:v0.0.2
+docker run -d -p 8181:80 --volume ".:/app/example:rw" --restart=always altrap/imager:v0.0.2
 ```
 
 примерный конфиг для nginx
