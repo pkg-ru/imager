@@ -126,4 +126,19 @@ echo $imager->getConvert("my_path_image3.png", "gif"), "\n";  // return: my_path
 
 ## JS/TS
 
-> dev
+```bash
+npm i pkg-imager
+```
+
+```ts
+import { Imager } from "pkg-imager";
+
+var imager = new Imager();
+var group = imager.clone().quality(75).size(150, 150).trim(true, 10);
+
+console.log(group.getConvert("my_path_image.png", "webp")); // return: my_path_image/DqcECgCWSwoAlg.webp
+console.log(group.getConvert("my_path_image2.jpg", "webp")); // return: my_path_image2/DqcBCgCWSwoAlg.webp
+console.log(group.getConvert("my_path_image3.gif", "webp")); // return: my_path_image3/DqcDCgCWSwoAlg.webp
+console.log(group.getConvert("my_path_image3.png", "gif")); // return: my_path_image3/DqcEAwCWSwoAlg.gif
+```
+[GIT](https://github.com/pkg-ru/imager-js) / [NPM](https://www.npmjs.com/package/pkg-imager)
