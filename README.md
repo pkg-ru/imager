@@ -1,4 +1,4 @@
-# Imager
+# Imager <sup><sub><sup>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sub>
 ### Микро-сервис (горячей) генерации ассетов/превью картинок на лету
 
 запуск
