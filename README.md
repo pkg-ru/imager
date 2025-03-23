@@ -75,25 +75,25 @@ upstream imager {
 
 #### Для формирования ссылок на миниатюры картинок, можно использовать следующие библиотеки:
 
-#### [Golang](https://github.com/pkg-ru/imager-client/doc/GO-RU.md)
+#### [Golang](https://github.com/pkg-ru/imager-client/blob/master/doc/GO-RU.md)
 
 ```bash
 go get github.com/pkg-ru/imager-client
 ```
 
-#### [PHP](https://github.com/pkg-ru/imager-client/doc/PHP-RU.md)
+#### [PHP](https://github.com/pkg-ru/imager-client/blob/master/doc/PHP-RU.md)
 
 ```bash
 composer require pkg-ru/imager-client
 ```
 
-#### [JavaScript (TS)](https://github.com/pkg-ru/imager-client/doc/TS-RU.md)
+#### [JavaScript (TS)](https://github.com/pkg-ru/imager-client/blob/master/doc/TS-RU.md)
 
 ```bash
 npm i imager-client
 ```
 
-#### [Python3](https://github.com/pkg-ru/imager-client/doc/PY-RU.md)
+#### [Python3](https://github.com/pkg-ru/imager-client/blob/master/doc/PY-RU.md)
 
 ```bash
 pip install imager-client
