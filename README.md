@@ -27,6 +27,7 @@ services:
 ```
 
 > настройки микро-сервиса в файле `setting.yaml`
+> 
 > можно пробросить в контейнер или создать рядом файл `setting-local.yaml` - настройки будут переопределяться
 
 ## Один из примеров настройки микро-сервиса с nginx
@@ -36,7 +37,9 @@ docker run -d -p 8181:80 --volume ".:/app/example:rw" --restart=always altrap/im
 ```
 
 примерный конфиг для nginx
+
 файлы должны быть доступны для nginx, если файла нет - отправляем запрос на микро-сервис (который создает привьюху)
+
 так-же папка с файлами должна быть проброшена в контейнер... (в нашем случае монтируем ее в /app/example)
 
 ```conf
@@ -65,80 +68,33 @@ upstream imager {
 ```
 
 > Imager можно использовать как самостоятельный сервер
+> 
 > для этого нужно установить зависимости: [ImageMagick](https://imagemagick.org/script/download.php) и [FFmpeg](https://ffmpeg.org/download.html)
 
-для формирования ссылок на миниатюры картинок, можно использовать следующие библиотеки:
+---
 
-> **ВНИМАНИЕ**
-> нужно и можно передавать только те параметры,
-> которые разрешены в настройках `thumb` сервиса Imager
-> по умолчанию `thumb` = `default`
+#### Для формирования ссылок на миниатюры картинок, можно использовать следующие библиотеки:
 
-## Golang
+#### [Golang](https://github.com/pkg-ru/imager-client/doc/GO-RU.md)
 
 ```bash
-go get github.com/pkg-ru/imager/pkg/imager/imager-encode
+go get github.com/pkg-ru/imager-client
 ```
 
-```go
-package main
-
-import (
-	"fmt"
-	imagerencode "github.com/pkg-ru/imager/pkg/imager/imager-encode"
-)
-
-func main() {
-	img := imagerencode.NewImage().Quality(75).Size(150, 150).Trim(true, 10, nil)
-
-	fmt.Println(img.GetConvert("my_path_image.png", "webp"))  // return: my_path_image/DqcECgCWSwoAlg.webp
-	fmt.Println(img.GetConvert("my_path_image2.jpg", "webp")) // return: my_path_image2/DqcBCgCWSwoAlg.webp
-	fmt.Println(img.GetConvert("my_path_image3.gif", "webp")) // return: my_path_image3/DqcDCgCWSwoAlg.webp
-	fmt.Println(img.GetConvert("my_path_image3.png", "gif"))  // return: my_path_image3/DqcEAwCWSwoAlg.gif
-}
-```
-
-[GIT](https://github.com/pkg-ru/imager/tree/master/pkg/imager/imager-encode) / [GO](https://pkg.go.dev/github.com/pkg-ru/imager/pkg/imager/imager-encode)
-
-## PHP
+#### [PHP](https://github.com/pkg-ru/imager-client/doc/PHP-RU.md)
 
 ```bash
-php composer.phar require --prefer-dist pkg-ru/imager-php "*"
+composer require pkg-ru/imager-client
 ```
 
-```php
-<?php
-
-use pkgRu\imagerPhp\NewImage;
-
-$imager = new NewImage;
-$imager->quality(75)->size(150, 150)->trim(true, 10);
-
-echo $imager->getConvert("my_path_image.png", "webp"), "\n";  // return: my_path_image/DqcECgCWSwoAlg.webp
-echo $imager->getConvert("my_path_image2.jpg", "webp"), "\n"; // return: my_path_image2/DqcBCgCWSwoAlg.webp
-echo $imager->getConvert("my_path_image3.gif", "webp"), "\n"; // return: my_path_image3/DqcDCgCWSwoAlg.webp
-echo $imager->getConvert("my_path_image3.png", "gif"), "\n";  // return: my_path_image3/DqcEAwCWSwoAlg.gif
-
-?>
-```
-
-[GIT](https://github.com/pkg-ru/imager-php) / [Packagist](https://packagist.org/packages/pkg-ru/imager-php)
-
-## JS/TS
+#### [JavaScript (TS)](https://github.com/pkg-ru/imager-client/doc/TS-RU.md)
 
 ```bash
-npm i pkg-imager
+npm i imager-client
 ```
 
-```ts
-import { Imager } from "pkg-imager";
+#### [Python3](https://github.com/pkg-ru/imager-client/doc/PY-RU.md)
 
-var imager = new Imager();
-var group = imager.clone().quality(75).size(150, 150).trim(true, 10);
-
-console.log(group.getConvert("my_path_image.png", "webp")); // return: my_path_image/DqcECgCWSwoAlg.webp
-console.log(group.getConvert("my_path_image2.jpg", "webp")); // return: my_path_image2/DqcBCgCWSwoAlg.webp
-console.log(group.getConvert("my_path_image3.gif", "webp")); // return: my_path_image3/DqcDCgCWSwoAlg.webp
-console.log(group.getConvert("my_path_image3.png", "gif")); // return: my_path_image3/DqcEAwCWSwoAlg.gif
+```bash
+pip install imager-client
 ```
-[GIT](https://github.com/pkg-ru/imager-js) / [NPM](https://www.npmjs.com/package/pkg-imager)
