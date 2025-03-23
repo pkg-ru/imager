@@ -89,7 +89,7 @@ upstream imager {
 
 ### [Golang](https://github.com/pkg-ru/imager-client/blob/master/doc/GO-RU.md)
 
-Для установки клиента в Golang:
+Для установки клиента Golang:
 
 ```bash
 go get github.com/pkg-ru/imager-client
@@ -97,7 +97,7 @@ go get github.com/pkg-ru/imager-client
 
 ### [PHP](https://github.com/pkg-ru/imager-client/blob/master/doc/PHP-RU.md)
 
-Для установки клиента в PHP:
+Для установки клиента PHP:
 
 ```bash
 composer require pkg-ru/imager-client
@@ -105,7 +105,7 @@ composer require pkg-ru/imager-client
 
 ### [JavaScript (TypeScript)](https://github.com/pkg-ru/imager-client/blob/master/doc/TS-RU.md)
 
-Для установки клиента в JavaScript (или TypeScript):
+Для установки клиента JavaScript (или TypeScript):
 
 ```bash
 npm i imager-client
@@ -113,7 +113,7 @@ npm i imager-client
 
 ### [Python3](https://github.com/pkg-ru/imager-client/blob/master/doc/PY-RU.md)
 
-Для установки клиента в Python:
+Для установки клиента Python:
 
 ```bash
 pip install imager-client
