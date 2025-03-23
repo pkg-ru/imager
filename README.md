@@ -1,4 +1,4 @@
-# Imager <sub><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sub>
+# Imager <sup><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sup>
 ### WEB Микро сервис для генерации и компрессии миниатюр к картинкам на лету
 
 Сервис принимает запрос на миниатюру (ассет) — генерирует его из исходного файла и сохраняет на диск в указанное место.
@@ -7,11 +7,11 @@
 
 > Например, вы хотите сжать и уменьшить картинку. Для этого нужно [сгенерировать ссылку](https://github.com/pkg-ru/imager-client) (ассет) на картинку — при запросе которой сервис **Imager** на лету создаст сжатую миниатюру и вернет пользователю.
 > 
-> <sub>
+> <sup>
 > Исходник: example.com/my_image.gif (не обязательно должен быть доступен из web)
 >
 > Ассет на миниатюру: example.com/my_image/DqcDCgCWSwoAlg.webp
-> </sub>
+> </sup>
 >
 
 ---
