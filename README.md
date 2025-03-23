@@ -1,13 +1,19 @@
 # Imager <sup><sub><sup>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sub>
-### Микро-сервис (горячей) генерации ассетов/превью картинок на лету
+### Микро-сервис для горячей генерации ассетов и превью картинок на лету
 
-запуск
+---
+
+## Запуск
+
+Для запуска Imager можно использовать Docker. Воспользуйтесь следующими командами:
+
+### Запуск с Docker
 
 ```bash
 docker run -d -p 80:80 --volume ".:/app/example:rw" altrap/imager:v0.0.2
 ```
 
-или `docker-compose.yaml`
+### Запуск с использованием `docker-compose`
 
 ```yaml
 services:
@@ -26,40 +32,44 @@ services:
       - default
 ```
 
-> настройки микро-сервиса в файле `setting.yaml`
-> 
-> можно пробросить в контейнер или создать рядом файл `setting-local.yaml` - настройки будут переопределяться
+> **Примечание**: Настройки микро-сервиса можно указать в файле `setting.yaml`. Вы можете переопределить настройки, создав файл `setting-local.yaml` рядом с основным файлом конфигурации.
 
-## Один из примеров настройки микро-сервиса с nginx
+---
+
+## Пример настройки микро-сервиса с Nginx
+
+Если вы хотите использовать Nginx для проксирования запросов, выполните следующие шаги.
+
+### Запуск с Docker
 
 ```bash
 docker run -d -p 8181:80 --volume ".:/app/example:rw" --restart=always altrap/imager:v0.0.2
 ```
 
-примерный конфиг для nginx
+### Конфигурация Nginx
 
-файлы должны быть доступны для nginx, если файла нет - отправляем запрос на микро-сервис (который создает привьюху)
+Файлы должны быть доступны для Nginx. Если файл не существует, запрос будет перенаправлен на микро-сервис, который создаст превью изображения.
 
-так-же папка с файлами должна быть проброшена в контейнер... (в нашем случае монтируем ее в /app/example)
+**Пример конфигурации для Nginx**:
 
-```conf
+```nginx
 server {
-	# ....
-	# картинки, если не существует - проксируем
-	location ~ \.(jpg|jpeg|gif|png|apng|jpe|jif|jfif|jfi|webp|avif|heif|heic)$ {
-		try_files $uri @imager;
-	}
+    # ...
+    # Обработка картинок: если файл не существует, проксируем запрос на Imager
+    location ~ \.(jpg|jpeg|gif|png|apng|jpe|jif|jfif|jfi|webp|avif|heif|heic)$ {
+        try_files $uri @imager;
+    }
 
-	location @imager {
-		proxy_pass http://imager$uri$is_args$args;
-		proxy_set_header Host $host;
-		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-		proxy_set_header X-Real-IP $remote_addr;
-		proxy_http_version 1.1;
-		proxy_set_header Upgrade $http_upgrade;
-		proxy_set_header Connection "upgrade";
-	}
-	# ....
+    location @imager {
+        proxy_pass http://imager$uri$is_args$args;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+    # ...
 }
 
 upstream imager {
@@ -67,33 +77,43 @@ upstream imager {
 }
 ```
 
-> Imager можно использовать как самостоятельный сервер
-> 
-> для этого нужно установить зависимости: [ImageMagick](https://imagemagick.org/script/download.php) и [FFmpeg](https://ffmpeg.org/download.html)
+> **Примечание**: Imager можно использовать как самостоятельный сервер. Для этого необходимо установить зависимости: 
+> - [ImageMagick](https://imagemagick.org/script/download.php)
+> - [FFmpeg](https://ffmpeg.org/download.html)
 
 ---
 
-#### Для формирования ссылок на миниатюры картинок, можно использовать следующие библиотеки:
+## Используйте библиотеки **Imager Client** в своих проектах для формирования ссылок на миниатюры
 
-#### [Golang](https://github.com/pkg-ru/imager-client/blob/master/doc/GO-RU.md)
+Вы можете использовать различные языки программирования для работы с Imager.
+
+### [Golang](https://github.com/pkg-ru/imager-client/blob/master/doc/GO-RU.md)
+
+Для установки клиента в Golang:
 
 ```bash
 go get github.com/pkg-ru/imager-client
 ```
 
-#### [PHP](https://github.com/pkg-ru/imager-client/blob/master/doc/PHP-RU.md)
+### [PHP](https://github.com/pkg-ru/imager-client/blob/master/doc/PHP-RU.md)
+
+Для установки клиента в PHP:
 
 ```bash
 composer require pkg-ru/imager-client
 ```
 
-#### [JavaScript (TS)](https://github.com/pkg-ru/imager-client/blob/master/doc/TS-RU.md)
+### [JavaScript (TypeScript)](https://github.com/pkg-ru/imager-client/blob/master/doc/TS-RU.md)
+
+Для установки клиента в JavaScript (или TypeScript):
 
 ```bash
 npm i imager-client
 ```
 
-#### [Python3](https://github.com/pkg-ru/imager-client/blob/master/doc/PY-RU.md)
+### [Python3](https://github.com/pkg-ru/imager-client/blob/master/doc/PY-RU.md)
+
+Для установки клиента в Python:
 
 ```bash
 pip install imager-client
