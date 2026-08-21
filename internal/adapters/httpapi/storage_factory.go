@@ -78,22 +78,24 @@ type RemoteStorageConfig struct {
 	SpoolMaxBytes int64
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	Pool *remote.BufferPool
-	// DialTimeout — таймаут соединения для FTP/SFTP/FTPS.
+	// DialTimeout — таймаут соединения для FTP/SFTP/FTPS, HTTP и S3.
 	DialTimeout time.Duration
-	// S3DialTimeout — таймаут установки TCP-соединения для S3 (0 = дефолт).
-	S3DialTimeout time.Duration
-	// S3ReadTimeout — таймаут чтения ответа для S3 (0 = дефолт).
-	S3ReadTimeout time.Duration
-	// S3MaxAttempts — максимальное число попыток запроса S3 (0 = дефолт).
-	S3MaxAttempts int
-	// S3MaxIdleConns — максимальное число idle-соединений в пуле S3.
-	S3MaxIdleConns int
-	// S3MaxIdleConnsPerHost — максимальное число idle-соединений на хост S3.
-	S3MaxIdleConnsPerHost int
-	// S3IdleConnTimeout — таймаут idle-соединений S3.
-	S3IdleConnTimeout time.Duration
-	// S3MetadataTTL — TTL кэша метаданных S3 (0 = кэш отключён).
-	S3MetadataTTL time.Duration
+	// ReadTimeout — таймаут операции для SFTP/FTP/FTPS, HTTP и S3
+	// (0 = дефолт).
+	ReadTimeout time.Duration
+	// MaxAttempts — максимальное число попыток операции для
+	// SFTP/FTP/FTPS, HTTP и S3 (0 = дефолт).
+	MaxAttempts int
+	// MaxIdleConns — максимальное число idle-соединений в пуле
+	// (SFTP/FTP/FTPS, HTTP, S3; 0 = не держать соединение).
+	MaxIdleConns int
+	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
+	// (HTTP, S3).
+	MaxIdleConnsPerHost int
+	// IdleConnTimeout — таймаут idle-соединений (SFTP/FTP/FTPS, HTTP, S3).
+	IdleConnTimeout time.Duration
+	// MetadataTTL — TTL кэша метаданных (S3; 0 = кэш отключён).
+	MetadataTTL time.Duration
 }
 
 // BuildSourceStore создаёт SourceStore по конфигурации. При пустом Kind
@@ -114,7 +116,7 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			SpoolDir:      cfg.SpoolDir,
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
-			MetadataTTL:   cfg.S3MetadataTTL,
+			MetadataTTL:   cfg.MetadataTTL,
 		})
 	case StorageSFTP:
 		return sftp.NewSourceStore(sftp.Options{
@@ -127,28 +129,41 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			SpoolMaxBytes:      cfg.SpoolMaxBytes,
 			Pool:               cfg.Pool,
 			DialTimeout:        cfg.DialTimeout,
+			ReadTimeout:        cfg.ReadTimeout,
+			MaxAttempts:        cfg.MaxAttempts,
+			MaxIdleConns:       cfg.MaxIdleConns,
+			IdleConnTimeout:    cfg.IdleConnTimeout,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
 	case StorageFTP, StorageFTPS:
 		return ftp.NewSourceStore(ftp.Options{
-			Addr:          cfg.Addr,
-			User:          cfg.User,
-			Password:      cfg.Password,
-			TLS:           cfg.Kind == StorageFTPS,
-			TLSVerify:     cfg.TLSVerify,
-			Root:          cfg.Root,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			DialTimeout:   cfg.DialTimeout,
+			Addr:            cfg.Addr,
+			User:            cfg.User,
+			Password:        cfg.Password,
+			TLS:             cfg.Kind == StorageFTPS,
+			TLSVerify:       cfg.TLSVerify,
+			Root:            cfg.Root,
+			SpoolDir:        cfg.SpoolDir,
+			SpoolMaxBytes:   cfg.SpoolMaxBytes,
+			Pool:            cfg.Pool,
+			DialTimeout:     cfg.DialTimeout,
+			ReadTimeout:     cfg.ReadTimeout,
+			MaxAttempts:     cfg.MaxAttempts,
+			MaxIdleConns:    cfg.MaxIdleConns,
+			IdleConnTimeout: cfg.IdleConnTimeout,
 		})
 	case StorageHTTP:
 		return httpadapter.NewSourceStore(httpadapter.Options{
-			BaseURL:       cfg.BaseURL,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			Timeout:       cfg.DialTimeout,
+			BaseURL:             cfg.BaseURL,
+			SpoolDir:            cfg.SpoolDir,
+			SpoolMaxBytes:       cfg.SpoolMaxBytes,
+			Pool:                cfg.Pool,
+			DialTimeout:         cfg.DialTimeout,
+			ReadTimeout:         cfg.ReadTimeout,
+			MaxAttempts:         cfg.MaxAttempts,
+			MaxIdleConns:        cfg.MaxIdleConns,
+			MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
+			IdleConnTimeout:     cfg.IdleConnTimeout,
 		})
 	default:
 		return nil, fmt.Errorf("httpapi: unsupported source storage kind %q", cfg.Kind)
@@ -174,7 +189,7 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolDir:      cfg.SpoolDir,
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
-			MetadataTTL:   cfg.S3MetadataTTL,
+			MetadataTTL:   cfg.MetadataTTL,
 		})
 	case StorageSFTP:
 		return sftp.NewResultStore(sftp.Options{
@@ -187,20 +202,28 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolMaxBytes:      cfg.SpoolMaxBytes,
 			Pool:               cfg.Pool,
 			DialTimeout:        cfg.DialTimeout,
+			ReadTimeout:        cfg.ReadTimeout,
+			MaxAttempts:        cfg.MaxAttempts,
+			MaxIdleConns:       cfg.MaxIdleConns,
+			IdleConnTimeout:    cfg.IdleConnTimeout,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
 	case StorageFTP, StorageFTPS:
 		return ftp.NewResultStore(ftp.Options{
-			Addr:          cfg.Addr,
-			User:          cfg.User,
-			Password:      cfg.Password,
-			TLS:           cfg.Kind == StorageFTPS,
-			TLSVerify:     cfg.TLSVerify,
-			Root:          cfg.Root,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			DialTimeout:   cfg.DialTimeout,
+			Addr:            cfg.Addr,
+			User:            cfg.User,
+			Password:        cfg.Password,
+			TLS:             cfg.Kind == StorageFTPS,
+			TLSVerify:       cfg.TLSVerify,
+			Root:            cfg.Root,
+			SpoolDir:        cfg.SpoolDir,
+			SpoolMaxBytes:   cfg.SpoolMaxBytes,
+			Pool:            cfg.Pool,
+			DialTimeout:     cfg.DialTimeout,
+			ReadTimeout:     cfg.ReadTimeout,
+			MaxAttempts:     cfg.MaxAttempts,
+			MaxIdleConns:    cfg.MaxIdleConns,
+			IdleConnTimeout: cfg.IdleConnTimeout,
 		})
 	case StorageHTTP:
 		return nil, fmt.Errorf("httpapi: http storage is source-only and cannot be used as result")
@@ -238,27 +261,27 @@ func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client,
 		))
 	}
 
-	dialTimeout := cfg.S3DialTimeout
+	dialTimeout := cfg.DialTimeout
 	if dialTimeout <= 0 {
 		dialTimeout = s3DefaultDialTimeout
 	}
-	readTimeout := cfg.S3ReadTimeout
+	readTimeout := cfg.ReadTimeout
 	if readTimeout <= 0 {
 		readTimeout = s3DefaultReadTimeout
 	}
-	maxAttempts := cfg.S3MaxAttempts
+	maxAttempts := cfg.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = s3DefaultMaxAttempts
 	}
-	maxIdleConns := cfg.S3MaxIdleConns
+	maxIdleConns := cfg.MaxIdleConns
 	if maxIdleConns <= 0 {
 		maxIdleConns = s3DefaultMaxIdleConns
 	}
-	maxIdleConnsPerHost := cfg.S3MaxIdleConnsPerHost
+	maxIdleConnsPerHost := cfg.MaxIdleConnsPerHost
 	if maxIdleConnsPerHost <= 0 {
 		maxIdleConnsPerHost = s3DefaultMaxIdleConnsHost
 	}
-	idleConnTimeout := cfg.S3IdleConnTimeout
+	idleConnTimeout := cfg.IdleConnTimeout
 	if idleConnTimeout <= 0 {
 		idleConnTimeout = s3DefaultIdleConnTimeout
 	}

@@ -36,6 +36,9 @@ func (f fakeFileInfo) Sys() any           { return nil }
 type fakeClient struct {
 	files map[string][]byte
 	dirs  map[string]bool
+	// statFailures — сколько раз Stat должен вернуть ошибку соединения
+	// перед успехом (для проверки retry).
+	statFailures int
 }
 
 func newFakeClient() *fakeClient {
@@ -43,6 +46,10 @@ func newFakeClient() *fakeClient {
 }
 
 func (c *fakeClient) Stat(p string) (os.FileInfo, error) {
+	if c.statFailures > 0 {
+		c.statFailures--
+		return nil, errors.New("connection reset")
+	}
 	if data, ok := c.files[p]; ok {
 		return fakeFileInfo{name: path.Base(p), size: int64(len(data))}, nil
 	}
@@ -275,6 +282,40 @@ func TestSFTPResultPublishNoOverwriteSuccess(t *testing.T) {
 	}
 	if meta.Size != int64(len(payload)) {
 		t.Fatalf("size = %d, want %d", meta.Size, len(payload))
+	}
+}
+
+// TestSFTPLookupRetry проверяет, что при ошибке соединения операция
+// повторяется до MaxAttempts и завершается успехом после восстановления.
+func TestSFTPLookupRetry(t *testing.T) {
+	c := newFakeClient()
+	c.files["dir/file.bin"] = []byte("payload")
+	c.statFailures = 2
+	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c, MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	meta, err := s.Lookup(context.Background(), "dir/file.bin")
+	if err != nil {
+		t.Fatalf("Lookup after retries: %v", err)
+	}
+	if meta.Size != int64(len("payload")) {
+		t.Fatalf("size = %d, want %d", meta.Size, len("payload"))
+	}
+}
+
+// TestSFTPLookupRetryExhausted проверяет, что при исчерпании попыток
+// возвращается последняя ошибка соединения.
+func TestSFTPLookupRetryExhausted(t *testing.T) {
+	c := newFakeClient()
+	c.files["dir/file.bin"] = []byte("payload")
+	c.statFailures = 100
+	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c, MaxAttempts: 2})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), "dir/file.bin"); err == nil {
+		t.Fatal("expected error after exhausting attempts")
 	}
 }
 

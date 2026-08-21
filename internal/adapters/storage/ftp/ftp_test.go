@@ -16,6 +16,9 @@ type fakeConn struct {
 	files    map[string][]byte
 	dirs     map[string]bool
 	features map[string]bool
+	// listFailures — сколько раз List должен вернуть ошибку соединения
+	// перед успехом (для проверки retry).
+	listFailures int
 }
 
 func newFakeConn() *fakeConn {
@@ -41,6 +44,10 @@ func (c *fakeConn) Feature(cmd string) bool {
 	return false
 }
 func (c *fakeConn) List(path string) ([]*ftp.Entry, error) {
+	if c.listFailures > 0 {
+		c.listFailures--
+		return nil, errors.New("connection reset")
+	}
 	if data, ok := c.files[path]; ok {
 		return []*ftp.Entry{{Name: path, Type: ftp.EntryTypeFile, Size: uint64(len(data))}}, nil
 	}
@@ -271,5 +278,39 @@ func TestFTPSVerifyForbidden(t *testing.T) {
 		TLS: true, TLSVerify: false, Dialer: dialerFor(conn),
 	}); err == nil {
 		t.Fatal("expected error for tls-verify=false")
+	}
+}
+
+// TestFTPSourceLookupRetry проверяет, что при ошибке соединения операция
+// повторяется до MaxAttempts и завершается успехом после восстановления.
+func TestFTPSourceLookupRetry(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["dir/file.bin"] = []byte("payload")
+	conn.listFailures = 2
+	s, err := NewSourceStore(Options{Addr: "localhost:21", User: "u", Dialer: dialerFor(conn), MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	meta, err := s.Lookup(context.Background(), "dir/file.bin")
+	if err != nil {
+		t.Fatalf("Lookup after retries: %v", err)
+	}
+	if meta.Size != int64(len("payload")) {
+		t.Fatalf("size = %d, want %d", meta.Size, len("payload"))
+	}
+}
+
+// TestFTPSourceLookupRetryExhausted проверяет, что при исчерпании попыток
+// возвращается последняя ошибка соединения.
+func TestFTPSourceLookupRetryExhausted(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["dir/file.bin"] = []byte("payload")
+	conn.listFailures = 100
+	s, err := NewSourceStore(Options{Addr: "localhost:21", User: "u", Dialer: dialerFor(conn), MaxAttempts: 2})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), "dir/file.bin"); err == nil {
+		t.Fatal("expected error after exhausting attempts")
 	}
 }

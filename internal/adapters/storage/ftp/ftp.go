@@ -66,6 +66,15 @@ type Options struct {
 	Pool *remote.BufferPool
 	// DialTimeout — таймаут соединения.
 	DialTimeout time.Duration
+	// ReadTimeout — таймаут операции (0 = без ограничения).
+	ReadTimeout time.Duration
+	// MaxAttempts — максимальное число попыток операции (0 = 1).
+	MaxAttempts int
+	// MaxIdleConns — максимальное число idle-соединений в пуле
+	// (0 = не держать соединение между операциями).
+	MaxIdleConns int
+	// IdleConnTimeout — таймаут idle-соединений (0 = без ограничения).
+	IdleConnTimeout time.Duration
 	// Dialer — опциональный кастомный dialer (для тестов).
 	Dialer func(ctx context.Context, addr string, tls bool) (conn, error)
 }
@@ -81,6 +90,34 @@ func (o Options) validate() error {
 		return fmt.Errorf("ftp: tls-verify=false is forbidden; set tls-verify: true")
 	}
 	return nil
+}
+
+// attempts возвращает число попыток операции (>= 1).
+func (o Options) attempts() int {
+	n := o.MaxAttempts
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// withTimeout оборачивает ctx таймаутом операции, если задан ReadTimeout.
+func (o Options) withTimeout(ctx context.Context) context.Context {
+	if o.ReadTimeout <= 0 {
+		return ctx
+	}
+	c, _ := context.WithTimeout(ctx, o.ReadTimeout)
+	return c
+}
+
+// isConnErr отличает ошибки соединения (требуют переподключения) от
+// бизнес-ошибок (NotFound, Conflict и т.п.), при которых соединение
+// можно переиспользовать.
+func isConnErr(err error) bool {
+	if object.IsNotFound(err) || object.IsConflict(err) || object.IsQuota(err) || object.IsUnsafePath(err) || object.IsUnavailable(err) {
+		return false
+	}
+	return err != nil
 }
 
 func (o Options) dial(ctx context.Context) (conn, error) {
@@ -161,28 +198,41 @@ func (o Options) stat(ctx context.Context, key object.ObjectKey) (object.ObjectM
 	if err != nil {
 		return object.ObjectMetadata{}, err
 	}
-	c, err := o.dial(ctx)
-	if err != nil {
-		return object.ObjectMetadata{}, remote.MapError("ftp dial", err)
+	ctx = o.withTimeout(ctx)
+	attempts := o.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := o.dial(ctx)
+		if err != nil {
+			return object.ObjectMetadata{}, remote.MapError("ftp dial", err)
+		}
+		entries, err := c.List(full)
+		if err != nil {
+			_ = c.Quit()
+			lastErr = remote.MapError("ftp list", err)
+			if !isConnErr(err) {
+				return object.ObjectMetadata{}, lastErr
+			}
+			if ctx.Err() != nil {
+				return object.ObjectMetadata{}, lastErr
+			}
+			continue
+		}
+		_ = c.Quit()
+		if len(entries) == 0 {
+			return object.ObjectMetadata{}, remote.NotFound(key)
+		}
+		e := entries[0]
+		if e.Type == ftp.EntryTypeFolder {
+			return object.ObjectMetadata{}, remote.NotFound(key)
+		}
+		return object.ObjectMetadata{
+			Key:     key,
+			Size:    int64(e.Size),
+			ModTime: e.Time,
+		}, nil
 	}
-	defer c.Quit()
-
-	entries, err := c.List(full)
-	if err != nil {
-		return object.ObjectMetadata{}, remote.MapError("ftp list", err)
-	}
-	if len(entries) == 0 {
-		return object.ObjectMetadata{}, remote.NotFound(key)
-	}
-	e := entries[0]
-	if e.Type == ftp.EntryTypeFolder {
-		return object.ObjectMetadata{}, remote.NotFound(key)
-	}
-	return object.ObjectMetadata{
-		Key:     key,
-		Size:    int64(e.Size),
-		ModTime: e.Time,
-	}, nil
+	return object.ObjectMetadata{}, lastErr
 }
 
 // SourceStore — FTP/FTPS-реализация storage.SourceStore (read-only).
@@ -224,51 +274,66 @@ func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 	return s.opts.stat(ctx, key)
 }
 
-// Open открывает поток исходного объекта через spillable буфер.
+// Open открывает поток исходного объекта через spillable буфер. При ошибке
+// соединения выполняется повторная попытка с новым соединением.
 func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
 	full, err := s.opts.key(key)
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.getConn(ctx)
-	if err != nil {
-		return nil, remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
+	ctx = s.opts.withTimeout(ctx)
+	attempts := s.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := s.getConn(ctx)
+		if err != nil {
+			return nil, remote.MapError("ftp dial", err)
+		}
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				s.discardConn()
+			}
+		}()
+
+		rc, err := c.Retr(full)
+		if err != nil {
+			lastErr = remote.MapError("ftp retr", err)
+			if !isConnErr(err) {
+				return nil, lastErr
+			}
 			s.discardConn()
+			if ctx.Err() != nil {
+				return nil, lastErr
+			}
+			continue
 		}
-	}()
+		defer rc.Close()
 
-	rc, err := c.Retr(full)
-	if err != nil {
-		return nil, remote.MapError("ftp retr", err)
-	}
-	defer rc.Close()
-
-	buf, err := remote.NewBuffer(remote.BufferOptions{
-		Pool:     s.opts.Pool,
-		Dir:      s.opts.SpoolDir,
-		MaxBytes: s.opts.SpoolMaxBytes,
-	})
-	if err != nil {
-		return nil, remote.MapError("ftp buffer", err)
-	}
-	if _, err := buf.WriteFrom(rc, s.opts.SpoolMaxBytes); err != nil {
-		_ = buf.Close()
-		if errors.Is(err, remote.ErrBufferLimit) {
-			return nil, fmt.Errorf("ftp: source %q exceeds spool limit: %w", key, object.ErrQuota)
+		buf, err := remote.NewBuffer(remote.BufferOptions{
+			Pool:     s.opts.Pool,
+			Dir:      s.opts.SpoolDir,
+			MaxBytes: s.opts.SpoolMaxBytes,
+		})
+		if err != nil {
+			return nil, remote.MapError("ftp buffer", err)
 		}
-		return nil, remote.MapError("ftp buffer", err)
+		if _, err := buf.WriteFrom(rc, s.opts.SpoolMaxBytes); err != nil {
+			_ = buf.Close()
+			if errors.Is(err, remote.ErrBufferLimit) {
+				return nil, fmt.Errorf("ftp: source %q exceeds spool limit: %w", key, object.ErrQuota)
+			}
+			return nil, remote.MapError("ftp buffer", err)
+		}
+		if _, err := buf.Seek(0, io.SeekStart); err != nil {
+			_ = buf.Close()
+			return nil, remote.MapError("ftp buffer seek", err)
+		}
+		meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
+		needDiscard = false
+		return remote.NewBufferArtifact(buf, meta), nil
 	}
-	if _, err := buf.Seek(0, io.SeekStart); err != nil {
-		_ = buf.Close()
-		return nil, remote.MapError("ftp buffer seek", err)
-	}
-	meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
-	needDiscard = false
-	return remote.NewBufferArtifact(buf, meta), nil
+	return nil, lastErr
 }
 
 var _ storage.SourceStore = (*SourceStore)(nil)
@@ -314,79 +379,109 @@ func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 }
 
 // Open открывает перематываемый поток результата через spillable буфер.
+// При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return nil, err
 	}
-	c, err := r.getConn(ctx)
-	if err != nil {
-		return nil, remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
+	ctx = r.opts.withTimeout(ctx)
+	attempts := r.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := r.getConn(ctx)
+		if err != nil {
+			return nil, remote.MapError("ftp dial", err)
+		}
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				r.discardConn()
+			}
+		}()
+
+		rc, err := c.Retr(full)
+		if err != nil {
+			lastErr = remote.MapError("ftp retr", err)
+			if !isConnErr(err) {
+				return nil, lastErr
+			}
 			r.discardConn()
+			if ctx.Err() != nil {
+				return nil, lastErr
+			}
+			continue
 		}
-	}()
+		defer rc.Close()
 
-	rc, err := c.Retr(full)
-	if err != nil {
-		return nil, remote.MapError("ftp retr", err)
-	}
-	defer rc.Close()
-
-	buf, err := remote.NewBuffer(remote.BufferOptions{
-		Pool:     r.opts.Pool,
-		Dir:      r.opts.SpoolDir,
-		MaxBytes: r.opts.SpoolMaxBytes,
-	})
-	if err != nil {
-		return nil, remote.MapError("ftp buffer", err)
-	}
-	if _, err := buf.WriteFrom(rc, r.opts.SpoolMaxBytes); err != nil {
-		_ = buf.Close()
-		if errors.Is(err, remote.ErrBufferLimit) {
-			return nil, fmt.Errorf("ftp: result %q exceeds spool limit: %w", key, object.ErrQuota)
+		buf, err := remote.NewBuffer(remote.BufferOptions{
+			Pool:     r.opts.Pool,
+			Dir:      r.opts.SpoolDir,
+			MaxBytes: r.opts.SpoolMaxBytes,
+		})
+		if err != nil {
+			return nil, remote.MapError("ftp buffer", err)
 		}
-		return nil, remote.MapError("ftp buffer", err)
+		if _, err := buf.WriteFrom(rc, r.opts.SpoolMaxBytes); err != nil {
+			_ = buf.Close()
+			if errors.Is(err, remote.ErrBufferLimit) {
+				return nil, fmt.Errorf("ftp: result %q exceeds spool limit: %w", key, object.ErrQuota)
+			}
+			return nil, remote.MapError("ftp buffer", err)
+		}
+		if _, err := buf.Seek(0, io.SeekStart); err != nil {
+			_ = buf.Close()
+			return nil, remote.MapError("ftp buffer seek", err)
+		}
+		meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
+		needDiscard = false
+		return remote.NewBufferArtifact(buf, meta), nil
 	}
-	if _, err := buf.Seek(0, io.SeekStart); err != nil {
-		_ = buf.Close()
-		return nil, remote.MapError("ftp buffer seek", err)
-	}
-	meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
-	needDiscard = false
-	return remote.NewBufferArtifact(buf, meta), nil
+	return nil, lastErr
 }
 
 // ReadStream открывает одноразовый поток результата напрямую из FTP без
-// материализации. Соединение удерживается до закрытия Stream.
+// материализации. Соединение удерживается до закрытия Stream. При ошибке
+// соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (object.Stream, error) {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return nil, err
 	}
-	c, err := r.getConn(ctx)
-	if err != nil {
-		return nil, remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
-			r.discardConn()
+	ctx = r.opts.withTimeout(ctx)
+	attempts := r.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := r.getConn(ctx)
+		if err != nil {
+			return nil, remote.MapError("ftp dial", err)
 		}
-	}()
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				r.discardConn()
+			}
+		}()
 
-	rc, err := c.Retr(full)
-	if err != nil {
-		return nil, remote.MapError("ftp retr", err)
+		rc, err := c.Retr(full)
+		if err != nil {
+			lastErr = remote.MapError("ftp retr", err)
+			if !isConnErr(err) {
+				return nil, lastErr
+			}
+			r.discardConn()
+			if ctx.Err() != nil {
+				return nil, lastErr
+			}
+			continue
+		}
+		meta := object.ObjectMetadata{Key: key}
+		needDiscard = false
+		// rc закрывается через Stream.Close; соединение возвращается в пул
+		// после закрытия потока (discardConn вызывается в Close).
+		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, discard: r.discardConn}, meta), nil
 	}
-	meta := object.ObjectMetadata{Key: key}
-	needDiscard = false
-	// rc закрывается через Stream.Close; соединение возвращается в пул
-	// после закрытия потока (discardConn вызывается в Close).
-	return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, discard: r.discardConn}, meta), nil
+	return nil, lastErr
 }
 
 // ftpStreamCloser закрывает поток и сбрасывает соединение пула.
@@ -409,108 +504,161 @@ func (c *ftpStreamCloser) Close() error {
 // Publish полностью завершает upload до возврата: temp-upload + rename.
 // Перед загрузкой проверяет поддержку необходимых FTP-команд (STOR,
 // RNFR/RNTO, DELE) и выполняет cleanup временного файла при любой ошибке.
+// При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return err
 	}
-	c, err := r.getConn(ctx)
-	if err != nil {
-		return remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
+	ctx = r.opts.withTimeout(ctx)
+	attempts := r.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := r.getConn(ctx)
+		if err != nil {
+			return remote.MapError("ftp dial", err)
+		}
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				r.discardConn()
+			}
+		}()
+
+		// Проверка capability: публикация требует STOR, RNFR/RNTO и DELE.
+		for _, cmd := range []string{"STOR", "RNFR", "RNTO", "DELE"} {
+			if !c.Feature(cmd) {
+				return fmt.Errorf("ftp: server does not support required command %s: %w", cmd, object.ErrUnavailable)
+			}
+		}
+
+		dir := full
+		if idx := strings.LastIndex(full, "/"); idx >= 0 {
+			dir = full[:idx]
+		}
+		if dir != "" {
+			if err := c.MakeDir(dir); err != nil {
+				// Каталог может уже существовать — игнорируем ошибку создания.
+				_ = err
+			}
+		}
+
+		tmpName := full + ".tmp"
+		if err := c.Stor(tmpName, src); err != nil {
+			lastErr = remote.MapError("ftp stor temp", err)
+			if !isConnErr(err) {
+				return lastErr
+			}
 			r.discardConn()
+			if ctx.Err() != nil {
+				return lastErr
+			}
+			continue
 		}
-	}()
 
-	// Проверка capability: публикация требует STOR, RNFR/RNTO и DELE.
-	for _, cmd := range []string{"STOR", "RNFR", "RNTO", "DELE"} {
-		if !c.Feature(cmd) {
-			return fmt.Errorf("ftp: server does not support required command %s: %w", cmd, object.ErrUnavailable)
+		if opts.NoOverwrite {
+			// FTP не предоставляет атомарного no-overwrite rename; проверяем
+			// существование целевого файла до rename (best-effort).
+			entries, err := c.List(full)
+			if err == nil && len(entries) > 0 {
+				_ = c.Delete(tmpName)
+				return remote.Conflict(key)
+			}
 		}
-	}
 
-	dir := full
-	if idx := strings.LastIndex(full, "/"); idx >= 0 {
-		dir = full[:idx]
-	}
-	if dir != "" {
-		if err := c.MakeDir(dir); err != nil {
-			// Каталог может уже существовать — игнорируем ошибку создания.
-			_ = err
-		}
-	}
-
-	tmpName := full + ".tmp"
-	if err := c.Stor(tmpName, src); err != nil {
-		return remote.MapError("ftp stor temp", err)
-	}
-
-	if opts.NoOverwrite {
-		// FTP не предоставляет атомарного no-overwrite rename; проверяем
-		// существование целевого файла до rename (best-effort).
-		entries, err := c.List(full)
-		if err == nil && len(entries) > 0 {
+		if err := c.Rename(tmpName, full); err != nil {
 			_ = c.Delete(tmpName)
-			return remote.Conflict(key)
+			lastErr = remote.MapError("ftp rename", err)
+			if !isConnErr(err) {
+				return lastErr
+			}
+			r.discardConn()
+			if ctx.Err() != nil {
+				return lastErr
+			}
+			continue
 		}
+		needDiscard = false
+		return nil
 	}
-
-	if err := c.Rename(tmpName, full); err != nil {
-		_ = c.Delete(tmpName)
-		return remote.MapError("ftp rename", err)
-	}
-	needDiscard = false
-	return nil
+	return lastErr
 }
 
-// Delete удаляет объект. Идемпотентно.
+// Delete удаляет объект. Идемпотентно. При ошибке соединения выполняется
+// повторная попытка с новым соединением.
 func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return err
 	}
-	c, err := r.getConn(ctx)
-	if err != nil {
-		return remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
-			r.discardConn()
+	ctx = r.opts.withTimeout(ctx)
+	attempts := r.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := r.getConn(ctx)
+		if err != nil {
+			return remote.MapError("ftp dial", err)
 		}
-	}()
-	if err := c.Delete(full); err != nil {
-		return remote.MapError("ftp delete", err)
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				r.discardConn()
+			}
+		}()
+		if err := c.Delete(full); err != nil {
+			lastErr = remote.MapError("ftp delete", err)
+			if !isConnErr(err) {
+				return lastErr
+			}
+			r.discardConn()
+			if ctx.Err() != nil {
+				return lastErr
+			}
+			continue
+		}
+		needDiscard = false
+		return nil
 	}
-	needDiscard = false
-	return nil
+	return lastErr
 }
 
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
+// При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
-	c, err := r.getConn(ctx)
-	if err != nil {
-		return object.StoreStats{}, remote.MapError("ftp dial", err)
-	}
-	needDiscard := true
-	defer func() {
-		if needDiscard {
-			r.discardConn()
+	ctx = r.opts.withTimeout(ctx)
+	attempts := r.opts.attempts()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		c, err := r.getConn(ctx)
+		if err != nil {
+			return object.StoreStats{}, remote.MapError("ftp dial", err)
 		}
-	}()
-	root := r.opts.Root
-	if root == "" {
-		root = "/"
+		needDiscard := true
+		defer func() {
+			if needDiscard {
+				r.discardConn()
+			}
+		}()
+		root := r.opts.Root
+		if root == "" {
+			root = "/"
+		}
+		var stats object.StoreStats
+		if err := r.walk(c, root, &stats); err != nil {
+			lastErr = remote.MapError("ftp walk", err)
+			if !isConnErr(err) {
+				return object.StoreStats{}, lastErr
+			}
+			r.discardConn()
+			if ctx.Err() != nil {
+				return object.StoreStats{}, lastErr
+			}
+			continue
+		}
+		needDiscard = false
+		return stats, nil
 	}
-	var stats object.StoreStats
-	if err := r.walk(c, root, &stats); err != nil {
-		return object.StoreStats{}, remote.MapError("ftp walk", err)
-	}
-	needDiscard = false
-	return stats, nil
+	return object.StoreStats{}, lastErr
 }
 
 func (r *ResultStore) walk(c conn, dir string, stats *object.StoreStats) error {

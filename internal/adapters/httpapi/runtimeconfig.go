@@ -211,22 +211,24 @@ type StorageYAML struct {
 	SpoolDir string `yaml:"spool-dir"`
 	// SpoolMaxBytes — максимальный размер source spool (0 = без лимита).
 	SpoolMaxBytes int64 `yaml:"spool-max-bytes"`
-	// DialTimeout — таймаут соединения для SFTP/FTP/FTPS и HTTP (duration).
+	// DialTimeout — таймаут соединения для SFTP/FTP/FTPS, HTTP и S3 (duration).
 	DialTimeout string `yaml:"dial-timeout"`
-	// S3DialTimeout — таймаут установки TCP-соединения для S3 (duration).
-	S3DialTimeout string `yaml:"s3-dial-timeout"`
-	// S3ReadTimeout — таймаут чтения ответа для S3 (duration).
-	S3ReadTimeout string `yaml:"s3-read-timeout"`
-	// S3MaxAttempts — максимальное число попыток запроса S3.
-	S3MaxAttempts int `yaml:"s3-max-attempts"`
-	// S3MaxIdleConns — максимальное число idle-соединений в пуле S3.
-	S3MaxIdleConns int `yaml:"s3-max-idle-conns"`
-	// S3MaxIdleConnsPerHost — максимальное число idle-соединений на хост S3.
-	S3MaxIdleConnsPerHost int `yaml:"s3-max-idle-conns-per-host"`
-	// S3IdleConnTimeout — таймаут idle-соединений S3 (duration).
-	S3IdleConnTimeout string `yaml:"s3-idle-conn-timeout"`
-	// S3MetadataTTL — TTL кэша метаданных S3 (duration; 0 = кэш отключён).
-	S3MetadataTTL string `yaml:"s3-metadata-ttl"`
+	// ReadTimeout — таймаут чтения ответа для HTTP-подобных хранилищ
+	// (S3, HTTP; duration).
+	ReadTimeout string `yaml:"read-timeout"`
+	// MaxAttempts — максимальное число попыток запроса для HTTP-подобных
+	// хранилищ (S3, HTTP).
+	MaxAttempts int `yaml:"max-attempts"`
+	// MaxIdleConns — максимальное число idle-соединений в пуле
+	// (S3, HTTP).
+	MaxIdleConns int `yaml:"max-idle-conns"`
+	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
+	// (S3, HTTP).
+	MaxIdleConnsPerHost int `yaml:"max-idle-conns-per-host"`
+	// IdleConnTimeout — таймаут idle-соединений (S3, HTTP; duration).
+	IdleConnTimeout string `yaml:"idle-conn-timeout"`
+	// MetadataTTL — TTL кэша метаданных (S3; duration; 0 = кэш отключён).
+	MetadataTTL string `yaml:"metadata-ttl"`
 }
 
 // ImageMagickYAML — YAML-представление ImageMagickConfig.
@@ -533,59 +535,51 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		}
 		cfg.DialTimeout = d
 	}
-	// S3-специфичные настройки (таймауты, retry, пул, кэш метаданных).
-	if s.S3DialTimeout != "" {
-		d, err := time.ParseDuration(s.S3DialTimeout)
+	// Общие настройки HTTP-подобных хранилищ (S3, HTTP): таймауты, retry,
+	// пул соединений, кэш метаданных. Для SFTP/FTP/FTPS применяется только
+	// dial-timeout (см. выше).
+	if s.ReadTimeout != "" {
+		d, err := time.ParseDuration(s.ReadTimeout)
 		if err != nil {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-dial-timeout: %w", err)
+			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-dial-timeout: negative duration %q", s.S3DialTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: negative duration %q", s.ReadTimeout)
 		}
-		cfg.S3DialTimeout = d
+		cfg.ReadTimeout = d
 	}
-	if s.S3ReadTimeout != "" {
-		d, err := time.ParseDuration(s.S3ReadTimeout)
+	if s.IdleConnTimeout != "" {
+		d, err := time.ParseDuration(s.IdleConnTimeout)
 		if err != nil {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-read-timeout: %w", err)
+			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-read-timeout: negative duration %q", s.S3ReadTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: negative duration %q", s.IdleConnTimeout)
 		}
-		cfg.S3ReadTimeout = d
+		cfg.IdleConnTimeout = d
 	}
-	if s.S3IdleConnTimeout != "" {
-		d, err := time.ParseDuration(s.S3IdleConnTimeout)
+	if s.MetadataTTL != "" {
+		d, err := time.ParseDuration(s.MetadataTTL)
 		if err != nil {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-idle-conn-timeout: %w", err)
+			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-idle-conn-timeout: negative duration %q", s.S3IdleConnTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: negative duration %q", s.MetadataTTL)
 		}
-		cfg.S3IdleConnTimeout = d
+		cfg.MetadataTTL = d
 	}
-	if s.S3MetadataTTL != "" {
-		d, err := time.ParseDuration(s.S3MetadataTTL)
-		if err != nil {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-metadata-ttl: %w", err)
-		}
-		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("s3-metadata-ttl: negative duration %q", s.S3MetadataTTL)
-		}
-		cfg.S3MetadataTTL = d
+	if s.MaxAttempts < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-attempts: negative value %d", s.MaxAttempts)
 	}
-	if s.S3MaxAttempts < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("s3-max-attempts: negative value %d", s.S3MaxAttempts)
+	cfg.MaxAttempts = s.MaxAttempts
+	if s.MaxIdleConns < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns)
 	}
-	cfg.S3MaxAttempts = s.S3MaxAttempts
-	if s.S3MaxIdleConns < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("s3-max-idle-conns: negative value %d", s.S3MaxIdleConns)
+	cfg.MaxIdleConns = s.MaxIdleConns
+	if s.MaxIdleConnsPerHost < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost)
 	}
-	cfg.S3MaxIdleConns = s.S3MaxIdleConns
-	if s.S3MaxIdleConnsPerHost < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("s3-max-idle-conns-per-host: negative value %d", s.S3MaxIdleConnsPerHost)
-	}
-	cfg.S3MaxIdleConnsPerHost = s.S3MaxIdleConnsPerHost
+	cfg.MaxIdleConnsPerHost = s.MaxIdleConnsPerHost
 	if s.PrivateKeyFile != "" {
 		data, err := os.ReadFile(s.PrivateKeyFile)
 		if err != nil {

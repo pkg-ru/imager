@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestLoadConfigDirBaseOnly проверяет, что загрузка одного обязательного
@@ -191,6 +192,50 @@ result:
 	}
 	if rc.Result.Kind != StorageSFTP {
 		t.Errorf("Result.Kind = %q, want sftp", rc.Result.Kind)
+	}
+}
+
+// TestParseRuntimeConfigStorageHTTPOptions проверяет парсинг общих настроек
+// HTTP-подобных хранилищ (S3, HTTP) без s3-префикса: read-timeout,
+// max-attempts, max-idle-conns, max-idle-conns-per-host, idle-conn-timeout,
+// metadata-ttl. dial-timeout применяется ко всем типам.
+func TestParseRuntimeConfigStorageHTTPOptions(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+source:
+  storage: s3
+  bucket: my-bucket
+  dial-timeout: 15s
+  read-timeout: 45s
+  max-attempts: 5
+  max-idle-conns: 200
+  max-idle-conns-per-host: 20
+  idle-conn-timeout: 120s
+  metadata-ttl: 60s
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.Source.DialTimeout.String() != "15s" {
+		t.Errorf("DialTimeout = %v, want 15s", rc.Source.DialTimeout)
+	}
+	if rc.Source.ReadTimeout.String() != "45s" {
+		t.Errorf("ReadTimeout = %v, want 45s", rc.Source.ReadTimeout)
+	}
+	if rc.Source.MaxAttempts != 5 {
+		t.Errorf("MaxAttempts = %d, want 5", rc.Source.MaxAttempts)
+	}
+	if rc.Source.MaxIdleConns != 200 {
+		t.Errorf("MaxIdleConns = %d, want 200", rc.Source.MaxIdleConns)
+	}
+	if rc.Source.MaxIdleConnsPerHost != 20 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 20", rc.Source.MaxIdleConnsPerHost)
+	}
+	if rc.Source.IdleConnTimeout != 120*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 120s", rc.Source.IdleConnTimeout)
+	}
+	if rc.Source.MetadataTTL != 60*time.Second {
+		t.Errorf("MetadataTTL = %v, want 60s", rc.Source.MetadataTTL)
 	}
 }
 

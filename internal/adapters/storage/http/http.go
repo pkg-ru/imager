@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,12 +45,37 @@ type Options struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	// Если nil, буферы работают только через память без spill.
 	Pool *remote.BufferPool
-	// Timeout — таймаут HTTP-запроса (0 = 30s).
-	Timeout time.Duration
+	// DialTimeout — таймаут установки TCP-соединения (0 = 30s).
+	DialTimeout time.Duration
+	// ReadTimeout — таймаут чтения ответа (0 = 60s).
+	ReadTimeout time.Duration
+	// MaxAttempts — максимальное число попыток запроса (0 = 3).
+	MaxAttempts int
+	// MaxIdleConns — максимальное число idle-соединений в пуле (0 = 100).
+	MaxIdleConns int
+	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
+	// (0 = 10).
+	MaxIdleConnsPerHost int
+	// IdleConnTimeout — таймаут idle-соединений (0 = 90s).
+	IdleConnTimeout time.Duration
 	// Client — опциональный HTTP-клиент (для тестов). Если задан,
-	// Timeout игнорируется.
+	// все настройки пула/таймаутов игнорируются.
 	Client *http.Client
 }
+
+// Умолчания для HTTP-клиента (согласованы с S3-клиентом).
+const (
+	defaultDialTimeout      = 30 * time.Second
+	defaultReadTimeout      = 60 * time.Second
+	defaultMaxAttempts      = 3
+	defaultMaxIdleConns     = 100
+	defaultMaxIdleConnsHost = 10
+	defaultIdleConnTimeout  = 90 * time.Second
+	defaultKeepAlive        = 30 * time.Second
+	defaultTLSHandshake     = 10 * time.Second
+	defaultExpectContinue   = 1 * time.Second
+	defaultMaxConnsPerHost  = 2048
+)
 
 func (o Options) validate() error {
 	if o.BaseURL == "" {
@@ -73,10 +99,11 @@ func (o Options) validate() error {
 
 // SourceStore — HTTP/HTTPS-реализация storage.SourceStore (read-only).
 type SourceStore struct {
-	base    *url.URL
-	baseDir string // нормализованный базовый путь с завершающим "/"
-	opts    Options
-	client  *http.Client
+	base        *url.URL
+	baseDir     string // нормализованный базовый путь с завершающим "/"
+	opts        Options
+	client      *http.Client
+	maxAttempts int
 }
 
 // NewSourceStore создаёт HTTP/HTTPS SourceStore.
@@ -94,14 +121,52 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 	} else {
 		baseDir += "/"
 	}
+	maxAttempts := opts.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
 	client := opts.Client
 	if client == nil {
-		timeout := opts.Timeout
-		if timeout == 0 {
-			timeout = 30 * time.Second
+		dialTimeout := opts.DialTimeout
+		if dialTimeout <= 0 {
+			dialTimeout = defaultDialTimeout
+		}
+		readTimeout := opts.ReadTimeout
+		if readTimeout <= 0 {
+			readTimeout = defaultReadTimeout
+		}
+		maxIdleConns := opts.MaxIdleConns
+		if maxIdleConns <= 0 {
+			maxIdleConns = defaultMaxIdleConns
+		}
+		maxIdleConnsPerHost := opts.MaxIdleConnsPerHost
+		if maxIdleConnsPerHost <= 0 {
+			maxIdleConnsPerHost = defaultMaxIdleConnsHost
+		}
+		idleConnTimeout := opts.IdleConnTimeout
+		if idleConnTimeout <= 0 {
+			idleConnTimeout = defaultIdleConnTimeout
+		}
+
+		dialer := &net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: defaultKeepAlive,
+			DualStack: true,
+		}
+		transport := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialer.DialContext,
+			MaxIdleConns:          maxIdleConns,
+			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+			MaxConnsPerHost:       defaultMaxConnsPerHost,
+			IdleConnTimeout:       idleConnTimeout,
+			TLSHandshakeTimeout:   defaultTLSHandshake,
+			ExpectContinueTimeout: defaultExpectContinue,
+			ForceAttemptHTTP2:     true,
 		}
 		client = &http.Client{
-			Timeout: timeout,
+			Transport: transport,
+			Timeout:   readTimeout,
 			// Redirects запрещены: возвращаем сам ответ 3xx, чтобы
 			// обработать его как недоступность.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -109,7 +174,39 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 			},
 		}
 	}
-	return &SourceStore{base: base, baseDir: baseDir, opts: opts, client: client}, nil
+	return &SourceStore{base: base, baseDir: baseDir, opts: opts, client: client, maxAttempts: maxAttempts}, nil
+}
+
+// do выполняет HTTP-запрос с ограниченным числом попыток (retry) при
+// сетевых ошибках. Ответы с HTTP-статусом не ретраятся — они обрабатываются
+// вызывающим через checkStatus.
+func (s *SourceStore) do(ctx context.Context, method, u string) (*http.Response, error) {
+	attempts := s.maxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		req, err := http.NewRequestWithContext(ctx, method, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := s.client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		// Не ретраим при отмене контекста.
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(i+1) * 100 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
 }
 
 // Lookup возвращает метаданные исходного объекта через HEAD.
@@ -118,11 +215,7 @@ func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 	if err != nil {
 		return object.ObjectMetadata{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
-	if err != nil {
-		return object.ObjectMetadata{}, remote.MapError("http lookup", err)
-	}
-	resp, err := s.client.Do(req)
+	resp, err := s.do(ctx, http.MethodHead, u)
 	if err != nil {
 		return object.ObjectMetadata{}, remote.MapError("http lookup", err)
 	}
@@ -140,11 +233,7 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, remote.MapError("http open", err)
-	}
-	resp, err := s.client.Do(req)
+	resp, err := s.do(ctx, http.MethodGet, u)
 	if err != nil {
 		return nil, remote.MapError("http open", err)
 	}

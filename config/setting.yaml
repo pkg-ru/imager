@@ -54,7 +54,13 @@ source:
   path: "/data/source"
   # Для remote-хранилищ (s3/sftp/ftp/ftps/http):
   #   spool-max-bytes: 10485760   # лимит spool (0 = без лимита)
-  #   dial-timeout: "30s"
+  #   dial-timeout: "30s"         # таймаут TCP-соединения (default 30s)
+  #   read-timeout: "60s"         # таймаут операции (default 60s)
+  #   max-attempts: 3             # число попыток операции (default 3)
+  #   max-idle-conns: 100         # пул idle-соединений (default 100)
+  #   idle-conn-timeout: "90s"    # таймаут idle-соединений (default 90s)
+  # Для HTTP-подобных хранилищ (s3 и http) дополнительно:
+  #   max-idle-conns-per-host: 10 # idle-соединений на хост (default 10)
   # Для s3 (S3 и S3-совместимые хранилища):
   #   bucket: "my-images"
   #   prefix: "source/"           # завершающий "/" нормализуется
@@ -62,13 +68,7 @@ source:
   #   endpoint: "https://storage.yandexcloud.net"
   #   access-key: "..."           # или env IMAGER_S3_ACCESS_KEY
   #   secret-key: "..."           # или env IMAGER_S3_SECRET_KEY
-  #   s3-dial-timeout: "30s"      # таймаут TCP-соединения (default 30s)
-  #   s3-read-timeout: "60s"      # таймаут чтения ответа (default 60s)
-  #   s3-max-attempts: 3          # число попыток запроса (default 3)
-  #   s3-max-idle-conns: 100      # пул idle-соединений (default 100)
-  #   s3-max-idle-conns-per-host: 10
-  #   s3-idle-conn-timeout: "90s" # таймаут idle-соединений (default 90s)
-  #   s3-metadata-ttl: "30s"      # TTL кэша метаданных (0 = выключен)
+  #   metadata-ttl: "30s"         # TTL кэша метаданных (0 = выключен)
   # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
   # Для ftps по умолчанию tls-verify: true (отключение запрещено).
 
@@ -78,7 +78,13 @@ result:
   # Для remote-хранилищ (s3/sftp/ftp/ftps):
   #   spool-max-bytes: 10485760
   #   dial-timeout: "30s"
-  # Для s3 — те же параметры, что и для source (bucket/endpoint/таймауты).
+  #   read-timeout: "60s"         # таймаут операции (default 60s)
+  #   max-attempts: 3             # число попыток операции (default 3)
+  #   max-idle-conns: 100         # пул idle-соединений (default 100)
+  #   idle-conn-timeout: "90s"    # таймаут idle-соединений (default 90s)
+  # Для HTTP-подобных хранилищ (s3) дополнительно:
+  #   max-idle-conns-per-host: 10 # idle-соединений на хост (default 10)
+  #   metadata-ttl: "30s"         # TTL кэша метаданных (0 = выключен)
   # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
   # Для ftps по умолчанию tls-verify: true (отключение запрещено).
 

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestBuildSourceStoreEmptyKindReturnsNil(t *testing.T) {
@@ -64,6 +65,25 @@ func TestBuildSourceStoreHTTP(t *testing.T) {
 	s, err := BuildSourceStore(context.Background(), RemoteStorageConfig{
 		Kind:    StorageHTTP,
 		BaseURL: "https://addr.site/path_to_image/",
+	})
+	if err != nil {
+		t.Fatalf("BuildSourceStore: %v", err)
+	}
+	if s == nil {
+		t.Fatal("expected non-nil SourceStore for HTTP")
+	}
+}
+
+func TestBuildSourceStoreHTTPWithOptions(t *testing.T) {
+	s, err := BuildSourceStore(context.Background(), RemoteStorageConfig{
+		Kind:                StorageHTTP,
+		BaseURL:             "https://addr.site/path_to_image/",
+		DialTimeout:         15 * time.Second,
+		ReadTimeout:         45 * time.Second,
+		MaxAttempts:         5,
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     120 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("BuildSourceStore: %v", err)
