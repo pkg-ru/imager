@@ -1,0 +1,59 @@
+########################################
+# Локальная конфигурация (setting-local.yaml).
+#
+# Опциональный файл. Если присутствует в каталоге конфигурации — глубоко
+# переопределяет базовый setting.yaml:
+#   - вложенные map мержатся (ключи, не указанные в local, сохраняются);
+#   - скаляры заменяются значением из local;
+#   - списки заменяются ЦЕЛИКОМ (не дополняются).
+#
+# Отсутствие файла — нормальная ситуация. Файл НЕ должен содержать
+# прикладных env-переменных — всё задаётся здесь.
+#
+# Этот файл по умолчанию НЕ закоммичивается в продакшн (см. .gitignore) и
+# служит шаблоном/локальным примером. Скопируйте нужные ключи и подставьте
+# свои значения.
+
+########################################
+# Локальные переопределения (активные).
+
+# ImageMagick: абсолютный путь к бинарю. На Windows имя `magick` может не
+# разрешаться через PATH (например, при запуске из IDE/службы), поэтому
+# указываем полный путь к magick.exe. Используйте прямые слэши.
+imagemagick:
+  binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
+
+########################################
+# Примеры переопределений (раскомментируйте и адаптируйте):
+
+# server:
+#   addr: ":9090"
+#
+# source:
+#   storage: "s3"
+#   bucket: "my-images"
+#   prefix: "source/"
+#   region: "ru-central1"
+#   endpoint: "https://storage.yandexcloud.net"
+#   access-key: "REPLACE_ME"
+#   secret-key: "REPLACE_ME"
+#
+# result:
+#   storage: "s3"
+#   bucket: "my-images"
+#   prefix: "result/"
+#   region: "ru-central1"
+#   endpoint: "https://storage.yandexcloud.net"
+#   access-key: "REPLACE_ME"
+#   secret-key: "REPLACE_ME"
+#
+# imagemagick:
+#   limits:
+#     timeout: "30s"
+#     output-bytes: 10485760
+#   policy:
+#     disabled-coders:
+#       - "PDF"
+#
+# observability:
+#   log-level: "debug"

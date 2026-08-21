@@ -1,0 +1,99 @@
+########################################
+# Производственная конфигурация (монтируется в /etc/imager).
+#
+# Все настройки — только здесь. Единственная env-переменная —
+# IMAGER_CONFIG_DIR=/etc/imager (см. docker-compose.yaml).
+#
+# Опциональный setting-local.yaml в этом же каталоге глубоко переопределяет
+# базовый (вложенные map мержатся, скаляры заменяются, списки заменяются
+# целиком). Отсутствие local-файла — нормальная ситуация.
+
+version: "1"
+
+server:
+  addr: ":8080"
+
+http:
+  cache-control: "public, max-age=2592000"
+  not-found:
+    pixel: true
+
+policy:
+  global:
+    authorization: "unsafe"
+  presets:
+    - name: "thumb"
+      transform: "c"
+      size: "120x80"
+      output-format: "webp"
+
+processing:
+  default-quality: 85
+
+source:
+  storage: "fs"
+  path: "/data/source"
+  # Для remote-хранилищ (s3/sftp/ftp/ftps/http):
+  #   spool-max-bytes: 10485760   # 10 MiB лимит spool (0 = без лимита)
+  #   dial-timeout: "30s"
+  # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
+  # Для ftps по умолчанию tls-verify: true (отключение запрещено).
+
+result:
+  storage: "fs"
+  path: "/data/result"
+  # Для remote-хранилищ (s3/sftp/ftp/ftps):
+  #   spool-max-bytes: 10485760
+  #   dial-timeout: "30s"
+  # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
+  # Для ftps по умолчанию tls-verify: true (отключение запрещено).
+
+imagemagick:
+  policy:
+    enabled: true
+    disable-network: true
+    # Resource policies в policy.xml (0 = не задавать). Дублируют лимиты
+    # ниже и применяются ImageMagick на уровне policy (до -limit).
+    max-memory-bytes: 1048576000   # 1 GiB
+    max-map-bytes: 2097152000      # 2 GiB
+    max-disk-bytes: 1048576000     # 1 GiB
+    max-threads: 4
+    max-time-seconds: 30
+    max-width: 32768
+    max-height: 32768
+    max-pixels: 268435456          # 256 MP (защита от decompression bomb)
+    max-frames: 100
+  limits:
+    timeout: "30s"
+    output-bytes: 10485760
+    # Resource limits через -limit (ImageMagick 6/7). Защита от
+    # decompression bomb: area = лимит площади (width*height), width/height —
+    # лимиты сторон.
+    memory-bytes: 1048576000       # 1 GiB
+    map-bytes: 2097152000          # 2 GiB
+    disk-bytes: 1048576000         # 1 GiB
+    threads: 4
+    time-seconds: 30
+    width: 32768
+    height: 32768
+    pixels: 268435456              # 256 MP (area)
+    frames: 100
+    # Максимальное число одновременно работающих ImageMagick subprocess
+    # (0 = без ограничения). Рекомендуется задать явное значение
+    # (например 2) для защиты CPU/RAM от перегрузки.
+    concurrency: 2
+    # Параметры сжатия (0 = умолчание ImageMagick). Баланс скорость/размер.
+    webp-method: 4
+    png-compression-level: 6
+
+application:
+  # Максимальный размер выходного файла (0 = без лимита).
+  # Рекомендуется задать явный лимит (например 10485760 = 10 MiB).
+  output-limit: 0
+  # Общий бюджет памяти процесса для spillable-буферов (source+result).
+  # При превышении буфер сбрасывается во временный файл на диске.
+  # 0 = без лимита (не рекомендуется). По умолчанию 500 МБ.
+  buffer-max-bytes: 524288000
+
+observability:
+  log-level: "info"

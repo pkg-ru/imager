@@ -1,34 +1,82 @@
-FROM golang:1.23.7 AS builder
+# syntax=docker/dockerfile:1.7
 
-LABEL stage=gobuilder
-ENV CGO_ENABLED 0
-ENV GOOS linux
+###############################################################################
+# Builder: собирает production binary из cmd/imager (новый composition root).
+# Pinned base image для воспроизводимости. CGO отключён (static binary).
+###############################################################################
+FROM golang:1.25.0-alpine3.20 AS builder
 
-RUN apt update && apt install tzdata
+# Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
+ARG GOFLAGS="-buildvcs=false"
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    GOFLAGS=${GOFLAGS}
 
-WORKDIR /app
-# COPY . .
-# RUN chmod +x ./bash/install
-# RUN bash ./bash/install
-# RUN bash ./bash/build
+WORKDIR /src
 
-RUN apt install git && git clone https://github.com/pkg-ru/imager.git
-RUN cd imager && chmod +x ./bash/install && bash ./bash/install && bash ./bash/build
+# Сначала копируем только модули для кэширования слоя зависимостей.
+COPY go.mod go.sum ./
+COPY go.work go.work.sum ./
+RUN go mod download
 
-######################################
-FROM alpine
+# Копируем исходники и собираем.
+COPY . .
+RUN go build -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
-RUN apk update --no-cache && apk add --update bash && apk add ffmpeg imagemagick libde265 libheif
-COPY --from=builder /usr/share/zoneinfo/Europe/Moscow /usr/share/zoneinfo/Europe/Moscow
-ENV TZ Europe/Moscow
+###############################################################################
+# Runtime: минимальный образ с ImageMagick и FFmpeg.
+# Pinned base image. Non-root пользователь, read-only root layout.
+###############################################################################
+FROM alpine:3.20
 
-WORKDIR /app
-# COPY --from=builder /app/imager /app/imager
-# COPY --from=builder /app/setting.yaml /app/setting.yaml
-COPY --from=builder /app/imager/imager /app/imager
-COPY --from=builder /app/imager/setting.yaml /app/setting.yaml
+# Pinned версии пакетов для воспроизводимости (apk --no-cache).
+RUN apk add --no-cache --update \
+        imagemagick~=7.1.1 \
+        ffmpeg~=6.1 \
+        libheif~=1.17 \
+        libde265~=1.0 \
+        tzdata~=2024a \
+        ca-certificates \
+    && addgroup -S -g 10001 imager \
+    && adduser -S -D -H -u 10001 -G imager imager
 
-RUN chmod 0777 /app
-RUN chmod 0755 /app/imager && chmod +x /app/imager
+# Часовой пояс.
+ENV TZ=Europe/Moscow
 
-CMD ["/app/imager"]
+# Writable каталоги: только source/result и tmp. Root fs остаётся read-only
+# (read_only: true в compose). /tmp — tmpfs в compose.
+RUN mkdir -p /data/source /data/result /etc/imager \
+    && chown -R imager:imager /data \
+    && chmod 0750 /data /data/source /data/result
+
+# Копируем static binary и базовый конфиг. Каталог конфигурации задаётся
+# через IMAGER_CONFIG_DIR (единственная env-переменная). Локальная
+# конфигурация (setting-local.yaml) монтируется в compose.
+COPY --from=builder /out/imager /usr/local/bin/imager
+COPY setting.yaml /etc/imager/setting.yaml
+
+# Restrictive permissions: бинарь 0755, конфиг 0640 (не содержит секретов,
+# но ограничиваем чтение).
+RUN chmod 0755 /usr/local/bin/imager \
+    && chmod 0640 /etc/imager/setting.yaml \
+    && chown root:imager /etc/imager/setting.yaml
+
+# Non-root runtime user.
+USER imager:imager
+
+# Healthcheck: liveness endpoint. wget из busybox.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
+
+# Экспонируем HTTP-порт (readiness/liveness/metrics/asset).
+EXPOSE 8080
+
+# Read-only root: единственные writable пути — /data и /tmp (tmpfs в compose).
+VOLUME ["/data/source", "/data/result"]
+
+# Production entrypoint: новый composition root (cmd/imager).
+# Единственная env-переменная — IMAGER_CONFIG_DIR (путь к каталогу
+# с setting.yaml / setting-local.yaml). Остальное — в YAML; см.
+# docs/PRODUCTION.md.
+CMD ["/usr/local/bin/imager"]

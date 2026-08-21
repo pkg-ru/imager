@@ -1,0 +1,131 @@
+package processing
+
+import "testing"
+
+func TestValidOperation(t *testing.T) {
+	for _, op := range Operations() {
+		if !ValidOperation(op) {
+			t.Errorf("ValidOperation(%q) = false, want true", op)
+		}
+	}
+	if ValidOperation("bogus") {
+		t.Error("ValidOperation(bogus) = true, want false")
+	}
+}
+
+func TestValidFormat(t *testing.T) {
+	for _, f := range Formats() {
+		if !ValidFormat(f) {
+			t.Errorf("ValidFormat(%q) = false, want true", f)
+		}
+	}
+	if ValidFormat("bogus") {
+		t.Error("ValidFormat(bogus) = true, want false")
+	}
+}
+
+func TestParseFormat(t *testing.T) {
+	tests := []struct {
+		in   string
+		want Format
+	}{
+		{"jpeg", FormatJPEG},
+		{"JPEG", FormatJPEG},
+		{"jpg", FormatJPEG}, // алиас расширения
+		{"png", FormatPNG},
+		{"webp", FormatWebP},
+		{"gif", FormatGIF},
+		{"avif", FormatAVIF},
+		{"heif", FormatHEIF},
+		{"heic", FormatHEIF}, // алиас расширения
+		{"apng", FormatAPNG},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := ParseFormat(tt.in)
+			if err != nil {
+				t.Fatalf("ParseFormat(%q) error: %v", tt.in, err)
+			}
+			if got != tt.want {
+				t.Errorf("ParseFormat(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+	if _, err := ParseFormat("bogus"); err == nil {
+		t.Error("ParseFormat(bogus) expected error")
+	}
+}
+
+func TestFormatAnimated(t *testing.T) {
+	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatHEIF}
+	still := []Format{FormatJPEG, FormatPNG, FormatAVIF}
+	for _, f := range animated {
+		if !f.Animated() {
+			t.Errorf("%q should be animated", f)
+		}
+	}
+	for _, f := range still {
+		if f.Animated() {
+			t.Errorf("%q should not be animated", f)
+		}
+	}
+}
+
+func TestNewProcessingPlan(t *testing.T) {
+	loop := true
+	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 80, &loop)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan error: %v", err)
+	}
+	if plan.Operation != OpCrop {
+		t.Errorf("Operation = %q, want crop", plan.Operation)
+	}
+	if plan.SourceFormat != FormatJPEG || plan.OutputFormat != FormatWebP {
+		t.Errorf("formats = %q/%q, want jpeg/webp", plan.SourceFormat, plan.OutputFormat)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("Validate error: %v", err)
+	}
+}
+
+func TestNewProcessingPlanInvalid(t *testing.T) {
+	invalid := []struct {
+		name string
+		op   Operation
+		sf   Format
+		of   Format
+		size Size
+		dpr  int
+		q    int
+	}{
+		{"invalid op", "bogus", FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80},
+		{"invalid source format", OpCrop, "bogus", FormatWebP, Size{Width: 120, Height: 80}, 1, 80},
+		{"invalid output format", OpCrop, FormatJPEG, "bogus", Size{Width: 120, Height: 80}, 1, 80},
+		{"empty size", OpCrop, FormatJPEG, FormatWebP, Size{}, 1, 80},
+		{"negative dpr", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, -1, 80},
+		{"quality too high", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 101},
+		{"quality too low", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, -1},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := NewProcessingPlan(tt.op, tt.sf, tt.of, tt.size, tt.dpr, tt.q, nil); err == nil {
+				t.Errorf("NewProcessingPlan(%s) expected error", tt.name)
+			}
+		})
+	}
+}
+
+func TestSizeValid(t *testing.T) {
+	if err := (Size{Width: 120, Height: 80}).Valid(); err != nil {
+		t.Errorf("expected valid size, got %v", err)
+	}
+	if err := (Size{Width: 120}).Valid(); err != nil {
+		t.Errorf("expected valid width-only size, got %v", err)
+	}
+	if err := (Size{}).Valid(); err == nil {
+		t.Error("expected error for empty size")
+	}
+	if err := (Size{Width: -1}).Valid(); err == nil {
+		t.Error("expected error for negative width")
+	}
+}

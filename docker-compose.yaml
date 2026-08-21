@@ -2,24 +2,63 @@ services:
   imager:
     build:
       context: ./
-    restart: always
+      dockerfile: Dockerfile
+    image: imager:production
+    restart: unless-stopped
     stop_signal: INT
-    stop_grace_period: 5s
-    # command:
-    #   - sh
-    #   - '-c'
-    #   - |
-    #       trap 'exit 0' INT
-    #       trap 'exit 1' TERM
-    #       while true; do :; done
+    stop_grace_period: 15s
+
+    # Production hardening: non-root (в Dockerfile), read-only root fs,
+    # dropped capabilities, no-new-privileges, tmpfs для /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add: []
+
+    # Resource limits (обязательные для production).
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+    # Healthcheck (liveness) — дублирует HEALTHCHECK из Dockerfile.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+    # Только HTTP (8080). TLS/443 не включён в production scope.
     ports:
-      - 80:80
-      - 443:443
+      - "8080:8080"
+
+    # Конфигурация монтируется read-only. Внутри каталога лежат
+    # setting.yaml (обязательный) и setting-local.yaml (опциональный).
     volumes:
-      - ./example:/app/example:rw
-    working_dir: /app
+      - ./config:/etc/imager:ro
+      - imager_source:/data/source
+      - imager_result:/data/result
+
+    environment:
+      # Единственная env-переменная: путь к каталогу с настройками.
+      # Все остальные настройки — в YAML (setting.yaml / setting-local.yaml).
+      IMAGER_CONFIG_DIR: /etc/imager
+
     networks:
       - default
+
+volumes:
+  imager_source:
+  imager_result:
 
 networks:
   default:
