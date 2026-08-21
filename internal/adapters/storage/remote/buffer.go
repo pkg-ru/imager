@@ -57,6 +57,12 @@ type Buffer struct {
 	f    *os.File
 	size int64
 
+	// файловый дескриптор для чтения (после spill), открывается лениво.
+	rf *os.File
+
+	// позиция чтения для io.Reader/io.Seeker интерфейса буфера.
+	pos int64
+
 	// жёсткий лимит (0 = без лимита).
 	maxBytes int64
 
@@ -195,20 +201,67 @@ func (b *Buffer) spillLocked() error {
 
 // Read реализует io.Reader (читает с текущей позиции буфера).
 func (b *Buffer) Read(p []byte) (int, error) {
-	r, err := b.NewReader()
-	if err != nil {
-		return 0, err
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.released {
+		return 0, errors.New("remote: buffer is released")
 	}
-	return r.Read(p)
+	if b.pos >= b.size {
+		return 0, io.EOF
+	}
+	var n int
+	if b.f != nil {
+		// Читаем из файла, поддерживая позицию буфера.
+		if b.rf == nil {
+			rf, err := os.Open(b.f.Name())
+			if err != nil {
+				return 0, err
+			}
+			b.rf = rf
+		}
+		if _, err := b.rf.Seek(b.pos, io.SeekStart); err != nil {
+			return 0, err
+		}
+		rn, err := b.rf.Read(p)
+		if rn > 0 {
+			b.pos += int64(rn)
+		}
+		return rn, err
+	}
+	// Читаем из памяти.
+	avail := b.size - b.pos
+	if int64(len(p)) < avail {
+		avail = int64(len(p))
+	}
+	copy(p, b.mem[b.pos:b.pos+avail])
+	b.pos += avail
+	n = int(avail)
+	return n, nil
 }
 
 // Seek реализует io.Seeker (для совместимости; позиция буфера).
 func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
-	r, err := b.NewReader()
-	if err != nil {
-		return 0, err
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.released {
+		return 0, errors.New("remote: buffer is released")
 	}
-	return r.Seek(offset, whence)
+	var np int64
+	switch whence {
+	case io.SeekStart:
+		np = offset
+	case io.SeekCurrent:
+		np = b.pos + offset
+	case io.SeekEnd:
+		np = b.size + offset
+	default:
+		return 0, errors.New("remote: invalid whence")
+	}
+	if np < 0 {
+		return 0, errors.New("remote: negative seek")
+	}
+	b.pos = np
+	return np, nil
 }
 
 // NewReader создаёт независимый reader с собственной позицией чтения.
@@ -263,6 +316,10 @@ func (b *Buffer) releaseIfDoneLocked() {
 		_ = b.f.Close()
 		_ = os.Remove(name)
 		b.f = nil
+	}
+	if b.rf != nil {
+		_ = b.rf.Close()
+		b.rf = nil
 	}
 	b.mem = nil
 	if b.reserved > 0 && b.pool != nil {
@@ -381,6 +438,19 @@ func NewBufferPool(maxBytes int64) *BufferPool {
 
 // Max возвращает максимальный бюджет пула.
 func (p *BufferPool) Max() int64 { return p.max }
+
+// Close сбрасывает учёт занятых байт. Используется при пересоздании
+// приложения, чтобы старый пул не удерживал память (доп. замечание).
+// Реализует io.Closer.
+func (p *BufferPool) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.used = 0
+	return nil
+}
 
 // Used возвращает текущее число занятых байт.
 func (p *BufferPool) Used() int64 {

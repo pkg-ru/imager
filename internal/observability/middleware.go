@@ -42,32 +42,70 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := WithRequestID(r.Context(), id)
 	w.Header().Set(RequestIDHeader, id)
 
-	// Обёртка для захвата статуса.
-	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	// Обёртка для захвата статуса. status=0 означает "не записан" — после
+	// обработки подставляем 200 (неявный статус по умолчанию).
+	sw := &statusWriter{ResponseWriter: w}
 	m.next.ServeHTTP(sw, r.WithContext(ctx))
 
-	class := ClassifyStatus(sw.status)
+	status := sw.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	class := ClassifyStatus(status)
 	m.metrics.IncRequests(class)
 	m.metrics.ObserveRequestDuration(class, time.Since(start))
 }
 
 // statusWriter захватывает код статуса ответа.
+//
+// П.14: переопределяет Write и Flush, чтобы гарантировать корректный захват
+// статуса, даже если handler пишет body без явного WriteHeader (тогда
+// неявный статус 200 должен быть зафиксирован).
 type statusWriter struct {
 	http.ResponseWriter
 	status int
 }
 
 func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
+	if w.status == 0 {
+		w.status = code
+	}
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *statusWriter) Flush() {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // newRequestID генерирует криптографически случайный 16-байтовый hex ID.
 func newRequestID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// Крайне маловероятно; fallback на time-based.
-		return hex.EncodeToString([]byte(time.Now().Format("20060102150405.000000000")))
+		// Крайне маловероятно; fallback на time-based + случайная составляющая
+		// (доп. замечание): при сбое rand все ID не должны совпадать в одну
+		// секунду.
+		now := time.Now().UnixNano()
+		// Смешиваем время с псевдослучайным значением из runtime fastrand.
+		seed := uint64(now) ^ uint64(time.Now().UnixNano()<<1)
+		for i := 0; i < 8; i++ {
+			seed ^= seed << 13
+			seed ^= seed >> 7
+			seed ^= seed << 17
+			b[i] = byte(seed >> (8 * (i % 8)))
+		}
+		return hex.EncodeToString(b[:])
 	}
 	return hex.EncodeToString(b[:])
 }

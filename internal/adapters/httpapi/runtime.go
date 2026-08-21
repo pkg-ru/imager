@@ -3,10 +3,13 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -30,6 +33,13 @@ type Runtime struct {
 
 	shutdownTimeout time.Duration
 
+	// maxBodyBytes — жёсткий лимит тела запроса (п.7).
+	maxBodyBytes int64
+
+	// closers — ресурсы (хранилища/процессор/координатор), закрываемые при
+	// Shutdown (п.6). Закрываются только те, что реализуют io.Closer.
+	closers []io.Closer
+
 	mu       sync.Mutex
 	shutdown bool
 }
@@ -52,6 +62,8 @@ type RuntimeOptions struct {
 	ShutdownTimeout time.Duration
 	// MaxHeaderBytes — максимальный размер заголовков запроса.
 	MaxHeaderBytes int
+	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
+	MaxBodyBytes int64
 }
 
 // NewRuntime создаёт Runtime. Не начинает прослушивание.
@@ -78,7 +90,10 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		opts.ShutdownTimeout = defaultTimeouts.Shutdown
 	}
 	if opts.MaxHeaderBytes <= 0 {
-		opts.MaxHeaderBytes = 1 << 20 // 1 MiB
+		opts.MaxHeaderBytes = 32 << 10 // 32 KiB (п.7: уменьшен с 1 MiB)
+	}
+	if opts.MaxBodyBytes <= 0 {
+		opts.MaxBodyBytes = DefaultMaxBodyBytes
 	}
 
 	rt := &Runtime{
@@ -95,6 +110,10 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		IdleTimeout:       opts.IdleTimeout,
 		MaxHeaderBytes:    opts.MaxHeaderBytes,
 	}
+	// П.7: жёсткий лимит тела запроса (сервис не принимает тела). Оборачиваем
+	// handler в MaxBytesHandler; SetHandler переустанавливает handler, поэтому
+	// обёртка применяется в Serve.
+	rt.maxBodyBytes = opts.MaxBodyBytes
 
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
@@ -117,9 +136,25 @@ func (rt *Runtime) SetHandler(h http.Handler) {
 	rt.server.Handler = h
 }
 
+// AddCloser регистрирует ресурс, закрываемый при Shutdown (п.6).
+// Ресурс закрывается только если реализует io.Closer.
+func (rt *Runtime) AddCloser(c any) {
+	if c == nil {
+		return
+	}
+	if cl, ok := c.(io.Closer); ok {
+		rt.mu.Lock()
+		rt.closers = append(rt.closers, cl)
+		rt.mu.Unlock()
+	}
+}
+
 // Serve запускает HTTP-сервер и блокирует до завершения.
 // Возвращает ошибку сервера (кроме http.ErrServerClosed).
 func (rt *Runtime) Serve() error {
+	// П.7: применяем лимит тела запроса к текущему handler (SetHandler мог
+	// заменить handler после NewRuntime).
+	rt.server.Handler = http.MaxBytesHandler(rt.server.Handler, rt.maxBodyBytes)
 	err := rt.server.Serve(rt.listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -128,9 +163,15 @@ func (rt *Runtime) Serve() error {
 }
 
 // ServeAsync запускает сервер в фоне и возвращает канал ошибок.
+// П.2: воркер защищён от паники — паника не должна ронять процесс.
 func (rt *Runtime) ServeAsync() <-chan error {
 	ch := make(chan error, 1)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				ch <- fmt.Errorf("httpapi: panic in server worker: %v", rec)
+			}
+		}()
 		ch <- rt.Serve()
 	}()
 	return ch
@@ -168,6 +209,26 @@ func (rt *Runtime) Shutdown(ctx context.Context) error {
 		// Принудительно закрываем оставшиеся соединения.
 		_ = rt.server.Close()
 	}
+
+	// П.6: закрываем зарегистрированные ресурсы (хранилища/процессор/
+	// координатор). Закрытие bounded по shutdownCtx.
+	rt.mu.Lock()
+	closers := append([]io.Closer(nil), rt.closers...)
+	rt.mu.Unlock()
+	for _, c := range closers {
+		select {
+		case <-shutdownCtx.Done():
+			// Таймаут shutdown — прекращаем закрывать ресурсы.
+			if err == nil {
+				err = shutdownCtx.Err()
+			}
+			rt.alive.Store(false)
+			return err
+		default:
+		}
+		_ = c.Close()
+	}
+
 	rt.alive.Store(false)
 	return err
 }
@@ -181,9 +242,16 @@ func (rt *Runtime) Close() error {
 
 // WaitSignal ожидает сигнал завершения (SIGINT/SIGTERM) и возвращает его.
 // Не создаёт утечек: регистрирует обработчик и снимает его после получения.
+//
+// П.20: SIGTERM регистрируется только на Unix-платформах (на Windows
+// syscall.SIGTERM не поддерживается).
 func WaitSignal(ctx context.Context) os.Signal {
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	if runtime.GOOS == "windows" {
+		signal.Notify(ch, os.Interrupt)
+	} else {
+		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	}
 	defer signal.Stop(ch)
 	select {
 	case sig := <-ch:

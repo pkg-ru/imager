@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -98,11 +99,19 @@ func main() {
 		IdleTimeout:       rc.Server.IdleTimeout,
 		ShutdownTimeout:   rc.Server.ShutdownTimeout,
 		MaxHeaderBytes:    rc.Server.MaxHeaderBytes,
+		MaxBodyBytes:      int64(rc.Server.MaxBodyBytes),
 	})
 	if err != nil {
 		logger.Errorf("imager: runtime: %v", err)
 		os.Exit(1)
 	}
+
+	// П.6: регистрируем ресурсы для закрытия при Shutdown (хранилища,
+	// процессор, пул буферов).
+	rt.AddCloser(app.Sources)
+	rt.AddCloser(app.Results)
+	rt.AddCloser(proc)
+	rt.AddCloser(app.Pool)
 
 	// 6) Health (readiness/liveness) + metrics привязаны к runtime.
 	health := httpapi.NewHealth(rt)
@@ -110,9 +119,15 @@ func main() {
 
 	logger.Infof("imager: listening on %s", rt.Addr())
 
-	// 7) Запуск сервера в фоне.
+	// 7) Запуск сервера в фоне. П.2: воркер защищён от паники.
 	serveErr := make(chan error, 1)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger.Errorf("imager: panic in server worker: %v", rec)
+				serveErr <- fmt.Errorf("imager: panic in server worker: %v", rec)
+			}
+		}()
 		serveErr <- rt.Serve()
 	}()
 

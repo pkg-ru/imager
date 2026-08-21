@@ -14,6 +14,7 @@ import (
 	"expvar"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,25 +94,29 @@ func (nopMetrics) ObserveStorageDuration(StorageOp, bool, time.Duration) {}
 func NopMetrics() Metrics { return nopMetrics{} }
 
 // histogram — простая гистограмма с фиксированными границами бакетов.
-// Реализация потокобезопасна и использует только stdlib.
+//
+// П.12: реализация lock-free — счётчики бакетов, сумма и число наблюдений
+// хранятся в atomic-переменных, без мьютекса в горячем пути (observe).
+// Агрегация (String/вывод) читает атомарно.
+//
+// Доп.: сумма хранится в наносекундах (int64), чтобы не терять точность
+// долей секунды (d.Seconds() обрезала бы до целых секунд).
 type histogram struct {
-	mu      sync.Mutex
 	buckets []float64 // верхние границы бакетов (в секундах)
-	counts  []uint64
-	sum     float64
-	count   uint64
+	counts  []atomic.Uint64
+	sumNS   atomic.Int64
+	count   atomic.Uint64
 }
 
 func newHistogram(buckets []float64) *histogram {
-	return &histogram{buckets: buckets, counts: make([]uint64, len(buckets)+1)}
+	return &histogram{buckets: buckets, counts: make([]atomic.Uint64, len(buckets)+1)}
 }
 
 func (h *histogram) observe(d time.Duration) {
-	sec := d.Seconds()
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.sum += sec
-	h.count++
+	ns := d.Nanoseconds()
+	h.sumNS.Add(ns)
+	h.count.Add(1)
+	sec := float64(ns) / 1e9
 	idx := len(h.buckets)
 	for i, b := range h.buckets {
 		if sec <= b {
@@ -119,7 +124,8 @@ func (h *histogram) observe(d time.Duration) {
 			break
 		}
 	}
-	h.counts[idx]++
+	h.counts[idx].Add(1)
+	bumpMetricsVersion()
 }
 
 // StdMetrics — production реализация Metrics на stdlib expvar.
@@ -128,17 +134,18 @@ func (h *histogram) observe(d time.Duration) {
 // агрегируются в текстовом /metrics endpoint. Кардинальность ограничена
 // фиксированными enum-ами.
 type StdMetrics struct {
-	requests        *expvar.Map // class -> counter
-	requestDur      *histogram
-	cacheHit        *expvar.Int
-	cacheMiss       *expvar.Int
-	procSuccess     *expvar.Int
-	procError       *expvar.Int
-	procDur         *histogram
-	storageOps      *expvar.Map // op -> success/error counters
-	storageDur      *histogram
-	storageDurByOp  map[StorageOp]*histogram
-	storageDurByErr map[bool]*histogram
+	requests    *expvar.Map // class -> counter
+	requestDur  *histogram
+	cacheHit    *expvar.Int
+	cacheMiss   *expvar.Int
+	procSuccess *expvar.Int
+	procError   *expvar.Int
+	procDur     *histogram
+	storageOps  *expvar.Map // op -> success/error counters
+	// storageDur — bounded registry гистограмм длительности storage ops
+	// (п.11). Ключ — фиксированный набор "op_success"/"op_error". sync.Map
+	// даёт lock-free чтение (LoadOrStore) без глобального мьютекса.
+	storageDur sync.Map // string -> *histogram
 }
 
 // NewStdMetrics создаёт StdMetrics и регистрирует expvar-переменные.
@@ -197,17 +204,30 @@ var durationBuckets = []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10}
 
 func (m *StdMetrics) IncRequests(class StatusClass) {
 	m.requests.Add(string(class), 1)
+	bumpMetricsVersion()
 }
 
 func (m *StdMetrics) ObserveRequestDuration(class StatusClass, d time.Duration) {
 	m.requestDur.observe(d)
 }
 
-func (m *StdMetrics) IncCacheHit()  { m.cacheHit.Add(1) }
-func (m *StdMetrics) IncCacheMiss() { m.cacheMiss.Add(1) }
+func (m *StdMetrics) IncCacheHit() {
+	m.cacheHit.Add(1)
+	bumpMetricsVersion()
+}
+func (m *StdMetrics) IncCacheMiss() {
+	m.cacheMiss.Add(1)
+	bumpMetricsVersion()
+}
 
-func (m *StdMetrics) IncProcessorSuccess() { m.procSuccess.Add(1) }
-func (m *StdMetrics) IncProcessorError()   { m.procError.Add(1) }
+func (m *StdMetrics) IncProcessorSuccess() {
+	m.procSuccess.Add(1)
+	bumpMetricsVersion()
+}
+func (m *StdMetrics) IncProcessorError() {
+	m.procError.Add(1)
+	bumpMetricsVersion()
+}
 func (m *StdMetrics) ObserveProcessorDuration(d time.Duration) {
 	m.procDur.observe(d)
 }
@@ -220,6 +240,7 @@ func (m *StdMetrics) IncStorageOp(op StorageOp, err bool) {
 		key += "_success"
 	}
 	m.storageOps.Add(key, 1)
+	bumpMetricsVersion()
 }
 
 func (m *StdMetrics) ObserveStorageDuration(op StorageOp, err bool, d time.Duration) {
@@ -235,44 +256,29 @@ func (m *StdMetrics) ObserveStorageDuration(op StorageOp, err bool, d time.Durat
 }
 
 func (m *StdMetrics) storageDurFor(key string) *histogram {
-	// Ленивая инициализация с bounded cardinality (фиксированный набор op).
-	// Используем глобальный registry, чтобы не плодить гистограммы.
-	return storageDurRegistry.get(key)
-}
-
-// storageDurRegistry — bounded registry гистограмм длительности storage ops.
-var storageDurRegistry = &histRegistry{m: map[string]*histogram{}}
-
-type histRegistry struct {
-	mu sync.Mutex
-	m  map[string]*histogram
-}
-
-func (r *histRegistry) get(key string) *histogram {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if h, ok := r.m[key]; ok {
-		return h
+	// П.11: sync.Map даёт lock-free чтение (LoadOrStore) без глобального
+	// мьютекса. Кардинальность ограничена фиксированным набором op.
+	if v, ok := m.storageDur.Load(key); ok {
+		return v.(*histogram)
 	}
 	h := newHistogram(durationBuckets)
-	r.m[key] = h
-	publishOnce("imager_storage_duration_seconds_"+key, h)
-	return h
+	actual, _ := m.storageDur.LoadOrStore(key, h)
+	publishOnce("imager_storage_duration_seconds_"+key, actual.(*histogram))
+	return actual.(*histogram)
 }
 
 // String реализует expvar.Var для текстового вывода.
 func (h *histogram) String() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	out := "{"
-	for i, c := range h.counts {
+	for i := range h.counts {
+		c := h.counts[i].Load()
 		if i < len(h.buckets) {
 			out += `"le_` + formatBucket(h.buckets[i]) + `":` + itoa(c) + ","
 		} else {
 			out += `"+Inf":` + itoa(c) + ","
 		}
 	}
-	out += `"sum":` + formatFloat(h.sum) + `,"count":` + itoa(h.count) + "}"
+	out += `"sum":` + formatFloat(float64(h.sumNS.Load())/1e9) + `,"count":` + itoa(h.count.Load()) + "}"
 	return out
 }
 

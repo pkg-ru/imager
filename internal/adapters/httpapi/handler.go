@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pkg-ru/imager/internal/application/generatev2"
 	"github.com/pkg-ru/imager/internal/domain/asset"
@@ -36,6 +37,10 @@ type Handler struct {
 	cfg    Config
 	log    Logger
 	format map[string]string // output format -> content-type
+
+	// etagCache — кэш вычисленных ETag по identity (canonical URL + size),
+	// чтобы не пересчитывать SHA-256 на каждый запрос (п.15).
+	etagCache sync.Map // string -> string
 }
 
 // New создаёт Handler. Конфигурация валидируется и нормализуется.
@@ -79,12 +84,28 @@ func buildFormatMap() map[string]string {
 }
 
 // ServeHTTP обрабатывает запрос.
+//
+// П.2: тело обёрнуто в try/catch — паника в генераторе или при копировании
+// ответа не должна ронять процесс. Если ответ ещё не начат, пишем 500.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Security headers применяются ко всем ответам.
 	h.applySecurityHeaders(w)
 
 	// CORS (deny-by-default).
 	h.applyCORS(w, r)
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			h.log.Errorf("httpapi: panic in handler: %v", rec)
+			// Пытаемся записать 500. Если ответ уже начат (заголовки
+			// отправлены), запись не сработает — это безопасно, просто
+			// логируем. Ошибки записи игнорируем.
+			func() {
+				defer func() { _ = recover() }()
+				h.writeError(w, r, http.StatusInternalServerError, "processing", "internal server error")
+			}()
+		}
+	}()
 
 	switch r.Method {
 	case http.MethodOptions:
@@ -138,7 +159,16 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.gen.Generate(r.Context(), req)
+	// П.18: явный deadline для генерации, связанный с GenerateTimeout.
+	// Превышение маппится в 504 (OutcomeCanceled) через mapError.
+	genCtx := r.Context()
+	if h.cfg.GenerateTimeout > 0 {
+		var cancel context.CancelFunc
+		genCtx, cancel = context.WithTimeout(r.Context(), h.cfg.GenerateTimeout)
+		defer cancel()
+	}
+
+	result, err := h.gen.Generate(genCtx, req)
 	if err != nil {
 		h.mapError(w, r, err)
 		return
@@ -185,18 +215,27 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = io.Copy(w, result.Opened)
+	// П.7: буферизованное копирование (64 KiB) вместо дефолтных 8 KiB.
+	_, _ = io.CopyBuffer(w, result.Opened, make([]byte, 64*1024))
 }
 
 // etagFor вычисляет стабильный ETag из metadata/content identity.
+// П.15: результат кэшируется по identity (canonical URL + size), чтобы не
+// пересчитывать SHA-256 на каждый запрос.
 func (h *Handler) etagFor(meta object.ObjectMetadata, result *generatev2.Result) string {
 	// Если metadata предоставляет ETag, используем его.
 	if meta.ETag != "" {
 		return `"` + meta.ETag + `"`
 	}
-	// Иначе — стабильная identity из canonical URL + size.
-	sum := sha256.Sum256([]byte(result.URL + ":" + strconv.FormatInt(meta.Size, 10)))
-	return `"` + hex.EncodeToString(sum[:16]) + `"`
+	// Иначе — стабильная identity из canonical URL + size, кэшируем.
+	identity := result.URL + ":" + strconv.FormatInt(meta.Size, 10)
+	if v, ok := h.etagCache.Load(identity); ok {
+		return v.(string)
+	}
+	sum := sha256.Sum256([]byte(identity))
+	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	h.etagCache.Store(identity, etag)
+	return etag
 }
 
 // ifNoneMatch проверяет If-None-Match против текущего ETag.
@@ -216,6 +255,12 @@ func ifNoneMatch(header, etag string) bool {
 
 // mapError маппит типизированную ошибку use case в HTTP-статус.
 func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
+	// П.18: отмена контекста (таймаут генерации) → 504.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		h.log.Warnf("httpapi: canceled: %v", err)
+		h.writeError(w, r, http.StatusGatewayTimeout, "canceled", "request canceled")
+		return
+	}
 	var oe *generatev2.OutcomeError
 	if !errors.As(err, &oe) {
 		h.log.Errorf("httpapi: unexpected error: %v", err)
@@ -333,7 +378,8 @@ func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = io.Copy(w, f)
+	// П.7: буферизованное копирование (64 KiB).
+	_, _ = io.CopyBuffer(w, f, make([]byte, 64*1024))
 }
 
 // writeError пишет стабильный error envelope.

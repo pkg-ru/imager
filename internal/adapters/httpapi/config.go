@@ -14,6 +14,9 @@ import (
 	"github.com/pkg-ru/imager/internal/observability"
 )
 
+// DefaultGenerateTimeout — таймаут генерации ассета по умолчанию.
+const DefaultGenerateTimeout = 30 * time.Second
+
 // NotFoundConfig — конфигурация not-found fallback.
 type NotFoundConfig struct {
 	// Pixel — true, если для not-found нужно отдавать прозрачный пиксель
@@ -49,6 +52,10 @@ type Config struct {
 
 	// MaxURLLen — максимальная длина asset URL (0 → asset.MaxURLLen).
 	MaxURLLen int
+
+	// GenerateTimeout — таймаут генерации ассета (0 → DefaultGenerateTimeout).
+	// Применяется как context deadline для Generate; превышение маппится в 504.
+	GenerateTimeout time.Duration
 
 	// NotFound — конфигурация not-found fallback.
 	NotFound NotFoundConfig
@@ -119,6 +126,9 @@ func (c *Config) normalize() {
 	}
 	if c.MaxURLLen == 0 {
 		c.MaxURLLen = 1024
+	}
+	if c.GenerateTimeout <= 0 {
+		c.GenerateTimeout = DefaultGenerateTimeout
 	}
 }
 

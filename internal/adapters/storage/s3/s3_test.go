@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sort"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -21,6 +22,14 @@ type fakeS3Handler struct {
 	// preconditionFailed — если true, PutObject с IfNoneMatch возвращает
 	// PreconditionFailed при существующем объекте.
 	preconditionFailed bool
+	// failStatus — если >0, все операции возвращают ошибку с этим HTTP
+	// status code (для тестов маппинга ошибок).
+	failStatus int
+	// truncateWithoutToken — если true, ListObjectsV2 возвращает
+	// IsTruncated=true без NextContinuationToken (для теста пагинации).
+	truncateWithoutToken bool
+	// listPages — число страниц, возвращаемых ListObjectsV2 до завершения.
+	listPages int
 }
 
 func newFakeS3Handler() *fakeS3Handler {
@@ -54,6 +63,9 @@ func (f *fakeS3Handler) initialize(ctx context.Context, in middleware.Initialize
 }
 
 func (f *fakeS3Handler) handleHead(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
 	params := in.Parameters.(*s3.HeadObjectInput)
 	key := *params.Key
 	data, ok := f.objects[key]
@@ -65,6 +77,9 @@ func (f *fakeS3Handler) handleHead(in middleware.InitializeInput) (middleware.In
 }
 
 func (f *fakeS3Handler) handleGet(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
 	params := in.Parameters.(*s3.GetObjectInput)
 	key := *params.Key
 	data, ok := f.objects[key]
@@ -79,6 +94,9 @@ func (f *fakeS3Handler) handleGet(in middleware.InitializeInput) (middleware.Ini
 }
 
 func (f *fakeS3Handler) handlePut(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
 	params := in.Parameters.(*s3.PutObjectInput)
 	key := *params.Key
 	if f.preconditionFailed {
@@ -95,25 +113,73 @@ func (f *fakeS3Handler) handlePut(in middleware.InitializeInput) (middleware.Ini
 }
 
 func (f *fakeS3Handler) handleDelete(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
 	params := in.Parameters.(*s3.DeleteObjectInput)
 	delete(f.objects, *params.Key)
 	return middleware.InitializeOutput{Result: &s3.DeleteObjectOutput{}}, middleware.Metadata{}, nil
 }
 
 func (f *fakeS3Handler) handleList(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
 	params := in.Parameters.(*s3.ListObjectsV2Input)
 	prefix := ""
 	if params.Prefix != nil {
 		prefix = *params.Prefix
 	}
-	var contents []types.Object
-	for k, v := range f.objects {
+	// Собираем ключи, удовлетворяющие префиксу, в отсортированном порядке.
+	var keys []string
+	for k := range f.objects {
 		if prefix == "" || len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			contents = append(contents, types.Object{Key: aws.String(k), Size: aws.Int64(int64(len(v)))})
+			keys = append(keys, k)
 		}
 	}
+	sort.Strings(keys)
+
+	// Пагинация: токен — последний выданный ключ; страница = 1 объект.
+	start := 0
+	if params.ContinuationToken != nil {
+		tok := *params.ContinuationToken
+		for i, k := range keys {
+			if k == tok {
+				start = i + 1
+				break
+			}
+		}
+	}
+	var contents []types.Object
+	if start < len(keys) {
+		k := keys[start]
+		contents = append(contents, types.Object{Key: aws.String(k), Size: aws.Int64(int64(len(f.objects[k])))})
+	}
 	out := &s3.ListObjectsV2Output{Contents: contents, IsTruncated: aws.Bool(false)}
+	if f.truncateWithoutToken {
+		out.IsTruncated = aws.Bool(true)
+		out.NextContinuationToken = nil
+		return middleware.InitializeOutput{Result: out}, middleware.Metadata{}, nil
+	}
+	if start+1 < len(keys) {
+		out.IsTruncated = aws.Bool(true)
+		out.NextContinuationToken = aws.String(keys[start])
+	}
 	return middleware.InitializeOutput{Result: out}, middleware.Metadata{}, nil
+}
+
+// failError создаёт ошибку с заданным HTTP status code.
+func (f *fakeS3Handler) failError() error {
+	code := "InternalError"
+	switch f.failStatus {
+	case 403:
+		code = "AccessDenied"
+	case 404:
+		code = "NotFound"
+	case 429:
+		code = "SlowDown"
+	}
+	return &smithy.GenericAPIError{Code: code, Message: "forced failure"}
 }
 
 func TestS3SourceLookupOpen(t *testing.T) {
@@ -250,5 +316,114 @@ func TestS3Stats(t *testing.T) {
 	}
 	if stats.TotalBytes != 10 {
 		t.Fatalf("total = %d, want 10", stats.TotalBytes)
+	}
+}
+
+// TestS3StatsTruncatedWithoutToken проверяет защиту от бесконечного цикла:
+// если бэкенд вернул IsTruncated=true без NextContinuationToken, Stats
+// должен завершиться ошибкой, а не зависнуть.
+func TestS3StatsTruncatedWithoutToken(t *testing.T) {
+	f := newFakeS3Handler()
+	f.objects["a/1.bin"] = []byte("12345")
+	f.truncateWithoutToken = true
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r.Stats(context.Background()); err == nil {
+		t.Fatal("expected error for truncated list without continuation token")
+	}
+}
+
+// TestS3StatsPagination verifies that Stats follows pagination tokens.
+func TestS3StatsPagination(t *testing.T) {
+	f := newFakeS3Handler()
+	f.objects["a/1.bin"] = []byte("12345")
+	f.objects["a/2.bin"] = []byte("123")
+	f.listPages = 2
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	stats, err := r.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Objects != 2 {
+		t.Fatalf("objects = %d, want 2", stats.Objects)
+	}
+	if stats.TotalBytes != 8 {
+		t.Fatalf("total = %d, want 8", stats.TotalBytes)
+	}
+}
+
+// TestS3Forbidden verifies that 403 maps to object.ErrForbidden.
+func TestS3Forbidden(t *testing.T) {
+	f := newFakeS3Handler()
+	f.failStatus = 403
+	s, err := NewSourceStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), "x.bin"); !errors.Is(err, object.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+// TestS3Throttled verifies that 429 maps to ErrUnavailable (retryable).
+func TestS3Throttled(t *testing.T) {
+	f := newFakeS3Handler()
+	f.failStatus = 429
+	s, err := NewSourceStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), "x.bin"); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+}
+
+// TestS3ServerError verifies that 5xx maps to ErrUnavailable (retryable).
+func TestS3ServerError(t *testing.T) {
+	f := newFakeS3Handler()
+	f.failStatus = 500
+	s, err := NewSourceStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), "x.bin"); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+}
+
+// TestS3DeleteIdempotent verifies that deleting a missing object is not an
+// error (idempotent delete).
+func TestS3DeleteIdempotent(t *testing.T) {
+	f := newFakeS3Handler()
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	// Объекта нет — Delete должен вернуть nil (идемпотентно).
+	if err := r.Delete(context.Background(), "missing.bin"); err != nil {
+		t.Fatalf("Delete missing: %v", err)
+	}
+}
+
+// TestS3PrefixNormalization verifies that a trailing slash in Prefix is
+// trimmed so keys do not get "//".
+func TestS3PrefixNormalization(t *testing.T) {
+	f := newFakeS3Handler()
+	f.objects["dir/file.bin"] = []byte("payload")
+	s, err := NewSourceStore(Options{Bucket: "bucket", Prefix: "dir/", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	meta, err := s.Lookup(context.Background(), "file.bin")
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if meta.Size != int64(len("payload")) {
+		t.Fatalf("size = %d, want %d", meta.Size, len("payload"))
 	}
 }

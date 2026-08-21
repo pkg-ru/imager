@@ -3,9 +3,12 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"net"
+	stdhttp "net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
@@ -77,6 +80,20 @@ type RemoteStorageConfig struct {
 	Pool *remote.BufferPool
 	// DialTimeout — таймаут соединения для FTP/SFTP/FTPS.
 	DialTimeout time.Duration
+	// S3DialTimeout — таймаут установки TCP-соединения для S3 (0 = дефолт).
+	S3DialTimeout time.Duration
+	// S3ReadTimeout — таймаут чтения ответа для S3 (0 = дефолт).
+	S3ReadTimeout time.Duration
+	// S3MaxAttempts — максимальное число попыток запроса S3 (0 = дефолт).
+	S3MaxAttempts int
+	// S3MaxIdleConns — максимальное число idle-соединений в пуле S3.
+	S3MaxIdleConns int
+	// S3MaxIdleConnsPerHost — максимальное число idle-соединений на хост S3.
+	S3MaxIdleConnsPerHost int
+	// S3IdleConnTimeout — таймаут idle-соединений S3.
+	S3IdleConnTimeout time.Duration
+	// S3MetadataTTL — TTL кэша метаданных S3 (0 = кэш отключён).
+	S3MetadataTTL time.Duration
 }
 
 // BuildSourceStore создаёт SourceStore по конфигурации. При пустом Kind
@@ -97,6 +114,7 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			SpoolDir:      cfg.SpoolDir,
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
+			MetadataTTL:   cfg.S3MetadataTTL,
 		})
 	case StorageSFTP:
 		return sftp.NewSourceStore(sftp.Options{
@@ -156,6 +174,7 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolDir:      cfg.SpoolDir,
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
+			MetadataTTL:   cfg.S3MetadataTTL,
 		})
 	case StorageSFTP:
 		return sftp.NewResultStore(sftp.Options{
@@ -190,6 +209,24 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 	}
 }
 
+// s3Defaults — разумные умолчания для S3-клиента.
+const (
+	s3DefaultDialTimeout      = 30 * time.Second
+	s3DefaultReadTimeout      = 60 * time.Second
+	s3DefaultMaxAttempts      = 3
+	s3DefaultMaxIdleConns     = 100
+	s3DefaultMaxIdleConnsHost = 10
+	s3DefaultIdleConnTimeout  = 90 * time.Second
+	s3DefaultKeepAlive        = 30 * time.Second
+	s3DefaultTLSHandshake     = 10 * time.Second
+	s3DefaultExpectContinue   = 1 * time.Second
+	s3DefaultMaxConnsPerHost  = 2048
+)
+
+// buildS3Client создаёт S3-клиент с явной retry-политикой, таймаутами и
+// пулом соединений. Без этих настроек SDK использует дефолты, которые не
+// гарантируют bounded connect/read таймауты и достаточный пул для
+// параллельных ReadStream/Open.
 func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client, error) {
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if cfg.Region != "" {
@@ -200,6 +237,70 @@ func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client,
 			aws.NewCredentialsCache(staticCredentials{access: cfg.AccessKey, secret: cfg.SecretKey}),
 		))
 	}
+
+	dialTimeout := cfg.S3DialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = s3DefaultDialTimeout
+	}
+	readTimeout := cfg.S3ReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = s3DefaultReadTimeout
+	}
+	maxAttempts := cfg.S3MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = s3DefaultMaxAttempts
+	}
+	maxIdleConns := cfg.S3MaxIdleConns
+	if maxIdleConns <= 0 {
+		maxIdleConns = s3DefaultMaxIdleConns
+	}
+	maxIdleConnsPerHost := cfg.S3MaxIdleConnsPerHost
+	if maxIdleConnsPerHost <= 0 {
+		maxIdleConnsPerHost = s3DefaultMaxIdleConnsHost
+	}
+	idleConnTimeout := cfg.S3IdleConnTimeout
+	if idleConnTimeout <= 0 {
+		idleConnTimeout = s3DefaultIdleConnTimeout
+	}
+
+	// Явный HTTP-клиент с пулом соединений, keep-alive и bounded
+	// connect/read таймаутами.
+	dialer := &net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: s3DefaultKeepAlive,
+		DualStack: true,
+	}
+	transport := &stdhttp.Transport{
+		Proxy:                 stdhttp.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          maxIdleConns,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+		MaxConnsPerHost:       s3DefaultMaxConnsPerHost,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   s3DefaultTLSHandshake,
+		ExpectContinueTimeout: s3DefaultExpectContinue,
+		ForceAttemptHTTP2:     true,
+	}
+	httpClient := &stdhttp.Client{
+		Transport: transport,
+		Timeout:   readTimeout,
+	}
+
+	// Retry-политика: standard mode с явным MaxAttempts и bounded backoff.
+	retryer := func() aws.Retryer {
+		return retry.NewStandard(func(o *retry.StandardOptions) {
+			o.MaxAttempts = maxAttempts
+			o.MaxBackoff = 20 * time.Second
+		})
+	}
+
+	opts = append(opts,
+		awsconfig.WithRetryMode(aws.RetryModeStandard),
+		awsconfig.WithRetryMaxAttempts(maxAttempts),
+		awsconfig.WithHTTPClient(httpClient),
+		awsconfig.WithRetryer(retryer),
+	)
+
 	awscfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: s3 config: %w", err)

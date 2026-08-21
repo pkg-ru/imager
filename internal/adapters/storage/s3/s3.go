@@ -7,27 +7,52 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
+
+// Порог переключения на multipart upload. Объекты больше этого размера
+// загружаются через CreateMultipartUpload → параллельные UploadPart →
+// CompleteMultipartUpload. Меньшие — обычным PutObject с известной длиной.
+const multipartThreshold int64 = 100 * 1024 * 1024 // 100 MiB
+
+// multipartPartSize — размер одной части multipart upload (5 МБ минимум S3).
+const multipartPartSize int64 = 5 * 1024 * 1024
+
+// multipartMaxParts — максимальное число частей (S3 лимит 10000).
+const multipartMaxParts = 10000
+
+// multipartWorkers — число параллельных UploadPart воркеров.
+const multipartWorkers = 8
+
+// maxListPages — предохранитель от бесконечной пагинации в Stats.
+const maxListPages = 10000
+
+// DefaultMetadataTTL — TTL кэша метаданных по умолчанию (30 секунд).
+const DefaultMetadataTTL = 30 * time.Second
 
 // Options — параметры S3-адаптера.
 type Options struct {
 	// Bucket — имя bucket.
 	Bucket string
 	// Prefix — префикс ключей внутри bucket (может быть пустым).
+	// Нормализуется в validate(): завершающий "/" обрезается.
 	Prefix string
-	// Client — S3-клиент. Если nil, используется NewClient.
+	// Client — S3-клиент. Обязателен (см. NewSourceStore/NewResultStore).
 	Client *s3.Client
 	// SpoolDir — каталог временных spool (пусто = os.TempDir).
 	SpoolDir string
@@ -36,23 +61,41 @@ type Options struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	// Если nil, буферы работают только через память без spill.
 	Pool *remote.BufferPool
+	// MetadataTTL — TTL кэша метаданных (0 = кэш отключён).
+	MetadataTTL time.Duration
+	// cache — in-memory TTL-кэш метаданных (инициализируется в
+	// NewSourceStore/NewResultStore; nil = кэш отключён).
+	cache *metadataCache
 }
 
-// NewClient создаёт S3-клиент из AWS config.
-func NewClient(ctx context.Context, cfg aws.Config) *s3.Client {
-	return s3.NewFromConfig(cfg)
-}
-
-func (o Options) validate() error {
+func (o *Options) validate() error {
 	if o.Bucket == "" {
 		return fmt.Errorf("s3: empty bucket")
 	}
+	// Нормализация префикса: обрезаем завершающий "/", чтобы ключи не
+	// получались с "//" (см. key()).
+	o.Prefix = trimSlashes(o.Prefix)
 	return nil
 }
 
+// trimSlashes обрезает ведущие и завершающие "/" у префикса.
+func trimSlashes(s string) string {
+	start, end := 0, len(s)
+	for start < end && s[start] == '/' {
+		start++
+	}
+	for end > start && s[end-1] == '/' {
+		end--
+	}
+	return s[start:end]
+}
+
 // isNotFound сообщает, является ли ошибка S3 признаком отсутствия объекта
-// (код "NotFound" / "NoSuchKey").
+// (код "NotFound" / "NoSuchKey" или HTTP 404).
 func isNotFound(err error) bool {
+	if httpStatus(err) == 404 {
+		return true
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode() {
@@ -61,6 +104,73 @@ func isNotFound(err error) bool {
 		}
 	}
 	return false
+}
+
+// isForbidden сообщает, является ли ошибка S3 признаком запрета доступа
+// (код "AccessDenied" или HTTP 403).
+func isForbidden(err error) bool {
+	if httpStatus(err) == 403 {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "AccessDenied", "AccessForbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch":
+			return true
+		}
+	}
+	return false
+}
+
+// isThrottled сообщает, является ли ошибка признаком троттлинга (HTTP 429
+// или код SlowDown/Throttling).
+func isThrottled(err error) bool {
+	if httpStatus(err) == 429 {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "SlowDown", "Throttling", "TooManyRequests", "RequestLimitExceeded":
+			return true
+		}
+	}
+	return false
+}
+
+// isServerError сообщает, является ли ошибка серверной (HTTP 5xx).
+func isServerError(err error) bool {
+	code := httpStatus(err)
+	return code >= 500 && code <= 599
+}
+
+// httpStatus извлекает HTTP status code из ошибки S3 (если доступен),
+// иначе 0.
+func httpStatus(err error) int {
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) {
+		return respErr.HTTPStatusCode()
+	}
+	return 0
+}
+
+// MapError маппит ошибку S3 в типизированную ошибку domain/object.
+// Различает 403 (ErrForbidden), 429/5xx (ErrUnavailable с пометкой для
+// ретраев), 404 (ErrNotFound) и прочие (ErrUnavailable).
+func MapError(op string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case isNotFound(err):
+		return remote.MapError(op, remote.NotFound(object.ObjectKey("")))
+	case isForbidden(err):
+		return fmt.Errorf("%s: %w", op, object.ErrForbidden)
+	case isThrottled(err), isServerError(err):
+		return remote.MapError(op, err)
+	default:
+		return remote.MapError(op, err)
+	}
 }
 
 func (o Options) key(key object.ObjectKey) (string, error) {
@@ -74,10 +184,69 @@ func (o Options) key(key object.ObjectKey) (string, error) {
 	return o.Prefix + "/" + k, nil
 }
 
+// metadataCache — потокобезопасный in-memory TTL-кэш метаданных объектов.
+// Ключ — полный S3-ключ, значение — метаданные + время записи.
+type metadataCache struct {
+	mu    sync.Mutex
+	ttl   time.Duration
+	items map[string]cacheEntry
+}
+
+type cacheEntry struct {
+	meta object.ObjectMetadata
+	at   time.Time
+}
+
+func newMetadataCache(ttl time.Duration) *metadataCache {
+	if ttl <= 0 {
+		return nil
+	}
+	return &metadataCache{ttl: ttl, items: map[string]cacheEntry{}}
+}
+
+func (c *metadataCache) get(full string) (object.ObjectMetadata, bool) {
+	if c == nil {
+		return object.ObjectMetadata{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.items[full]
+	if !ok {
+		return object.ObjectMetadata{}, false
+	}
+	if time.Since(e.at) > c.ttl {
+		delete(c.items, full)
+		return object.ObjectMetadata{}, false
+	}
+	return e.meta, true
+}
+
+func (c *metadataCache) put(full string, meta object.ObjectMetadata) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items[full] = cacheEntry{meta: meta, at: time.Now()}
+}
+
+func (c *metadataCache) invalidate(full string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.items, full)
+}
+
 func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
 	full, err := o.key(key)
 	if err != nil {
 		return object.ObjectMetadata{}, err
+	}
+	// Кэш метаданных: если запись свежая — возвращаем без round-trip.
+	if cached, ok := o.cache.get(full); ok {
+		return cached, nil
 	}
 	out, err := o.Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(o.Bucket),
@@ -87,7 +256,7 @@ func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectM
 		if isNotFound(err) {
 			return object.ObjectMetadata{}, remote.NotFound(key)
 		}
-		return object.ObjectMetadata{}, remote.MapError("s3 head", err)
+		return object.ObjectMetadata{}, MapError("s3 head", err)
 	}
 	meta := object.ObjectMetadata{Key: key}
 	if out.ContentLength != nil {
@@ -102,6 +271,7 @@ func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectM
 	if out.ETag != nil {
 		meta.ETag = *out.ETag
 	}
+	o.cache.put(full, meta)
 	return meta, nil
 }
 
@@ -110,15 +280,21 @@ func (o Options) get(ctx context.Context, key object.ObjectKey) (object.ObjectMe
 	if err != nil {
 		return object.ObjectMetadata{}, nil, err
 	}
-	out, err := o.Client.GetObject(ctx, &s3.GetObjectInput{
+	// Conditional GET по сохранённому ETag: если объект не менялся,
+	// бэкенд вернёт 304 Not Modified без тела.
+	in := &s3.GetObjectInput{
 		Bucket: aws.String(o.Bucket),
 		Key:    aws.String(full),
-	})
+	}
+	if meta, ok := o.cache.get(full); ok && meta.ETag != "" {
+		in.IfNoneMatch = aws.String(meta.ETag)
+	}
+	out, err := o.Client.GetObject(ctx, in)
 	if err != nil {
 		if isNotFound(err) {
 			return object.ObjectMetadata{}, nil, remote.NotFound(key)
 		}
-		return object.ObjectMetadata{}, nil, remote.MapError("s3 get", err)
+		return object.ObjectMetadata{}, nil, MapError("s3 get", err)
 	}
 	meta := object.ObjectMetadata{Key: key}
 	if out.ContentLength != nil {
@@ -133,7 +309,39 @@ func (o Options) get(ctx context.Context, key object.ObjectKey) (object.ObjectMe
 	if out.ETag != nil {
 		meta.ETag = *out.ETag
 	}
+	o.cache.put(full, meta)
 	return meta, out.Body, nil
+}
+
+// openBuffer — общий helper для Open (Source и Result): скачивает объект в
+// spillable буфер и возвращает перематываемый Artifact.
+func (o Options) openBuffer(ctx context.Context, key object.ObjectKey, role string) (object.Artifact, error) {
+	meta, body, err := o.get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	buf, err := remote.NewBuffer(remote.BufferOptions{
+		Pool:     o.Pool,
+		Dir:      o.SpoolDir,
+		MaxBytes: o.SpoolMaxBytes,
+	})
+	if err != nil {
+		return nil, remote.MapError("s3 buffer", err)
+	}
+	if _, err := buf.WriteFrom(body, o.SpoolMaxBytes); err != nil {
+		_ = buf.Close()
+		if errors.Is(err, remote.ErrBufferLimit) {
+			return nil, fmt.Errorf("s3: %s %q exceeds spool limit: %w", role, key, object.ErrQuota)
+		}
+		return nil, remote.MapError("s3 buffer", err)
+	}
+	if _, err := buf.Seek(0, io.SeekStart); err != nil {
+		_ = buf.Close()
+		return nil, remote.MapError("s3 buffer seek", err)
+	}
+	return remote.NewBufferArtifact(buf, meta), nil
 }
 
 // SourceStore — S3-реализация storage.SourceStore (read-only).
@@ -149,6 +357,7 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 	if opts.Client == nil {
 		return nil, fmt.Errorf("s3: source store: client is required")
 	}
+	opts.cache = newMetadataCache(opts.MetadataTTL)
 	return &SourceStore{opts: opts}, nil
 }
 
@@ -159,32 +368,7 @@ func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 
 // Open открывает поток исходного объекта через spillable буфер.
 func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	meta, body, err := s.opts.get(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	defer body.Close()
-
-	buf, err := remote.NewBuffer(remote.BufferOptions{
-		Pool:     s.opts.Pool,
-		Dir:      s.opts.SpoolDir,
-		MaxBytes: s.opts.SpoolMaxBytes,
-	})
-	if err != nil {
-		return nil, remote.MapError("s3 buffer", err)
-	}
-	if _, err := buf.WriteFrom(body, s.opts.SpoolMaxBytes); err != nil {
-		_ = buf.Close()
-		if errors.Is(err, remote.ErrBufferLimit) {
-			return nil, fmt.Errorf("s3: source %q exceeds spool limit: %w", key, object.ErrQuota)
-		}
-		return nil, remote.MapError("s3 buffer", err)
-	}
-	if _, err := buf.Seek(0, io.SeekStart); err != nil {
-		_ = buf.Close()
-		return nil, remote.MapError("s3 buffer seek", err)
-	}
-	return remote.NewBufferArtifact(buf, meta), nil
+	return s.opts.openBuffer(ctx, key, "source")
 }
 
 var _ storage.SourceStore = (*SourceStore)(nil)
@@ -202,6 +386,7 @@ func NewResultStore(opts Options) (*ResultStore, error) {
 	if opts.Client == nil {
 		return nil, fmt.Errorf("s3: result store: client is required")
 	}
+	opts.cache = newMetadataCache(opts.MetadataTTL)
 	return &ResultStore{opts: opts}, nil
 }
 
@@ -212,32 +397,7 @@ func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 
 // Open открывает перематываемый поток результата через spillable буфер.
 func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	meta, body, err := r.opts.get(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	defer body.Close()
-
-	buf, err := remote.NewBuffer(remote.BufferOptions{
-		Pool:     r.opts.Pool,
-		Dir:      r.opts.SpoolDir,
-		MaxBytes: r.opts.SpoolMaxBytes,
-	})
-	if err != nil {
-		return nil, remote.MapError("s3 buffer", err)
-	}
-	if _, err := buf.WriteFrom(body, r.opts.SpoolMaxBytes); err != nil {
-		_ = buf.Close()
-		if errors.Is(err, remote.ErrBufferLimit) {
-			return nil, fmt.Errorf("s3: result %q exceeds spool limit: %w", key, object.ErrQuota)
-		}
-		return nil, remote.MapError("s3 buffer", err)
-	}
-	if _, err := buf.Seek(0, io.SeekStart); err != nil {
-		_ = buf.Close()
-		return nil, remote.MapError("s3 buffer seek", err)
-	}
-	return remote.NewBufferArtifact(buf, meta), nil
+	return r.opts.openBuffer(ctx, key, "result")
 }
 
 // ReadStream открывает одноразовый поток результата напрямую из S3 без
@@ -251,17 +411,30 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 }
 
 // Publish полностью завершает upload до возврата. NoOverwrite реализуется
-// через conditional PUT (If-None-Match: "*").
+// через conditional PUT (If-None-Match: "*"). Для крупных объектов (>100 МБ)
+// используется multipart upload с параллельными частями.
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return err
 	}
+
+	// Определяем размер источника. Если известен и превышает порог —
+	// multipart upload. Иначе — обычный PUT.
+	size, known := readerSize(src)
+	if known && size > multipartPartSize {
+		return r.publishMultipart(ctx, full, src, size, opts)
+	}
+
 	in := &s3.PutObjectInput{
-		Bucket:      aws.String(r.opts.Bucket),
-		Key:         aws.String(full),
-		Body:        src,
-		ContentType: aws.String(opts.ContentType),
+		Bucket:            aws.String(r.opts.Bucket),
+		Key:               aws.String(full),
+		Body:              src,
+		ContentType:       aws.String(opts.ContentType),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	}
+	if known {
+		in.ContentLength = aws.Int64(size)
 	}
 	if opts.CacheControl != "" {
 		in.CacheControl = aws.String(opts.CacheControl)
@@ -271,16 +444,166 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 	}
 	_, err = r.opts.Client.PutObject(ctx, in)
 	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
+		if isPreconditionFailed(err) {
 			return remote.Conflict(key)
 		}
-		return remote.MapError("s3 put", err)
+		// Fallback для S3-совместимых, не поддерживающих If-None-Match:
+		// если conditional PUT упал не по PreconditionFailed, проверяем
+		// существование объекта через HeadObject (с учётом гонки).
+		if opts.NoOverwrite && !isNotFound(err) && !isForbidden(err) {
+			if _, herr := r.opts.Client.HeadObject(ctx, &s3.HeadObjectInput{
+				Bucket: aws.String(r.opts.Bucket),
+				Key:    aws.String(full),
+			}); herr == nil {
+				return remote.Conflict(key)
+			}
+		}
+		return MapError("s3 put", err)
 	}
+	r.opts.cache.invalidate(full)
 	return nil
 }
 
-// Delete удаляет объект. Идемпотентно.
+// publishMultipart загружает объект через multipart upload с параллельными
+// частями. size должен быть известен заранее.
+func (r *ResultStore) publishMultipart(ctx context.Context, full string, src io.Reader, size int64, opts object.PublishOptions) error {
+	parts := int((size + multipartPartSize - 1) / multipartPartSize)
+	if parts > multipartMaxParts {
+		// Слишком много частей для фиксированного размера — увеличиваем
+		// размер части до минимально допустимого числа (10000).
+		parts = multipartMaxParts
+	}
+	partSize := (size + int64(parts) - 1) / int64(parts)
+	if partSize < multipartPartSize {
+		partSize = multipartPartSize
+	}
+
+	create := &s3.CreateMultipartUploadInput{
+		Bucket:            aws.String(r.opts.Bucket),
+		Key:               aws.String(full),
+		ContentType:       aws.String(opts.ContentType),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	}
+	if opts.CacheControl != "" {
+		create.CacheControl = aws.String(opts.CacheControl)
+	}
+	created, err := r.opts.Client.CreateMultipartUpload(ctx, create)
+	if err != nil {
+		return MapError("s3 create multipart", err)
+	}
+	uploadID := *created.UploadId
+
+	// Параллельная загрузка частей с пулом воркеров.
+	completed := make([]types.CompletedPart, parts)
+	errs := make([]error, parts)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, multipartWorkers)
+	for i := 0; i < parts; i++ {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int) {
+			defer func() { wg.Done(); sem <- struct{}{} }()
+			start := int64(idx) * partSize
+			length := partSize
+			if start+length > size {
+				length = size - start
+			}
+			partBody := &io.LimitedReader{R: src, N: length}
+			out, perr := r.opts.Client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:            aws.String(r.opts.Bucket),
+				Key:               aws.String(full),
+				UploadId:          aws.String(uploadID),
+				PartNumber:        aws.Int32(int32(idx + 1)),
+				Body:              partBody,
+				ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+			})
+			if perr != nil {
+				errs[idx] = perr
+				return
+			}
+			cp := types.CompletedPart{PartNumber: aws.Int32(int32(idx + 1))}
+			if out.ETag != nil {
+				cp.ETag = aws.String(*out.ETag)
+			}
+			completed[idx] = cp
+		}(i)
+	}
+	wg.Wait()
+
+	// При ошибке любой части — abort multipart upload.
+	for _, e := range errs {
+		if e != nil {
+			_, _ = r.opts.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(r.opts.Bucket),
+				Key:      aws.String(full),
+				UploadId: aws.String(uploadID),
+			})
+			return MapError("s3 upload part", e)
+		}
+	}
+
+	// CompleteMultipartUpload собирает объект из частей.
+	_, err = r.opts.Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(r.opts.Bucket),
+		Key:      aws.String(full),
+		UploadId: aws.String(uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: completed,
+		},
+	})
+	if err != nil {
+		_, _ = r.opts.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(r.opts.Bucket),
+			Key:      aws.String(full),
+			UploadId: aws.String(uploadID),
+		})
+		return MapError("s3 complete multipart", err)
+	}
+	r.opts.cache.invalidate(full)
+	return nil
+}
+
+// readerSize определяет размер reader, если он известен:
+//   - io.Seeker — через Seek(0, End);
+//   - *bytes.Reader / *bytes.Buffer — через Len().
+//
+// Возвращает (size, true) если размер известен, иначе (0, false).
+func readerSize(r io.Reader) (int64, bool) {
+	switch r := r.(type) {
+	case *bytes.Reader:
+		return int64(r.Len()), true
+	case *bytes.Buffer:
+		return int64(r.Len()), true
+	}
+	if s, ok := r.(io.Seeker); ok {
+		cur, err := s.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, false
+		}
+		end, err := s.Seek(0, io.SeekEnd)
+		if err != nil {
+			return 0, false
+		}
+		_, _ = s.Seek(cur, io.SeekStart)
+		return end, true
+	}
+	return 0, false
+}
+
+// isPreconditionFailed сообщает, является ли ошибка PreconditionFailed
+// (HTTP 412).
+func isPreconditionFailed(err error) bool {
+	if httpStatus(err) == 412 {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.ErrorCode() == "PreconditionFailed"
+	}
+	return false
+}
+
+// Delete удаляет объект. Идемпотентно: 404 считается успехом.
 func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	full, err := r.opts.key(key)
 	if err != nil {
@@ -291,8 +614,14 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		Key:    aws.String(full),
 	})
 	if err != nil {
-		return remote.MapError("s3 delete", err)
+		if isNotFound(err) {
+			// Удаление отсутствующего объекта — не ошибка (идемпотентность).
+			r.opts.cache.invalidate(full)
+			return nil
+		}
+		return MapError("s3 delete", err)
 	}
+	r.opts.cache.invalidate(full)
 	return nil
 }
 
@@ -304,14 +633,17 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 		prefix += "/"
 	}
 	var token *string
-	for {
+	for page := 0; ; page++ {
+		if page >= maxListPages {
+			return object.StoreStats{}, fmt.Errorf("s3: list exceeded %d pages (possible infinite pagination)", maxListPages)
+		}
 		out, err := r.opts.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            aws.String(r.opts.Bucket),
 			Prefix:            aws.String(prefix),
 			ContinuationToken: token,
 		})
 		if err != nil {
-			return object.StoreStats{}, remote.MapError("s3 list", err)
+			return object.StoreStats{}, MapError("s3 list", err)
 		}
 		for _, obj := range out.Contents {
 			stats.Objects++
@@ -322,12 +654,14 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 		if out.IsTruncated == nil || !*out.IsTruncated {
 			break
 		}
+		// Защита от бесконечного цикла: если бэкенд вернул IsTruncated=true
+		// без NextContinuationToken — прерываем с ошибкой.
+		if out.NextContinuationToken == nil {
+			return object.StoreStats{}, fmt.Errorf("s3: list truncated without continuation token")
+		}
 		token = out.NextContinuationToken
 	}
 	return stats, nil
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)
-
-// ModTime — вспомогательная функция для тестов.
-func ModTime(t time.Time) *time.Time { return &t }

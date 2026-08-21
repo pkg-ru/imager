@@ -35,8 +35,12 @@ imagemagick:
 #   prefix: "source/"
 #   region: "ru-central1"
 #   endpoint: "https://storage.yandexcloud.net"
-#   access-key: "REPLACE_ME"
-#   secret-key: "REPLACE_ME"
+#   access-key: "REPLACE_ME"   # или env IMAGER_S3_ACCESS_KEY
+#   secret-key: "REPLACE_ME"   # или env IMAGER_S3_SECRET_KEY
+#   s3-dial-timeout: "30s"
+#   s3-read-timeout: "60s"
+#   s3-max-attempts: 3
+#   s3-metadata-ttl: "30s"
 #
 # result:
 #   storage: "s3"
@@ -44,8 +48,12 @@ imagemagick:
 #   prefix: "result/"
 #   region: "ru-central1"
 #   endpoint: "https://storage.yandexcloud.net"
-#   access-key: "REPLACE_ME"
-#   secret-key: "REPLACE_ME"
+#   access-key: "REPLACE_ME"   # или env IMAGER_S3_ACCESS_KEY
+#   secret-key: "REPLACE_ME"   # или env IMAGER_S3_SECRET_KEY
+#   s3-dial-timeout: "30s"
+#   s3-read-timeout: "60s"
+#   s3-max-attempts: 3
+#   s3-metadata-ttl: "30s"
 #
 # imagemagick:
 #   limits:

@@ -197,8 +197,10 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	s.metrics.IncCacheMiss()
 
 	// Keyed singleflight: concurrent запросы с тем же ключом дедуплицируются.
-	// generateLocked возвращает общий Buffer, из которого каждый запрос
-	// получает собственный reader (независимая позиция чтения).
+	// generateLocked публикует результат в кэш ДО возврата, поэтому после
+	// Coordinator.Do каждый запрос (включая владельца) читает собственный
+	// поток из кэша. Это исключает гонку за преждевременное освобождение
+	// общего буфера singleflight (cache stampede regression).
 	v, err := s.deps.Coordinator.Do(ctx, key, func() (any, error) {
 		return s.generateLocked(ctx, key, req)
 	})
@@ -209,19 +211,25 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	if !ok {
 		return nil, outcome(OutcomeProcessing, "coordinator returned invalid result", nil)
 	}
-	// Каждый потребитель получает собственный reader из общего буфера,
-	// чтобы не сдвигать позицию чтения для других запросов (cache stampede).
-	reader, err := buf.NewReader()
+	// Результат уже опубликован в кэш — закрываем общий буфер и читаем
+	// из кэша. Каждый запрос получает собственный буфер/reader, без гонки
+	// за общий ресурс.
+	_ = buf.Close()
+	cbuf, err := s.readResultBuffer(ctx, key)
 	if err != nil {
-		_ = buf.Close()
+		return nil, err
+	}
+	reader, err := cbuf.NewReader()
+	if err != nil {
+		_ = cbuf.Close()
 		return nil, outcome(OutcomeProcessing, "buffer reader", err)
 	}
-	meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
+	meta := object.ObjectMetadata{Key: key, Size: cbuf.Size()}
 	return &Result{
 		Key:       key,
 		URL:       url,
 		Request:   req,
-		Opened:    &bufferStream{buf: buf, r: reader, meta: meta},
+		Opened:    &bufferStream{buf: cbuf, r: reader, meta: meta},
 		FromCache: false,
 	}, nil
 }
@@ -636,9 +644,27 @@ func (s *bufferStream) Metadata() object.ObjectMetadata { return s.meta }
 // обнулять data при первом же Close нельзя: это сломало бы остальных
 // читателей. refs считает открытые reader'ы; data обнуляется, когда refs
 // достигает 0.
+// memChunkSize — размер сегмента chunked-буфера (п.10). Сегментированный
+// буфер избегает O(n²) при больших данных: append к одному растущему слайсу
+// заменяется добавлением фиксированных сегментов.
+const memChunkSize = 32 * 1024
+
+// memBuffer — in-memory реализация buffer.Buffer, используемая, когда
+// фабрика spillable-буферов не задана. Хранит данные в памяти процесса.
+//
+// N2: память освобождается через reference counting — только когда закрыты
+// все reader'ы (и сам буфер). В cache stampede один буфер разделяется между
+// несколькими запросами (каждый получает собственный reader), поэтому
+// обнулять данные при первом же Close нельзя: это сломало бы остальных
+// читателей. refs считает открытые reader'ы; данные обнуляются, когда refs
+// достигает 0.
+//
+// П.10: данные хранятся сегментами фиксированного размера (chunked list),
+// а не одним растущим слайсом. Это устраняет O(n²) при больших буферах.
 type memBuffer struct {
 	mu     sync.Mutex
-	data   []byte
+	chunks [][]byte
+	size   int
 	pos    int
 	refs   int
 	closed bool
@@ -647,21 +673,59 @@ type memBuffer struct {
 func (b *memBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.data = append(b.data, p...)
-	return len(p), nil
+	orig := len(p)
+	for len(p) > 0 {
+		if len(b.chunks) == 0 || len(b.chunks[len(b.chunks)-1]) == memChunkSize {
+			b.chunks = append(b.chunks, make([]byte, 0, memChunkSize))
+		}
+		last := &b.chunks[len(b.chunks)-1]
+		n := memChunkSize - len(*last)
+		if n > len(p) {
+			n = len(p)
+		}
+		*last = append(*last, p[:n]...)
+		b.size += n
+		p = p[n:]
+	}
+	return orig, nil
+}
+
+// readAt копирует данные из сегментов, начиная с позиции off, в p.
+// Возвращает число прочитанных байт. Вызывается под mu.
+func (b *memBuffer) readAt(p []byte, off int) int {
+	if off >= b.size {
+		return 0
+	}
+	total := 0
+	// Находим сегмент и смещение внутри него.
+	seg := off / memChunkSize
+	segOff := off % memChunkSize
+	for seg < len(b.chunks) && total < len(p) {
+		chunk := b.chunks[seg]
+		n := len(chunk) - segOff
+		if n <= 0 {
+			seg++
+			segOff = 0
+			continue
+		}
+		if n > len(p)-total {
+			n = len(p) - total
+		}
+		copy(p[total:total+n], chunk[segOff:segOff+n])
+		total += n
+		seg++
+		segOff = 0
+	}
+	return total
 }
 
 func (b *memBuffer) Read(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.pos >= len(b.data) {
+	if b.pos >= b.size {
 		return 0, io.EOF
 	}
-	n := len(p)
-	if n > len(b.data)-b.pos {
-		n = len(b.data) - b.pos
-	}
-	copy(p, b.data[b.pos:b.pos+n])
+	n := b.readAt(p, b.pos)
 	b.pos += n
 	return n, nil
 }
@@ -676,7 +740,7 @@ func (b *memBuffer) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		np = int64(b.pos) + offset
 	case io.SeekEnd:
-		np = int64(len(b.data)) + offset
+		np = int64(b.size) + offset
 	default:
 		return 0, errors.New("invalid whence")
 	}
@@ -692,7 +756,7 @@ func (b *memBuffer) Close() error {
 	defer b.mu.Unlock()
 	b.closed = true
 	// N2: освобождаем память через reference counting — только когда закрыты
-	// все reader'ы. Сам буфер помечается closed, но data живёт, пока есть
+	// все reader'ы. Сам буфер помечается closed, но данные живут, пока есть
 	// открытые reader'ы (cache stampede: один буфер, много читателей).
 	b.releaseLocked()
 	return nil
@@ -702,7 +766,8 @@ func (b *memBuffer) Close() error {
 // буфер закрыт и не осталось открытых reader'ов. Вызывается под mu.
 func (b *memBuffer) releaseLocked() {
 	if b.closed && b.refs <= 0 {
-		b.data = nil
+		b.chunks = nil
+		b.size = 0
 		b.pos = 0
 	}
 }
@@ -710,7 +775,7 @@ func (b *memBuffer) releaseLocked() {
 func (b *memBuffer) Size() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return int64(len(b.data))
+	return int64(b.size)
 }
 
 func (b *memBuffer) NewReader() (io.ReadSeekCloser, error) {
@@ -735,14 +800,10 @@ type memBufferReader struct {
 func (r *memBufferReader) Read(p []byte) (int, error) {
 	r.buf.mu.Lock()
 	defer r.buf.mu.Unlock()
-	if r.pos >= len(r.buf.data) {
+	if r.pos >= r.buf.size {
 		return 0, io.EOF
 	}
-	n := len(p)
-	if n > len(r.buf.data)-r.pos {
-		n = len(r.buf.data) - r.pos
-	}
-	copy(p, r.buf.data[r.pos:r.pos+n])
+	n := r.buf.readAt(p, r.pos)
 	r.pos += n
 	return n, nil
 }
@@ -757,7 +818,7 @@ func (r *memBufferReader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		np = int64(r.pos) + offset
 	case io.SeekEnd:
-		np = int64(len(r.buf.data)) + offset
+		np = int64(r.buf.size) + offset
 	default:
 		return 0, errors.New("invalid whence")
 	}

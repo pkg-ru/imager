@@ -53,6 +53,9 @@ type App struct {
 	Service *generatev2.Service
 	Sources storage.SourceStore
 	Results storage.ResultStore
+	// Pool — общий бюджет памяти процесса для spillable-буферов. Может быть
+	// закрыт при пересоздании приложения (доп. замечание).
+	Pool *remote.BufferPool
 }
 
 // Build собирает новый pipeline. Fail-fast на invalid config.
@@ -127,5 +130,6 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Service: svc,
 		Sources: sources,
 		Results: results,
+		Pool:    pool,
 	}, nil
 }

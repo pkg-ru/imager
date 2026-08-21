@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pkg-ru/imager/internal/application/ports/coordinator"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -30,6 +31,10 @@ const (
 	DefaultMaxKeyLen = 1024
 	// DefaultMaxKeys — максимальное число одновременно отслеживаемых ключей.
 	DefaultMaxKeys = 4096
+	// DefaultWaitTimeout — таймаут ожидания завершения владельца (0 = без
+	// таймаута). Защита от "зависших" владельцев, которые не завершились
+	// (например, паника до вызова unlock в Acquire).
+	DefaultWaitTimeout = 0
 )
 
 // Ошибки ограничений.
@@ -38,6 +43,8 @@ var (
 	ErrKeyTooLong = errors.New("singleflight: key too long")
 	// ErrTooManyKeys — превышено максимальное число отслеживаемых ключей.
 	ErrTooManyKeys = errors.New("singleflight: too many concurrent keys")
+	// ErrWaitTimeout — превышен таймаут ожидания завершения владельца.
+	ErrWaitTimeout = errors.New("singleflight: wait timeout")
 )
 
 // Options — параметры адаптера.
@@ -47,14 +54,18 @@ type Options struct {
 	// MaxKeys — максимальное число одновременно отслеживаемых ключей
 	// (0 → DefaultMaxKeys).
 	MaxKeys int
+	// WaitTimeout — таймаут ожидания завершения владельца (0 → без таймаута).
+	// Защита от "зависших" владельцев (например, паника до unlock в Acquire).
+	WaitTimeout time.Duration
 }
 
 // Group — in-process keyed singleflight группа.
 type Group struct {
-	mu        sync.Mutex
-	inflight  map[string]*call
-	maxKeyLen int
-	maxKeys   int
+	mu          sync.Mutex
+	inflight    map[string]*call
+	maxKeyLen   int
+	maxKeys     int
+	waitTimeout time.Duration
 }
 
 // call — один выполняющийся вызов для ключа.
@@ -74,10 +85,15 @@ func New(opts Options) *Group {
 	if maxKeys <= 0 {
 		maxKeys = DefaultMaxKeys
 	}
+	waitTimeout := opts.WaitTimeout
+	if waitTimeout < 0 {
+		waitTimeout = DefaultWaitTimeout
+	}
 	return &Group{
-		inflight:  make(map[string]*call),
-		maxKeyLen: maxKeyLen,
-		maxKeys:   maxKeys,
+		inflight:    make(map[string]*call),
+		maxKeyLen:   maxKeyLen,
+		maxKeys:     maxKeys,
+		waitTimeout: waitTimeout,
 	}
 }
 
@@ -136,7 +152,19 @@ func (g *Group) Do(ctx context.Context, key object.ObjectKey, fn func() (any, er
 }
 
 // wait ожидает завершения выполняющегося вызова c, уважая отмену ctx.
+// Если задан WaitTimeout, ожидание ограничено таймаутом (защита от
+// "зависших" владельцев, которые не завершились).
 func (g *Group) wait(ctx context.Context, c *call) (any, error) {
+	if g.waitTimeout > 0 {
+		select {
+		case <-c.done:
+			return c.val, c.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(g.waitTimeout):
+			return nil, ErrWaitTimeout
+		}
+	}
 	select {
 	case <-c.done:
 		return c.val, c.err

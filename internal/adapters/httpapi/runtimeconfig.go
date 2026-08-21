@@ -3,6 +3,7 @@ package httpapi
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -15,12 +16,21 @@ import (
 // по умолчанию (500 МБ).
 const DefaultBufferMaxBytes int64 = 500 * 1024 * 1024
 
+// DefaultMaxBodyBytes — жёсткий лимит тела запроса по умолчанию (4 KiB).
+// Сервис не принимает тела запросов, поэтому лимит мал (защита от slow-body
+// / DoS). Настраивается через server.max-body-bytes.
+const DefaultMaxBodyBytes = 4 * 1024
+
 // RuntimeConfig — единый typed runtime-конфиг всего приложения.
 //
 // Собирается из YAML-файлов (setting.yaml + setting-local.yaml) через
 // ParseRuntimeConfig. Содержит все настройки приложения: pipeline
 // (policy/processing), HTTP-адаптер, HTTP-сервер, хранилища source/result,
 // ImageMagick processor и observability.
+//
+// П.4: для атомарной замены конфига (copy-on-write) используется
+// RuntimeConfigHolder с atomic.Pointer. Поля RuntimeConfig не мутируются
+// после публикации — новый конфиг создаётся целиком и публикуется атомарно.
 type RuntimeConfig struct {
 	// Pipeline — typed конфигурация конвейера (policy/processing).
 	Pipeline *config.Config
@@ -49,6 +59,34 @@ type RuntimeConfig struct {
 	LogLevel string
 }
 
+// RuntimeConfigHolder — потокобезопасный контейнер для RuntimeConfig с
+// атомарной заменой (copy-on-write). П.4: позволяет публиковать новый
+// конфиг без блокировок на чтение; читатели всегда видят согласованный
+// immutable конфиг.
+type RuntimeConfigHolder struct {
+	ref atomic.Pointer[RuntimeConfig]
+}
+
+// NewRuntimeConfigHolder создаёт holder с начальным конфигом.
+func NewRuntimeConfigHolder(rc *RuntimeConfig) *RuntimeConfigHolder {
+	h := &RuntimeConfigHolder{}
+	h.ref.Store(rc)
+	return h
+}
+
+// Load возвращает текущий конфиг (атомарно).
+func (h *RuntimeConfigHolder) Load() *RuntimeConfig {
+	if h == nil {
+		return nil
+	}
+	return h.ref.Load()
+}
+
+// Store атомарно публикует новый конфиг (copy-on-write).
+func (h *RuntimeConfigHolder) Store(rc *RuntimeConfig) {
+	h.ref.Store(rc)
+}
+
 // ServerConfig — конфигурация HTTP-сервера.
 //
 // Нулевое значение таймаута означает "использовать умолчание runtime"
@@ -68,6 +106,9 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration
 	// MaxHeaderBytes — максимальный размер заголовков запроса.
 	MaxHeaderBytes int
+	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
+	// Сервис не принимает тела, поэтому по умолчанию жёсткий лимит 4 KiB.
+	MaxBodyBytes int
 }
 
 // ImageMagickConfig — конфигурация ImageMagick processor.
@@ -123,6 +164,8 @@ type ServerYAML struct {
 	ShutdownTimeout string `yaml:"shutdown-timeout"`
 	// MaxHeaderBytes — максимальный размер заголовков запроса.
 	MaxHeaderBytes int `yaml:"max-header-bytes"`
+	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
+	MaxBodyBytes int `yaml:"max-body-bytes"`
 }
 
 // StorageYAML — YAML-представление конфигурации хранилища (source или
@@ -170,6 +213,20 @@ type StorageYAML struct {
 	SpoolMaxBytes int64 `yaml:"spool-max-bytes"`
 	// DialTimeout — таймаут соединения для SFTP/FTP/FTPS и HTTP (duration).
 	DialTimeout string `yaml:"dial-timeout"`
+	// S3DialTimeout — таймаут установки TCP-соединения для S3 (duration).
+	S3DialTimeout string `yaml:"s3-dial-timeout"`
+	// S3ReadTimeout — таймаут чтения ответа для S3 (duration).
+	S3ReadTimeout string `yaml:"s3-read-timeout"`
+	// S3MaxAttempts — максимальное число попыток запроса S3.
+	S3MaxAttempts int `yaml:"s3-max-attempts"`
+	// S3MaxIdleConns — максимальное число idle-соединений в пуле S3.
+	S3MaxIdleConns int `yaml:"s3-max-idle-conns"`
+	// S3MaxIdleConnsPerHost — максимальное число idle-соединений на хост S3.
+	S3MaxIdleConnsPerHost int `yaml:"s3-max-idle-conns-per-host"`
+	// S3IdleConnTimeout — таймаут idle-соединений S3 (duration).
+	S3IdleConnTimeout string `yaml:"s3-idle-conn-timeout"`
+	// S3MetadataTTL — TTL кэша метаданных S3 (duration; 0 = кэш отключён).
+	S3MetadataTTL string `yaml:"s3-metadata-ttl"`
 }
 
 // ImageMagickYAML — YAML-представление ImageMagickConfig.
@@ -272,6 +329,8 @@ type HTTPYAML struct {
 	CSP string `yaml:"csp"`
 	// MaxURLLen — максимальная длина URL.
 	MaxURLLen int `yaml:"max-url-len"`
+	// GenerateTimeout — таймаут генерации ассета (duration, например "30s").
+	GenerateTimeout string `yaml:"generate-timeout"`
 	// NotFound — not-found fallback.
 	NotFound NotFoundYAML `yaml:"not-found"`
 }
@@ -334,6 +393,16 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			Redirect: raw.HTTP.NotFound.Redirect,
 		},
 	}
+	if raw.HTTP.GenerateTimeout != "" {
+		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("httpapi: http.generate-timeout: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("httpapi: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout)
+		}
+		httpCfg.GenerateTimeout = d
+	}
 	if err := httpCfg.Validate(); err != nil {
 		return nil, fmt.Errorf("httpapi: http: %w", err)
 	}
@@ -368,6 +437,12 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	server, err := raw.Server.build()
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: server: %w", err)
+	}
+	if server.MaxBodyBytes < 0 {
+		return nil, fmt.Errorf("httpapi: server.max-body-bytes: negative value %d", server.MaxBodyBytes)
+	}
+	if server.MaxBodyBytes == 0 {
+		server.MaxBodyBytes = DefaultMaxBodyBytes
 	}
 
 	// ImageMagick.
@@ -413,6 +488,17 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 	if s.SpoolMaxBytes < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("spool-max-bytes: negative value %d", s.SpoolMaxBytes)
 	}
+	// Секреты S3 могут задаваться через переменные окружения
+	// (IMAGER_S3_ACCESS_KEY / IMAGER_S3_SECRET_KEY), чтобы не хранить их
+	// открытым текстом в конфиге. Значение из YAML имеет приоритет.
+	accessKey := s.AccessKey
+	if accessKey == "" {
+		accessKey = os.Getenv("IMAGER_S3_ACCESS_KEY")
+	}
+	secretKey := s.SecretKey
+	if secretKey == "" {
+		secretKey = os.Getenv("IMAGER_S3_SECRET_KEY")
+	}
 	cfg := RemoteStorageConfig{
 		Kind:               StorageKind(s.Storage),
 		Path:               s.Path,
@@ -421,8 +507,8 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		Prefix:             s.Prefix,
 		Endpoint:           s.Endpoint,
 		Region:             s.Region,
-		AccessKey:          s.AccessKey,
-		SecretKey:          s.SecretKey,
+		AccessKey:          accessKey,
+		SecretKey:          secretKey,
 		Addr:               s.Addr,
 		User:               s.User,
 		Password:           s.Password,
@@ -447,6 +533,59 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		}
 		cfg.DialTimeout = d
 	}
+	// S3-специфичные настройки (таймауты, retry, пул, кэш метаданных).
+	if s.S3DialTimeout != "" {
+		d, err := time.ParseDuration(s.S3DialTimeout)
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-dial-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-dial-timeout: negative duration %q", s.S3DialTimeout)
+		}
+		cfg.S3DialTimeout = d
+	}
+	if s.S3ReadTimeout != "" {
+		d, err := time.ParseDuration(s.S3ReadTimeout)
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-read-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-read-timeout: negative duration %q", s.S3ReadTimeout)
+		}
+		cfg.S3ReadTimeout = d
+	}
+	if s.S3IdleConnTimeout != "" {
+		d, err := time.ParseDuration(s.S3IdleConnTimeout)
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-idle-conn-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-idle-conn-timeout: negative duration %q", s.S3IdleConnTimeout)
+		}
+		cfg.S3IdleConnTimeout = d
+	}
+	if s.S3MetadataTTL != "" {
+		d, err := time.ParseDuration(s.S3MetadataTTL)
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-metadata-ttl: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("s3-metadata-ttl: negative duration %q", s.S3MetadataTTL)
+		}
+		cfg.S3MetadataTTL = d
+	}
+	if s.S3MaxAttempts < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("s3-max-attempts: negative value %d", s.S3MaxAttempts)
+	}
+	cfg.S3MaxAttempts = s.S3MaxAttempts
+	if s.S3MaxIdleConns < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("s3-max-idle-conns: negative value %d", s.S3MaxIdleConns)
+	}
+	cfg.S3MaxIdleConns = s.S3MaxIdleConns
+	if s.S3MaxIdleConnsPerHost < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("s3-max-idle-conns-per-host: negative value %d", s.S3MaxIdleConnsPerHost)
+	}
+	cfg.S3MaxIdleConnsPerHost = s.S3MaxIdleConnsPerHost
 	if s.PrivateKeyFile != "" {
 		data, err := os.ReadFile(s.PrivateKeyFile)
 		if err != nil {
