@@ -63,12 +63,14 @@ const (
 	FormatHEIF Format = "heif"
 	// FormatAPNG — APNG.
 	FormatAPNG Format = "apng"
+	// FormatJPEGXL — JPEG XL.
+	FormatJPEGXL Format = "jxl"
 )
 
 // ValidFormat проверяет, что f является допустимым форматом.
 func ValidFormat(f Format) bool {
 	switch f {
-	case FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG:
+	case FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG, FormatJPEGXL:
 		return true
 	default:
 		return false
@@ -77,14 +79,14 @@ func ValidFormat(f Format) bool {
 
 // Formats возвращает все допустимые форматы.
 func Formats() []Format {
-	return []Format{FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG}
+	return []Format{FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG, FormatJPEGXL}
 }
 
 // ParseFormat разбирает строку в Format (регистронезависимо).
 //
 // Расширения-алиасы нормализуются в канонические форматы: "jpg" → "jpeg",
-// "heic" → "heif". Это соответствует URL-грамматике, где расширение
-// исходного файла может быть "jpg", и конфигурации пресетов.
+// "heic" → "heif", "jpegxl" → "jxl". Это соответствует URL-грамматике, где
+// расширение исходного файла может быть "jpg", и конфигурации пресетов.
 func ParseFormat(s string) (Format, error) {
 	f := Format(strings.ToLower(s))
 	switch f {
@@ -92,6 +94,8 @@ func ParseFormat(s string) (Format, error) {
 		f = FormatJPEG
 	case "heic":
 		f = FormatHEIF
+	case "jpegxl":
+		f = FormatJPEGXL
 	}
 	if !ValidFormat(f) {
 		return "", fmt.Errorf("unsupported format %q", s)

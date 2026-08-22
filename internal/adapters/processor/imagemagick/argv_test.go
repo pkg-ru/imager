@@ -143,6 +143,24 @@ func TestBuildArgv_AnimatedOutputNoFrameIndex(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_JXLOutput(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatJPEGXL,
+		processing.Size{Width: 800, Height: 600}, 1, 85, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "JXL:-") {
+		t.Errorf("missing JXL output coder, got: %s", joined)
+	}
+}
+
 func TestBuildArgv_RejectsInvalidOperation(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,

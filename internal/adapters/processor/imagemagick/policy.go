@@ -126,7 +126,7 @@ func policyXML(cfg PolicyConfig) ([]byte, error) {
 // (rsvg/inkscape) и несёт риски SSRF (xlink:href) и decompression bomb.
 var safeCoders = []string{
 	"JPEG", "JPG", "PNG", "WEBP", "GIF", "AVIF", "HEIC", "HEIF", "APNG",
-	"MIFF", "PPM", "PGM", "PBM", "PNM", "TIFF", "BMP", "ICO",
+	"JXL", "MIFF", "PPM", "PGM", "PBM", "PNM", "TIFF", "BMP", "ICO",
 }
 
 // dangerousCoders — coders, которые запрещаем явно (network/scripting).

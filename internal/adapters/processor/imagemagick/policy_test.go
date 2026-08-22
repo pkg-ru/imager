@@ -24,6 +24,10 @@ func TestPolicyXML_DenyByDefault(t *testing.T) {
 	if !strings.Contains(s, `<policy domain="coder" rights="read|write" pattern="PNG"/>`) {
 		t.Error("missing PNG allow policy")
 	}
+	// JPEG XL coder разрешён в whitelist.
+	if !strings.Contains(s, `<policy domain="coder" rights="read|write" pattern="JXL"/>`) {
+		t.Error("missing JXL allow policy")
+	}
 	// Network-capable delegates запрещены.
 	if !strings.Contains(s, `<policy domain="delegate" rights="none" pattern="https"/>`) {
 		t.Error("missing https delegate deny")

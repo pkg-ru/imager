@@ -15,7 +15,7 @@
 ## Возможности
 
 - **Обработка изображений на лету**: resize, crop (центрированная обрезка), trim (обрезка краёв), crop+trim.
-- **Форматы**: входные и выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng` (проверяются по capability registry ImageMagick при старте).
+- **Форматы**: входные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl`, `tiff`, `bmp`, `ico`; выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl` (проверяются по capability registry ImageMagick при старте).
 - **Пресеты**: именованные конфигурации обработки, вызываемые коротким URL.
 - **Политики**: deny-by-default авторизация (`safe`/`unsafe`), whitelist пресетов, правила размеров, path-политики (longest prefix match).
 - **Лимиты**: на всех уровнях — политика запроса, ImageMagick (policy.xml + `-limit` + application-level), прикладные лимиты сервиса.
@@ -46,7 +46,7 @@
   Любые другие коды (включая `tc`) недопустимы.
 - `size` — размер миниатюры: `120x80`, `x50`, `180x`, `x` (сохранить исходный размер).
 - `dpr` — целочисленный множитель (device pixel ratio): отсутствие суффикса = `1`, явно допустимы только `2` или `3`.
-- `output_format` — выходной формат: `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`.
+- `output_format` — выходной формат: `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl` (JPEG XL).
 
 Пример: `photos/my-photo-jpg-c-120x80@2.webp` создаст ассет `120x80*2` из `my-photo.jpg`.
 
@@ -249,7 +249,7 @@ observability:        # log-level
 | `crop` | bool | `false` (дефолт). |
 | `trim` | bool | `false` (дефолт). |
 | `size` | string | `"WxH"`; одно из измерений может быть пустым (`"x400"`); `"x"` = оригинал. |
-| `output-format` | string | `jpeg` \| `png` \| `webp` \| `gif` \| `avif` \| `heif` \| `apng`. |
+| `output-format` | string | `jpeg` \| `png` \| `webp` \| `gif` \| `avif` \| `heif` \| `apng` \| `jxl`. |
 | `quality` | int | `0`–`100` (`0` = `default-quality` из `processing`). |
 | `dpr` | int | `0`/`1`/`2`/`3` (`0` = не задан; при не заданном dpr берётся из `@dpr`-суффикса имени). |
 | `frames` | int | Макс. число кадров анимации (`0` = без ограничения). |
@@ -405,7 +405,7 @@ URL:      https://addr.site/path_to_image/foo/bar.jpg
 
 При `enabled: true` генерируется политика:
 
-- запрет всех coders/delegates по умолчанию, разрешён только безопасный whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/PNM/TIFF/BMP/ICO);
+- запрет всех coders/delegates по умолчанию, разрешён только безопасный whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/JXL/MIFF/PPM/PGM/PBM/PNM/TIFF/BMP/ICO);
 - явный запрет network- и scripting-coders (URL/HTTPS/HTTP/FTP/MSL/MVG/LABEL/TEXT/PLASMA/WPG/PS/PDF/SVG и др.) и delegates (curl, wget, ssh, rsvg, inkscape...);
 - resource limits (`0` = не задавать соответствующую директиву).
 

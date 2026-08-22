@@ -39,6 +39,8 @@ func TestParseFormat(t *testing.T) {
 		{"heif", FormatHEIF},
 		{"heic", FormatHEIF}, // алиас расширения
 		{"apng", FormatAPNG},
+		{"jxl", FormatJPEGXL},
+		{"jpegxl", FormatJPEGXL}, // алиас расширения
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -58,7 +60,7 @@ func TestParseFormat(t *testing.T) {
 
 func TestFormatAnimated(t *testing.T) {
 	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatHEIF}
-	still := []Format{FormatJPEG, FormatPNG, FormatAVIF}
+	still := []Format{FormatJPEG, FormatPNG, FormatAVIF, FormatJPEGXL}
 	for _, f := range animated {
 		if !f.Animated() {
 			t.Errorf("%q should be animated", f)

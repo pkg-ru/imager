@@ -36,6 +36,7 @@ RUN apk add --no-cache --update \
         ffmpeg~=6.1 \
         libheif~=1.17 \
         libde265~=1.0 \
+        libjxl~=0.10 \
         tzdata~=2024a \
         ca-certificates \
     && addgroup -S -g 10001 imager \

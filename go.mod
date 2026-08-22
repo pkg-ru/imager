@@ -29,5 +29,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.6 // indirect
+	github.com/davidbyttow/govips/v2 v2.18.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 )

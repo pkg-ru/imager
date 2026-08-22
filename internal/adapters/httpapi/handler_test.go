@@ -27,6 +27,17 @@ func baseConfig() Config {
 	}
 }
 
+func TestBuildFormatMap_JXL(t *testing.T) {
+	m := buildFormatMap()
+	if ct := m["jxl"]; ct != "image/jxl" {
+		t.Errorf("jxl content-type = %q, want image/jxl", ct)
+	}
+	// Неизвестный формат не должен попадать в маппинг.
+	if _, ok := m["bogus"]; ok {
+		t.Error("bogus should not be in format map")
+	}
+}
+
 func TestHandlerGetSuccess(t *testing.T) {
 	gen := newFakeGenerator()
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)

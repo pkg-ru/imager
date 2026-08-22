@@ -245,7 +245,7 @@ policy:
   #     crop=false trim=true  → trim       (обрезка краёв)
   #     crop=true  trim=true  → crop-trim  (trim затем crop)
   #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
-  #   output-format — jpeg | png | webp | gif | avif | heif | apng;
+  #   output-format — jpeg | png | webp | gif | avif | heif | apng | jxl (JPEG XL);
   #   quality — 0-100 (0 = default-quality из `processing`);
   #   dpr — 0/1/2/3 (0 = не задан; при не заданном dpr берётся из @dpr-суффикса
   #         имени — разрешение пресета "thumb@2" форсирует dpr=2);

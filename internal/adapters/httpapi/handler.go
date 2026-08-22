@@ -68,17 +68,19 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 // Не доверяем пользовательскому Content-Type: только известные форматы.
 func buildFormatMap() map[string]string {
 	m := map[string]string{}
-	for _, f := range []string{"jpeg", "jpg", "png", "webp", "gif", "avif", "heif", "heic", "apng"} {
+	for _, f := range []string{"jpeg", "jpg", "png", "webp", "gif", "avif", "heif", "heic", "apng", "jxl"} {
 		ct := mime.TypeByExtension("." + f)
 		if ct == "" {
 			switch f {
-			case "avif", "heif", "heic":
+			case "avif", "heif", "heic", "jxl":
 				ct = "image/" + f
 			default:
 				ct = "application/octet-stream"
 			}
 		}
-		m[f] = ct
+		// MIME-типы регистронезависимы; mime.TypeByExtension может вернуть
+		// "image/JXL" и т.п. Нормализуем к нижнему регистру для консистентности.
+		m[f] = strings.ToLower(ct)
 	}
 	return m
 }

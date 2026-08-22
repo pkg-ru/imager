@@ -24,6 +24,7 @@ var allowedOps = map[processing.Operation]bool{
 var allowedFormats = map[string]bool{
 	"jpeg": true, "jpg": true, "png": true, "webp": true,
 	"gif": true, "avif": true, "heif": true, "apng": true,
+	"jxl": true, "jpegxl": true,
 }
 
 // allowedSourceFormats — допустимые входные форматы (нижний регистр).
@@ -33,28 +34,31 @@ var allowedSourceFormats = map[string]bool{
 	"jpeg": true, "jpg": true, "png": true, "webp": true,
 	"gif": true, "avif": true, "heif": true, "apng": true,
 	"tiff": true, "bmp": true, "ico": true,
+	"jxl": true, "jpegxl": true,
 }
 
 // outputCoder — маппинг доменного формата в ImageMagick coder для вывода.
 var outputCoder = map[processing.Format]string{
-	processing.FormatJPEG: "JPEG",
-	processing.FormatPNG:  "PNG",
-	processing.FormatWebP: "WEBP",
-	processing.FormatGIF:  "GIF",
-	processing.FormatAVIF: "AVIF",
-	processing.FormatHEIF: "HEIF",
-	processing.FormatAPNG: "APNG",
+	processing.FormatJPEG:   "JPEG",
+	processing.FormatPNG:    "PNG",
+	processing.FormatWebP:   "WEBP",
+	processing.FormatGIF:    "GIF",
+	processing.FormatAVIF:   "AVIF",
+	processing.FormatHEIF:   "HEIF",
+	processing.FormatAPNG:   "APNG",
+	processing.FormatJPEGXL: "JXL",
 }
 
 // sourceCoder — маппинг доменного формата в ImageMagick coder для ввода.
 var sourceCoder = map[processing.Format]string{
-	processing.FormatJPEG: "JPEG",
-	processing.FormatPNG:  "PNG",
-	processing.FormatWebP: "WEBP",
-	processing.FormatGIF:  "GIF",
-	processing.FormatAVIF: "AVIF",
-	processing.FormatHEIF: "HEIF",
-	processing.FormatAPNG: "APNG",
+	processing.FormatJPEG:   "JPEG",
+	processing.FormatPNG:    "PNG",
+	processing.FormatWebP:   "WEBP",
+	processing.FormatGIF:    "GIF",
+	processing.FormatAVIF:   "AVIF",
+	processing.FormatHEIF:   "HEIF",
+	processing.FormatAPNG:   "APNG",
+	processing.FormatJPEGXL: "JXL",
 }
 
 // buildArgv преобразует валидированный план в массив аргументов ImageMagick
