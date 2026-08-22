@@ -244,12 +244,12 @@ func (o Options) attempts() int {
 }
 
 // withTimeout оборачивает ctx таймаутом операции, если задан ReadTimeout.
-func (o Options) withTimeout(ctx context.Context) context.Context {
+// Возвращает cancel-функцию, которую вызывающий обязан вызвать (defer cancel()).
+func (o Options) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if o.ReadTimeout <= 0 {
-		return ctx
+		return ctx, func() {}
 	}
-	c, _ := context.WithTimeout(ctx, o.ReadTimeout)
-	return c
+	return context.WithTimeout(ctx, o.ReadTimeout)
 }
 
 // SourceStore — SFTP-реализация storage.SourceStore (read-only).
@@ -292,7 +292,8 @@ func (s *SourceStore) discardClient() {
 // Lookup возвращает метаданные исходного объекта. При ошибке соединения
 // выполняется повторная попытка с новым соединением (до MaxAttempts).
 func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	ctx = s.opts.withTimeout(ctx)
+	ctx, cancel := s.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := s.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -327,7 +328,8 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 	if err != nil {
 		return nil, err
 	}
-	ctx = s.opts.withTimeout(ctx)
+	ctx, cancel := s.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := s.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -436,7 +438,8 @@ func (r *ResultStore) discardClient() {
 // Lookup возвращает метаданные результата. При ошибке соединения выполняется
 // повторная попытка с новым соединением.
 func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -470,7 +473,8 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 	if err != nil {
 		return nil, err
 	}
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -546,7 +550,8 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 	if err != nil {
 		return nil, err
 	}
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -620,7 +625,8 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 	if err != nil {
 		return err
 	}
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -700,7 +706,8 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	if err != nil {
 		return err
 	}
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
@@ -740,7 +747,8 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
-	ctx = r.opts.withTimeout(ctx)
+	ctx, cancel := r.opts.withTimeout(ctx)
+	defer cancel()
 	attempts := r.opts.attempts()
 	var lastErr error
 	for i := 0; i < attempts; i++ {

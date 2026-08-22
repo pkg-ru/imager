@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
+	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/internal/config"
 )
 
@@ -48,8 +49,13 @@ type RuntimeConfig struct {
 	// Result — конфигурация result-хранилища.
 	Result RemoteStorageConfig
 
-	// ImageMagick — конфигурация ImageMagick processor.
+	// ImageMagick — конфигурация ImageMagick processor (опциональный
+	// fallback для APNG).
 	ImageMagick ImageMagickConfig
+	// Libvips — конфигурация libvips processor (primary движок; in-process
+	// через govips). Если libvips не скомпилирован (без тэка "libvips"),
+	// процессор недоступен и используется ImageMagick.
+	Libvips LibvipsConfig
 	// OutputLimit — application-level лимит размера выхода (0 = нет).
 	OutputLimit int64
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
@@ -121,6 +127,12 @@ type ImageMagickConfig struct {
 	Policy imagemagick.PolicyConfig
 }
 
+// LibvipsConfig — конфигурация libvips processor (govips).
+type LibvipsConfig struct {
+	// Limits — resource limits обработчика libvips.
+	Limits libvips.Limits
+}
+
 // RuntimeConfigFile — YAML-представление единого runtime-конфига.
 //
 // Поля Policy/Processing декодируются как yaml.MapSlice и пере-кодируются
@@ -142,6 +154,8 @@ type RuntimeConfigFile struct {
 	Result StorageYAML `yaml:"result"`
 	// ImageMagick — конфигурация ImageMagick processor.
 	ImageMagick ImageMagickYAML `yaml:"imagemagick"`
+	// Libvips — конфигурация libvips processor.
+	Libvips LibvipsYAML `yaml:"libvips"`
 	// Application — прикладные лимиты.
 	Application ApplicationYAML `yaml:"application"`
 	// Observability — логирование и метрики.
@@ -239,6 +253,30 @@ type ImageMagickYAML struct {
 	Policy PolicyYAML `yaml:"policy"`
 	// Limits — resource limits для subprocess.
 	Limits LimitsYAML `yaml:"limits"`
+}
+
+// LibvipsYAML — YAML-представление libvips.Limits.
+type LibvipsYAML struct {
+	// Limits — resource limits обработчика libvips.
+	Limits LibvipsLimitsYAML `yaml:"limits"`
+}
+
+// LibvipsLimitsYAML — YAML-представление libvips.Limits.
+type LibvipsLimitsYAML struct {
+	// OutputBytes — лимит размера выходных данных (байт).
+	OutputBytes int64 `yaml:"output-bytes"`
+	// Timeout — context deadline на одну операцию (duration).
+	Timeout string `yaml:"timeout"`
+	// Concurrency — максимальное число одновременно выполняемых операций.
+	Concurrency int `yaml:"concurrency"`
+	// Threads — число потоков libvips (vips_concurrency_set).
+	Threads int `yaml:"threads"`
+	// MaxCacheMem — максимум памяти кэша libvips (байт).
+	MaxCacheMem int `yaml:"max-cache-mem"`
+	// MaxCacheFiles — максимум файлов кэша libvips.
+	MaxCacheFiles int `yaml:"max-cache-files"`
+	// MaxCacheSize — максимум операций в кэше libvips.
+	MaxCacheSize int `yaml:"max-cache-size"`
 }
 
 // PolicyYAML — YAML-представление imagemagick.PolicyConfig.
@@ -453,6 +491,12 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		return nil, fmt.Errorf("httpapi: imagemagick: %w", err)
 	}
 
+	// Libvips.
+	lv, err := raw.Libvips.build()
+	if err != nil {
+		return nil, fmt.Errorf("httpapi: libvips: %w", err)
+	}
+
 	// Прикладные лимиты.
 	if raw.Application.OutputLimit < 0 {
 		return nil, fmt.Errorf("httpapi: application.output-limit: negative value %d", raw.Application.OutputLimit)
@@ -479,6 +523,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		Source:         source,
 		Result:         result,
 		ImageMagick:    img,
+		Libvips:        lv,
 		OutputLimit:    raw.Application.OutputLimit,
 		BufferMaxBytes: bufferMaxBytes,
 		LogLevel:       logLevel,
@@ -685,6 +730,31 @@ func (i ImageMagickYAML) build() (ImageMagickConfig, error) {
 		d, err := time.ParseDuration(i.Limits.Timeout)
 		if err != nil {
 			return ImageMagickConfig{}, fmt.Errorf("limits.timeout: %w", err)
+		}
+		cfg.Limits.Timeout = d
+	}
+	return cfg, nil
+}
+
+// build конвертирует YAML-конфигурацию libvips в LibvipsConfig.
+func (l LibvipsYAML) build() (LibvipsConfig, error) {
+	cfg := LibvipsConfig{
+		Limits: libvips.Limits{
+			OutputBytes:   l.Limits.OutputBytes,
+			Concurrency:   l.Limits.Concurrency,
+			Threads:       l.Limits.Threads,
+			MaxCacheMem:   l.Limits.MaxCacheMem,
+			MaxCacheFiles: l.Limits.MaxCacheFiles,
+			MaxCacheSize:  l.Limits.MaxCacheSize,
+		},
+	}
+	if l.Limits.Timeout != "" {
+		d, err := time.ParseDuration(l.Limits.Timeout)
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("limits.timeout: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout)
 		}
 		cfg.Limits.Timeout = d
 	}

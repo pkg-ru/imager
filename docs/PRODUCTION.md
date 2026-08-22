@@ -42,11 +42,17 @@ docker run -d \
 
 ### Локально (без Docker)
 
-Требуются ImageMagick (`magick`) и FFmpeg в `PATH`. Конфигурация читается из
-каталога, указанного в `IMAGER_CONFIG_DIR` (по умолчанию `.` — корень
-репозитория, где лежат `setting.yaml`/`setting-local.yaml`).
+Требуются **libvips** (для основного движка; сборка с `-tags libvips`) и
+**FFmpeg**. ImageMagick — опционально (только для APNG). Конфигурация
+читается из каталога, указанного в `IMAGER_CONFIG_DIR` (по умолчанию `.` —
+корень репозитория, где лежат `setting.yaml`/`setting-local.yaml`).
 
 ```bash
+# С libvips (основной движок; требует vips-dev + C-компилятор):
+go build -tags libvips -trimpath -ldflags="-s -w" -o imager ./cmd/imager
+IMAGER_CONFIG_DIR=. ./imager
+
+# Без libvips (ImageMagick как primary; все форматы через ImageMagick):
 go build -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 IMAGER_CONFIG_DIR=. ./imager
 ```
@@ -137,10 +143,18 @@ policy:            # политика авторизации запросов
 processing:        # умолчания обработки (default-quality и т.д.)
 source:            # source-хранилище (storage, path, параметры backend)
 result:            # result-хранилище (storage, path, параметры backend)
-imagemagick:       # binary, policy.xml, resource limits
+libvips:           # основной движок: limits (timeout, output-bytes, concurrency, threads, max-cache-*)
+imagemagick:       # опциональный fallback для APNG: binary, policy.xml, resource limits
 application:       # output-limit
 observability:     # log-level
 ```
+
+> **Движки обработки**: основной — libvips (govips, in-process; сборка с
+> `-tags libvips`). ImageMagick — опциональный fallback только для **APNG**
+> (единственный формат, который libvips не поддерживает). Если ImageMagick
+> не установлен, запросы с форматом APNG возвращают HTTP 501 с понятным
+> сообщением. Без тэка `libvips` сервис использует ImageMagick как primary
+> (обратная совместимость).
 
 Полный пример — в [`setting.yaml`](../setting.yaml) (с комментариями всех
 полей). Подробное описание всех секций, параметров, дефолтов и ограничений,

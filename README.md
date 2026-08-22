@@ -1,8 +1,8 @@
 # Imager <sup><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sup>
 
-**Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + ImageMagick).
+**Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + libvips, ImageMagick — опциональный fallback).
 
-Сервис принимает запрос на миниатюру (ассет) — генерирует её из исходного файла через ImageMagick и сохраняет в хранилище результатов. При повторных запросах того же ассета сервис отдаёт ранее созданный файл (кэш по каноническому идентификатору).
+Сервис принимает запрос на миниатюру (ассет) — генерирует её из исходного файла через **libvips** (in-process, govips) и сохраняет в хранилище результатов. При повторных запросах того же ассета сервис отдаёт ранее созданный файл (кэш по каноническому идентификатору). **ImageMagick** остаётся опциональным fallback для форматов, не поддерживаемых libvips (APNG).
 
 > Например, вы хотите сжать и уменьшить картинку. Для этого нужно сформировать [каноническую ссылку](https://github.com/pkg-ru/imager-client) (ассет) на картинку — при запросе которой сервис **Imager** на лету создаст сжатую миниатюру и вернёт её пользователю.
 >
@@ -15,12 +15,13 @@
 ## Возможности
 
 - **Обработка изображений на лету**: resize, crop (центрированная обрезка), trim (обрезка краёв), crop+trim.
-- **Форматы**: входные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl`, `tiff`, `bmp`, `ico`; выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl` (проверяются по capability registry ImageMagick при старте).
+- **Движки**: libvips (основной, in-process через govips, cgo) + ImageMagick (опциональный fallback только для APNG). Маршрутизация — `internal/adapters/processor/routing`.
+- **Форматы**: входные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `jxl`, `tiff`, `bmp` (+ PDF/PSD/RAW в будущем через libvips); выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `jxl`. **APNG** — только через ImageMagick (если не установлен, запрос с APNG возвращает понятную ошибку).
 - **Пресеты**: именованные конфигурации обработки, вызываемые коротким URL.
 - **Политики**: deny-by-default авторизация (`safe`/`unsafe`), whitelist пресетов, правила размеров, path-политики (longest prefix match).
-- **Лимиты**: на всех уровнях — политика запроса, ImageMagick (policy.xml + `-limit` + application-level), прикладные лимиты сервиса.
+- **Лимиты**: на всех уровнях — политика запроса, libvips/ImageMagick (resource limits + application-level), прикладные лимиты сервиса.
 - **Хранилища**: `fs`, `s3`, `sftp`, `ftp`, `ftps`, `http` (source-only) — независимо для source и result.
-- **Безопасность**: deny-by-default `policy.xml` ImageMagick, отключение network-coders, CORS deny-by-default, security-заголовки, bounded URL/body/header.
+- **Безопасность**: deny-by-default `policy.xml` ImageMagick (для fallback), CORS deny-by-default, security-заголовки, bounded URL/body/header.
 - **Observability**: структурированные JSON-логи (`log/slog`), метрики Prometheus (`/metrics`), expvar (`/debug/vars`), health-эндпоинты.
 
 ---
@@ -66,11 +67,21 @@
 
 ### Требования
 
-- Go 1.21+ (для сборки из исходников).
-- [ImageMagick](https://imagemagick.org/script/download.php) (`magick` для версии 7, `convert` для версии 6) в `PATH` или по абсолютному пути.
+- Go 1.25+ (для сборки из исходников).
+- **libvips** (`vips-dev` / `libvips-dev`) + C-компилятор (gcc/clang) для сборки с тэком `-tags libvips` (основной движок).
+- [ImageMagick](https://imagemagick.org/script/download.php) (`magick` для версии 7, `convert` для версии 6) — **опционально**, только для APNG.
 - Docker (опционально, для запуска в контейнере).
 
 ### Сборка и запуск локально
+
+Сборка с libvips (основной движок):
+
+```bash
+go build -tags libvips -trimpath -ldflags="-s -w" -o imager ./cmd/imager
+IMAGER_CONFIG_DIR=. ./imager
+```
+
+Сборка без libvips (ImageMagick как primary; APNG работает, остальные форматы — через ImageMagick):
 
 ```bash
 go build -trimpath -ldflags="-s -w" -o imager ./cmd/imager

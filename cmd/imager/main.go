@@ -10,6 +10,11 @@
 // Прикладных env-переменных и флагов нет — всё в YAML. Fail-fast на invalid
 // config.
 //
+// Обработка изображений: основной движок — libvips (govips, in-process,
+// собирается с тэком "-tags libvips"). ImageMagick остаётся опциональным
+// fallback для форматов, не поддерживаемых libvips (APNG). Маршрутизация
+// между движками — internal/adapters/processor/routing.
+//
 // Observability: структурированные JSON-логи (log/slog), request ID
 // (X-Request-Id), bounded-cardinality метрики (request/cache/processor/
 // storage) через /metrics и /debug/vars. URL/query/raw user input и секреты
@@ -19,12 +24,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/pkg-ru/imager/internal/adapters/httpapi"
 	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
+	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
+	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
+	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 	"github.com/pkg-ru/imager/internal/observability"
 )
 
@@ -60,14 +70,11 @@ func main() {
 	rc.HTTP.Metrics = metrics
 	rc.HTTP.Pixel = newPixelGenerator(rc.ImageMagick.Binary)
 
-	// 3) ImageMagick processor с resource limits и deny-by-default policy.
-	proc, err := imagemagick.New(imagemagick.Options{
-		Binary: rc.ImageMagick.Binary,
-		Limits: rc.ImageMagick.Limits,
-		Policy: rc.ImageMagick.Policy,
-	})
+	// 3) Процессоры: libvips (primary, если скомпилирован) + ImageMagick
+	// (опциональный fallback для APNG).
+	proc, err := buildProcessor(logger, rc)
 	if err != nil {
-		logger.Errorf("imager: imagemagick: %v", err)
+		logger.Errorf("imager: processor: %v", err)
 		os.Exit(1)
 	}
 
@@ -166,6 +173,142 @@ func main() {
 	logger.Infof("imager: stopped")
 }
 
+// appLogger — узкий интерфейс логирования composition root (реализуется
+// *observability.SlogLogger).
+type appLogger interface {
+	Debugf(format string, args ...any)
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
+}
+
+// buildProcessor собирает маршрутизатор процессоров:
+//
+//   - primary: libvips (если скомпилирован с тэком "libvips"). Если libvips
+//     не скомпилирован или Startup завершился ошибкой — логируем warning и
+//     используем ImageMagick как primary (обратная совместимость).
+//   - fallback: ImageMagick (опционален — если binary доступен). Нужен
+//     только для APNG.
+//
+// Возвращает процессор, реализующий processor.Processor и Close, закрывающий
+// все созданные движки.
+func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Processor, error) {
+	// Сначала пытаемся создать ImageMagick (опциональный fallback).
+	imProc, imErr := imagemagick.New(imagemagick.Options{
+		Binary: rc.ImageMagick.Binary,
+		Limits: rc.ImageMagick.Limits,
+		Policy: rc.ImageMagick.Policy,
+	})
+
+	var closers []io.Closer
+	if imProc != nil {
+		closers = append(closers, imProc)
+	}
+
+	// libvips доступен только если скомпилирован с тэком "libvips".
+	lvProc, lvErr := libvips.New(libvips.Options{Limits: libvips.Limits{
+		OutputBytes:   rc.Libvips.Limits.OutputBytes,
+		Timeout:       rc.Libvips.Limits.Timeout,
+		Concurrency:   rc.Libvips.Limits.Concurrency,
+		Threads:       rc.Libvips.Limits.Threads,
+		MaxCacheMem:   rc.Libvips.Limits.MaxCacheMem,
+		MaxCacheFiles: rc.Libvips.Limits.MaxCacheFiles,
+		MaxCacheSize:  rc.Libvips.Limits.MaxCacheSize,
+	}})
+
+	if libvips.Compiled() && lvErr == nil {
+		// Основной сценарий: libvips — primary, ImageMagick — fallback
+		// (может отсутствовать).
+		if lvProc != nil {
+			closers = append(closers, lvProc)
+		}
+		logger.Infof("imager: processor: primary=libvips fallback=imagemagick(optional)")
+		r, err := routing.New(routing.Options{
+			Primary:      lvProc,
+			PrimaryCaps:  libvipsCaps(),
+			Fallback:     imProc,
+			FallbackCaps: imagemagickCaps(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("libvips routing: %w", err)
+		}
+		return &closedProcessor{Processor: r, closers: closers}, nil
+	}
+
+	// libvips недоступен: warning и fallback на ImageMagick как primary.
+	if lvErr != nil {
+		logger.Warnf("imager: libvips unavailable: %v; using ImageMagick as primary", lvErr)
+	} else {
+		logger.Warnf("imager: libvips not compiled in (build with -tags libvips); using ImageMagick as primary")
+	}
+	if imErr != nil {
+		return nil, fmt.Errorf("no processor available: libvips: %v; imagemagick: %v", lvErr, imErr)
+	}
+	r, err := routing.New(routing.Options{
+		Primary:      imProc,
+		PrimaryCaps:  imagemagickCaps(),
+		Fallback:     nil,
+		FallbackCaps: routing.Capability{Name: "imagemagick"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("imagemagick routing: %w", err)
+	}
+	return &closedProcessor{Processor: r, closers: closers}, nil
+}
+
+// closedProcessor — обёртка над processor.Processor, закрывающая все
+// созданные движки (libvips, imagemagick) при Close. Реализует io.Closer.
+type closedProcessor struct {
+	processor.Processor
+	closers []io.Closer
+}
+
+func (c *closedProcessor) Close() error {
+	var first error
+	for _, cl := range c.closers {
+		if err := cl.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// libvipsCaps — покрытие форматов libvips (primary). APNG НЕ включён:
+// libvips не поддерживает его, маршрутизатор переключит такие запросы на
+// ImageMagick fallback.
+func libvipsCaps() routing.Capability {
+	return routing.Capability{
+		Name: "libvips",
+		Formats: map[processing.Format]bool{
+			processing.FormatJPEG:   true,
+			processing.FormatPNG:    true,
+			processing.FormatWebP:   true,
+			processing.FormatGIF:    true,
+			processing.FormatAVIF:   true,
+			processing.FormatHEIF:   true,
+			processing.FormatJPEGXL: true,
+		},
+	}
+}
+
+// imagemagickCaps — покрытие форматов ImageMagick (fallback): все текущие
+// форматы, включая APNG.
+func imagemagickCaps() routing.Capability {
+	return routing.Capability{
+		Name: "imagemagick",
+		Formats: map[processing.Format]bool{
+			processing.FormatJPEG:   true,
+			processing.FormatPNG:    true,
+			processing.FormatWebP:   true,
+			processing.FormatGIF:    true,
+			processing.FormatAVIF:   true,
+			processing.FormatHEIF:   true,
+			processing.FormatAPNG:   true,
+			processing.FormatJPEGXL: true,
+		},
+	}
+}
+
 // fatal печатает ошибку в stderr и завершает процесс (используется до
 // создания логгера).
 func fatal(format string, args ...any) {
@@ -189,7 +332,8 @@ func slogLevel(s string) slog.Level {
 
 // pixelGenerator — минимальный генератор прозрачного 1x1 пикселя через
 // ImageMagick binary. Реализует httpapi.PixelGenerator без изменения
-// ImageMagick adapter.
+// ImageMagick adapter. Генерация пикселя через ImageMagick покрывает все
+// форматы (включая APNG); для libvips-форматов это простой и безопасный путь.
 type pixelGenerator struct {
 	binary string
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
 	"github.com/pkg-ru/imager/internal/application/generatev2"
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -261,6 +262,16 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		h.log.Warnf("httpapi: canceled: %v", err)
 		h.writeError(w, r, http.StatusGatewayTimeout, "canceled", "request canceled")
+		return
+	}
+	// Недоступный движок (например APNG без установленного ImageMagick):
+	// routed EngineUnavailable/UnsupportedError → 501 Not Implemented с
+	// понятным сообщением. Обрабатывается до маппинга OutcomeError, т.к.
+	// generatev2 оборачивает ошибку процессора в OutcomeProcessing.
+	if routing.IsEngineUnavailable(err) {
+		h.log.Warnf("httpapi: engine unavailable: %v", err)
+		h.writeError(w, r, http.StatusNotImplemented, "unsupported_format",
+			"requested format is not supported: "+err.Error())
 		return
 	}
 	var oe *generatev2.OutcomeError

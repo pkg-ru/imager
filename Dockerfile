@@ -2,16 +2,37 @@
 
 ###############################################################################
 # Builder: собирает production binary из cmd/imager (новый composition root).
-# Pinned base image для воспроизводимости. CGO отключён (static binary).
+# Pinned base image для воспроизводимости.
+#
+# CGO_ENABLED=1 + libvips-dev: сборка с тэком "-tags libvips" (govips, cgo).
+# Дополнительные C-инструменты: gcc (через build-base), pkgconf, musl-dev.
+# Библиотеки, необходимые govips для кодирования/декодирования форматов:
+#   vips-dev (сам libvips), libheif-dev (HEIF/AVIF), libjxl-dev (JPEG XL),
+#   librsvg-dev (SVG), libpoppler-glib-dev (PDF), libraw-dev (RAW) — гипотетически.
 ###############################################################################
 FROM golang:1.25.0-alpine3.20 AS builder
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 ARG GOFLAGS="-buildvcs=false"
-ENV CGO_ENABLED=0 \
+ENV CGO_ENABLED=1 \
     GOOS=linux \
     GOARCH=amd64 \
     GOFLAGS=${GOFLAGS}
+
+# Устанавливаем зависимости для cgo (libvips, govips) в builder.
+RUN apk add --no-cache --update \
+        build-base \
+        pkgconf \
+        musl-dev \
+        vips-dev~=8.15 \
+        glib-dev \
+        libheif-dev \
+        libde265-dev \
+        libjxl-dev \
+        librsvg-dev \
+        poppler-dev \
+        libraw-dev \
+    && apk add --no-cache tzdata~=2024a
 
 WORKDIR /src
 
@@ -20,23 +41,35 @@ COPY go.mod go.sum ./
 COPY go.work go.work.sum ./
 RUN go mod download
 
-# Копируем исходники и собираем.
+# Копируем исходники и собираем с тэком libvips.
 COPY . .
-RUN go build -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
+RUN go build -tags libvips -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
-# Runtime: минимальный образ с ImageMagick и FFmpeg.
+# Runtime: минимальный образ с libvips (основной движок), ImageMagick
+# (опциональный fallback для APNG) и FFmpeg.
 # Pinned base image. Non-root пользователь, read-only root layout.
 ###############################################################################
 FROM alpine:3.20
 
 # Pinned версии пакетов для воспроизводимости (apk --no-cache).
+# libvips — основной процессор; сопутствующие библиотеки кодеков:
+#   libheif (HEIF/AVIF), libde265 (HEVC), libjxl (JPEG XL),
+#   poppler (PDF), libraw (RAW), librsvg (SVG), ghostscript (PDF/PS).
+# ImageMagick оставлен ОПЦИОНАЛЬНО для APNG (единственный формат, который
+# libvips не поддерживает). ffmpeg — пост-обработка видео (если нужна).
 RUN apk add --no-cache --update \
-        imagemagick~=7.1.1 \
-        ffmpeg~=6.1 \
+        vips-tools~=8.15 \
+        libvips~=8.15 \
         libheif~=1.17 \
         libde265~=1.0 \
         libjxl~=0.10 \
+        poppler-utils \
+        libraw~=0.21 \
+        librsvg~=2.58 \
+        ghostscript~=10.02 \
+        imagemagick~=7.1.1 \
+        ffmpeg~=6.1 \
         tzdata~=2024a \
         ca-certificates \
     && addgroup -S -g 10001 imager \
@@ -55,7 +88,11 @@ RUN mkdir -p /data/source /data/result /etc/imager \
 # через IMAGER_CONFIG_DIR (единственная env-переменная). Локальная
 # конфигурация (setting-local.yaml) монтируется в compose.
 COPY --from=builder /out/imager /usr/local/bin/imager
-COPY setting.yaml /etc/imager/setting.yaml
+COPY config/setting.yaml /etc/imager/setting.yaml
+
+# Dynamic binary: копируем libvips-зависимости через ld-linux. В Alpine
+# динамическая линковка разрешена; пакеты уже установлены в runtime.
+# (govips-библиотеки ищутся через ldconfig автоматически.)
 
 # Restrictive permissions: бинарь 0755, конфиг 0640 (не содержит секретов,
 # но ограничиваем чтение).

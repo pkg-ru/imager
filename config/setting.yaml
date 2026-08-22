@@ -436,7 +436,61 @@ result:
   # ...
 
 ########################################
-# imagemagick — настройки процессора ImageMagick.
+# libvips — настройки основного процессора libvips (govips, in-process).
+#
+# libvips — основной движок обработки изображений. Компилируется в бинарь
+# (cgo, govips) и работает in-process, без subprocess. Сборка с поддержкой
+# libvips: go build -tags libvips (требуются libvips-dev и компилятор C).
+# Если бинарь собран БЕЗ тэка libvips — процессор недоступен, и сервис
+# использует ImageMagick как primary (обратная совместимость).
+#
+# Лимиты применяются двумя слоями:
+#   1) глобальная конфигурация libvips (threads, max-cache-mem/files/size) —
+#      задаётся ОДИН раз на процесс при Startup;
+#   2) application-level ограничения: bounded writer (output-bytes) на выход
+#      и context deadline (timeout) на каждый запрос обработки.
+########################################
+libvips:
+  # limits — resource limits обработчика libvips.
+  limits:
+    # timeout — application-level context deadline на одну операцию обработки.
+    # Тип: duration-строка (например "30s"). Превышение → LimitError
+    # (в HTTP — таймаут обработки).
+    timeout: "30s"
+
+    # output-bytes — application-level лимит размера ВЫХОДНЫХ данных (байт).
+    # Реализуется boundedWriter'ом; при превышении запись прекращается
+    # (LimitError). Защита от гигантских результатов.
+    output-bytes: 10485760                       # 10 MiB
+
+    # concurrency — максимальное число ОДНОВРЕМЕННО выполняемых операций
+    # обработки libvips (bounded очередь слотов; 0 = код применяет 16).
+    # Реальная защита памяти/CPU при параллельных запросах (например 2-4).
+    concurrency: 2
+
+    # threads — число потоков libvips (vips_concurrency_set). 0 = default
+    # govips (1). Для нагруженного процесca рекомендуется число логических
+    # ядер (иначе libvips сам распараллелит по ядрам поверх concurrency).
+    threads: 0
+
+    # max-cache-mem — максимум памяти кэша libvips (байт). 0 = default
+    # govips (50 MiB). Уменьшение снижает пиковое потребление памяти.
+    max-cache-mem: 52428800                      # 50 MiB
+
+    # max-cache-files — максимум открытых файлов кэша libvips. 0 = default.
+    max-cache-files: 0
+
+    # max-cache-size — максимум операций в кэше libvips. 0 = default (100).
+    max-cache-size: 100
+
+########################################
+# imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback для APNG).
+#
+# ImageMagick НЕ обязателен: libvips — основной движок. ImageMagick
+# используется ТОЛЬКО для форматов, не поддерживаемых libvips (APNG —
+# единственный такой формат). Если ImageMagick не установлен, запросы с
+# APNG возвращают понятную ошибку ("работа с этим форматом возможна только
+# при установленном ImageMagick").
 #
 # Процессор запускает бинарник ImageMagick как subprocess для каждой
 # операции. Лимиты применяются ТРЁМЯ слоями:
