@@ -62,7 +62,7 @@ func TestIntegrationFullPipelineFS(t *testing.T) {
 	app, srcDir, resDir := buildFSApp(t)
 	seedSource(t, srcDir, "img.png", []byte("RAWIMAGE"))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -97,7 +97,7 @@ func TestIntegrationCacheHitNoRegeneration(t *testing.T) {
 	seedSource(t, srcDir, "img.png", []byte("RAWIMAGE"))
 
 	do := func() string {
-		req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 		rec := httptest.NewRecorder()
 		app.Handler.ServeHTTP(rec, req)
 		return rec.Body.String()
@@ -121,7 +121,7 @@ func TestIntegrationCacheHitNoRegeneration(t *testing.T) {
 }
 
 // TestIntegrationPresetResultStoredByCanonicalURL проверяет, что preset-запрос
-// /v1/test-jpg/thumb@2.webp после раскрытия пресета сохраняет результат в
+// /test-jpg/thumb@2.webp после раскрытия пресета сохраняет результат в
 // ResultStore под каноническим URL (test-jpg/c-120x80@2.webp), а не под
 // SHA-256 хешем. Это regression-тест для перехода с hash-based на
 // canonical-URL-based ключа хранения.
@@ -130,7 +130,7 @@ func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 	seedSource(t, srcDir, "test.jpg", []byte("RAWIMAGE"))
 
 	do := func() string {
-		req := httptest.NewRequest(http.MethodGet, "/v1/test-jpg/thumb@2.webp", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test-jpg/thumb@2.webp", nil)
 		rec := httptest.NewRecorder()
 		app.Handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -166,7 +166,7 @@ func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 func TestIntegrationNotFoundFS(t *testing.T) {
 	app, _, _ := buildFSApp(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -187,9 +187,9 @@ func TestIntegrationTraversalRejectedFS(t *testing.T) {
 	}
 	defer os.Remove(outside)
 
-	// Traversal через URL: /v1/../secret.txt... — должен быть отклонён на
+	// Traversal через URL: /../secret.txt... — должен быть отклонён на
 	// уровне парсера (400), а не прочитать файл.
-	req := httptest.NewRequest(http.MethodGet, "/v1/../secret-txt/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/../secret-txt/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -239,7 +239,7 @@ func TestIntegrationConcurrentHTTPStampede(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+			req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 			rec := httptest.NewRecorder()
 			app.Handler.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {

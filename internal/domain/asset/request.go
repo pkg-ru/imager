@@ -13,6 +13,12 @@ import (
 // заполняются SourceName, SourceFormat, Transform, Size, DPR и OutputFormat,
 // а PresetName пуст. Для preset-запроса заполняются SourceName, SourceFormat
 // (берётся из URL), PresetName, DPR и OutputFormat.
+//
+// Поля quality/frames/duration/loop — параметры обработки, которые не
+// являются частью URL-грамматики. Они заполняются при разрешении пресета
+// (PresetSet.Resolve) и не влияют на Build(): канонический URL строится
+// только из URL-компонентов. Для канонических запросов (не preset) эти
+// поля нулевые.
 type Request struct {
 	path         string
 	sourceName   SourceName
@@ -22,6 +28,10 @@ type Request struct {
 	dpr          DPR
 	outputFormat Format
 	presetName   PresetName
+	quality      int
+	frames       int
+	duration     int
+	loop         *bool
 }
 
 // NewRequest создаёт канонический Request.
@@ -95,6 +105,22 @@ func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, p
 // Path возвращает канонический путь.
 func (r *Request) Path() string { return r.path }
 
+// Quality возвращает качество сжатия (0 = default-quality из processing).
+// Заполняется при разрешении пресета; пусто для канонических запросов.
+func (r *Request) Quality() int { return r.quality }
+
+// Frames возвращает максимальное число кадров анимации (0 = без
+// ограничения). Заполняется при разрешении пресета.
+func (r *Request) Frames() int { return r.frames }
+
+// Duration возвращает максимальную длительность анимации в миллисекундах
+// (0 = без ограничения). Заполняется при разрешении пресета.
+func (r *Request) Duration() int { return r.duration }
+
+// Loop возвращает зацикливание анимации (nil = по умолчанию из processing).
+// Заполняется при разрешении пресета.
+func (r *Request) Loop() *bool { return r.loop }
+
 // SourceName возвращает имя исходника.
 func (r *Request) SourceName() SourceName { return r.sourceName }
 
@@ -120,7 +146,7 @@ func (r *Request) PresetName() PresetName { return r.presetName }
 // IsPreset возвращает true, если запрос является preset URL.
 func (r *Request) IsPreset() bool { return r.presetName != "" }
 
-// Build собирает канонический URL (без ведущего "/v1/").
+// Build собирает канонический URL.
 //
 //	канонический: {path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
 //	preset:       {path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
@@ -160,15 +186,6 @@ func (r *Request) Build() (string, error) {
 	return r.path + "/" + file, nil
 }
 
-// FullURL возвращает URL с ведущим "/v1/".
-func (r *Request) FullURL() (string, error) {
-	u, err := r.Build()
-	if err != nil {
-		return "", err
-	}
-	return "/" + string(V1) + "/" + u, nil
-}
-
 // CanonicalID вычисляет стабильный идентификатор запроса.
 func (r *Request) CanonicalID() (CanonicalID, error) {
 	u, err := r.Build()
@@ -185,6 +202,21 @@ func (r *Request) String() string {
 		return ""
 	}
 	return u
+}
+
+// WithProcessingOptions возвращает копию запроса с параметрами обработки
+// (quality/frames/duration/loop). Используется при разрешении пресета:
+// параметры не являются частью URL-грамматики и не влияют на Build().
+func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool) *Request {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	cp.quality = quality
+	cp.frames = frames
+	cp.duration = duration
+	cp.loop = loop
+	return &cp
 }
 
 // joinPath — вспомогательная функция (сохранена для совместимости с

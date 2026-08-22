@@ -166,7 +166,29 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		}
 	}
 
-	// Trim (для OpTrim — standalone, для OpCropTrim — после crop).
+	// Ограничение числа кадров анимации: -limit list-length (IM7) или
+	// -delete (IM6). 0 = без ограничения.
+	if plan.Frames > 0 {
+		if im7 {
+			args = append(args, "-limit", "list-length", strconv.Itoa(plan.Frames))
+		} else {
+			args = append(args, "-delete", fmt.Sprintf("%d-", plan.Frames))
+		}
+	}
+
+	// Ограничение длительности анимации: -limit time (секунды CPU).
+	// ImageMagick не имеет прямого лимита длительности анимации, поэтому
+	// duration (мс) конвертируется в лимит времени обработки (ceil).
+	// 0 = без ограничения.
+	if plan.Duration > 0 {
+		secs := (plan.Duration + 999) / 1000
+		if secs < 1 {
+			secs = 1
+		}
+		args = append(args, "-limit", "time", strconv.Itoa(secs))
+	}
+
+	// Trim (для OpTrim — standalone, для OpCropTrim — до crop).
 	if plan.Operation == processing.OpTrim || plan.Operation == processing.OpCropTrim {
 		args = append(args, "-trim")
 		if im7 {
@@ -175,7 +197,7 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 	}
 
 	// Размер: пропорциональный resize + extent до целевого размера.
-	// Для OpCropTrim применяется centre-crop (как для OpCrop).
+	// Для OpCropTrim применяется centre-crop (как для OpCrop) после trim.
 	// При Original (size=x) resize/extent не применяются — сохраняется
 	// исходный размер изображения.
 	if !plan.Size.Original && (plan.Size.Width > 0 || plan.Size.Height > 0) {

@@ -380,6 +380,67 @@ result:
 	}
 }
 
+// TestParseRuntimeConfigPathPolicies проверяет декодирование path-policies
+// из YAML через ParseRuntimeConfig и компиляцию в config.Config.Compile().
+func TestParseRuntimeConfigPathPolicies(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: safe
+    allowed-presets: ["thumb"]
+    size-rules: ["0-2000x0-2000"]
+    limits:
+      source-bytes: 10485760
+      output-bytes: 10485760
+  presets:
+    - name: thumb
+      crop: true
+      size: 120x80
+      output-format: webp
+  path-policies:
+    - path: "/"
+      dpr: "0-1"
+      crop: false
+    - path: "/users"
+      dpr: "2-3"
+      crop: true
+      trim: false
+    - path: "basket/products"
+      dpr: "0-1"
+    - path: "/basket/users/"
+      dpr: "2-3"
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if len(rc.Pipeline.Policy.PathPolicies) != 4 {
+		t.Fatalf("PathPolicies = %d, want 4", len(rc.Pipeline.Policy.PathPolicies))
+	}
+	// Лимиты из global декодируются из YAML.
+	if rc.Pipeline.Policy.Global.Limits.SourceBytes != 10485760 {
+		t.Errorf("Global.Limits.SourceBytes = %d, want 10485760", rc.Pipeline.Policy.Global.Limits.SourceBytes)
+	}
+	if rc.Pipeline.Policy.Global.Limits.OutputBytes != 10485760 {
+		t.Errorf("Global.Limits.OutputBytes = %d, want 10485760", rc.Pipeline.Policy.Global.Limits.OutputBytes)
+	}
+	// Нормализация имён при компиляции.
+	compiled, err := rc.Pipeline.Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	names := compiled.Policy.PathNames()
+	want := []string{"/", "/basket/products", "/basket/users", "/users"}
+	if len(names) != len(want) {
+		t.Fatalf("PathNames = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("PathNames[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+}
+
 func writeConfig(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

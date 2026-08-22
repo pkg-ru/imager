@@ -62,7 +62,7 @@ func TestIntegration_RealBinary(t *testing.T) {
 
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 1, Height: 1}, 1, 80, nil,
+		processing.Size{Width: 1, Height: 1}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)

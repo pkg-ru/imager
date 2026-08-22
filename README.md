@@ -1,240 +1,370 @@
 # Imager <sup><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sup>
-### WEB Микро сервис для генерации и компрессии миниатюр к картинкам на лету
 
-Сервис принимает запрос на миниатюру (ассет) — генерирует его из исходного файла и сохраняет на диск в указанное место.\
-При повторных запросах того же ассета сервис отдает ранее созданный, сжатый файл.
+**Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + ImageMagick).
 
-> Например, вы хотите сжать и уменьшить картинку. Для этого нужно сформировать [каноническую ссылку](https://github.com/pkg-ru/imager-client) (ассет) на картинку — при запросе которой сервис **Imager** на лету создаст сжатую миниатюру и вернет пользователю.
+Сервис принимает запрос на миниатюру (ассет) — генерирует её из исходного файла через ImageMagick и сохраняет в хранилище результатов. При повторных запросах того же ассета сервис отдаёт ранее созданный файл (кэш по каноническому идентификатору).
+
+> Например, вы хотите сжать и уменьшить картинку. Для этого нужно сформировать [каноническую ссылку](https://github.com/pkg-ru/imager-client) (ассет) на картинку — при запросе которой сервис **Imager** на лету создаст сжатую миниатюру и вернёт её пользователю.
 >
-> <sub><sup>
-> Исходник: example.com/my_image.jpg (не обязательно должен быть доступен из web)\
-> Ассет на миниатюру: example.com/photos/my_image-jpg-c-120x80@2.webp \
-> Ассет по пресету:   example.com/photos/my_image-jpg-thumb.webp
-> </sup></sub>
-
+> Исходник: `example.com/my_image.jpg` (не обязательно должен быть доступен из web)\
+> Ассет на миниатюру: `example.com/photos/my_image-jpg/c-120x80@2.webp`\
+> Ассет по пресету: `example.com/photos/my_image-jpg/thumb.webp`
 
 ---
 
-## Формат ассет URL
+## Возможности
+
+- **Обработка изображений на лету**: resize, crop (центрированная обрезка), trim (обрезка краёв), crop+trim.
+- **Форматы**: входные и выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng` (проверяются по capability registry ImageMagick при старте).
+- **Пресеты**: именованные конфигурации обработки, вызываемые коротким URL.
+- **Политики**: deny-by-default авторизация (`safe`/`unsafe`), whitelist пресетов, правила размеров, path-политики (longest prefix match).
+- **Лимиты**: на всех уровнях — политика запроса, ImageMagick (policy.xml + `-limit` + application-level), прикладные лимиты сервиса.
+- **Хранилища**: `fs`, `s3`, `sftp`, `ftp`, `ftps`, `http` (source-only) — независимо для source и result.
+- **Безопасность**: deny-by-default `policy.xml` ImageMagick, отключение network-coders, CORS deny-by-default, security-заголовки, bounded URL/body/header.
+- **Observability**: структурированные JSON-логи (`log/slog`), метрики Prometheus (`/metrics`), expvar (`/debug/vars`), health-эндпоинты.
+
+---
+
+## Формат asset URL
 
 Сервис принимает только **канонические** и **preset** URL. Byte-based кодирование не используется — URL читается напрямую.
 
-### 
+### Канонический URL
 
 ```
-{path}/{source_name}-{source_format}-{transform}-{size}@{dpr}.{output_format}
+/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
 ```
 
+- `path` — произвольный префикс пути (используется для path-политик), до 512 символов.
+- `source_name` — имя исходного файла (без расширения), до 128 символов.
+- `source_format` — формат исходного файла, до 16 символов.
 - `transform` — код операции:
-  - `c` — crop (обрезание по центру);
+  - `c` — crop (обрезка по центру);
   - `t` — trim (обрезка краёв);
-  - `ct` — crop, затем trim (последовательно).
+  - `ct` — trim, затем crop (последовательно);
+  - отсутствует — resize (масштабирование).
   Любые другие коды (включая `tc`) недопустимы.
-- `size` — размер миниатюры: `120x80`, `x50`, `180x`, диапазон `120-300x`, `x80-90`, `350-400x150`.
-- `dpr` — целочисленный множитель (device pixel ratio): только `2` или `3`.
+- `size` — размер миниатюры: `120x80`, `x50`, `180x`, `x` (сохранить исходный размер).
+- `dpr` — целочисленный множитель (device pixel ratio): отсутствие суффикса = `1`, явно допустимы только `2` или `3`.
+- `output_format` — выходной формат: `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`.
 
 Пример: `photos/my-photo-jpg-c-120x80@2.webp` создаст ассет `120x80*2` из `my-photo.jpg`.
 
 ### Preset URL
 
 ```
-{path}/{source_name}-{source_format}-{preset_name}.{output_format}
+/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
 ```
 
-Пример: `photos/my-photo-jpg-thumb.webp` применит пресет `thumb` к исходнику `my-photo.jpg` (source name — `my-photo`, source format — `jpg`).
+Пример: `photos/my-photo-jpg/thumb.webp` применит пресет `thumb` к исходнику `my-photo.jpg` (source name — `my-photo`, source format — `jpg`).
 
-Пресеты определяются в `setting.yaml` (секция `policy.presets`), не содержат `source-format` (исходный формат определяется URL) и раскрываются в канонический запрос с параметрами пресета. `output-format` пресета обязан совпадать с расширением в URL.
+Пресеты определяются в конфигурации (секция `policy.presets`), не содержат `source-format` (исходный формат определяется URL) и раскрываются в канонический запрос с параметрами пресета. `output-format` пресета обязан совпадать с расширением в URL. Имя пресета может содержать фиксированный суффикс `@dpr` (например `thumb@2`), который форсирует `dpr=2` при разрешении.
 
 ---
 
-## Запуск
+## Быстрый старт
 
-> **Production**: новый production-конвейер собирается из
-> [`cmd/imager`](cmd/imager/main.go) (composition root). Полное руководство по
-> production-запуску, env/config, security assumptions, resource limits,
-> health endpoints и storage roadmap — в [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
+### Требования
 
-Для запуска Imager можно использовать Docker. Воспользуйтесь следующими командами:
+- Go 1.21+ (для сборки из исходников).
+- [ImageMagick](https://imagemagick.org/script/download.php) (`magick` для версии 7, `convert` для версии 6) в `PATH` или по абсолютному пути.
+- Docker (опционально, для запуска в контейнере).
+
+### Сборка и запуск локально
+
+```bash
+go build -trimpath -ldflags="-s -w" -o imager ./cmd/imager
+IMAGER_CONFIG_DIR=. ./imager
+```
+
+Конфигурация читается из каталога, указанного в `IMAGER_CONFIG_DIR` (по умолчанию `.` — корень репозитория, где лежат `setting.yaml`/`setting-local.yaml`).
+
+> **Windows**: имя `magick` может не разрешаться через `PATH` процесса (например, при запуске из IDE или службы). Укажите абсолютный путь к `magick.exe` в `setting-local.yaml` (используйте прямые слэши):
+>
+> ```yaml
+> imagemagick:
+>   binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
+> ```
 
 ### Запуск с Docker
 
 ```bash
-docker run -d -p 80:80 --volume ".:/app/example:rw" altrap/imager:v0.0.2
+docker build -t imager:production .
+docker run -d \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  -p 8080:8080 \
+  -v /host/config:/etc/imager:ro \
+  -v imager_source:/data/source \
+  -v imager_result:/data/result \
+  -e IMAGER_CONFIG_DIR=/etc/imager \
+  imager:production
 ```
 
-### Запуск с использованием `docker-compose`
+### Запуск с `docker-compose`
 
-```yaml
-services:
-  imager:
-    image: altrap/imager:v0.0.2
-    restart: always
-    stop_signal: INT
-    stop_grace_period: 5s
-    ports:
-      - 80:80
-      - 443:443
-    volumes:
-      - ./:/app/example:rw
-    working_dir: /app
-    networks:
-      - default
+В репозитории есть готовый [`docker-compose.yaml`](docker-compose.yaml) с production hardening (non-root, read-only root fs, dropped capabilities, no-new-privileges, tmpfs, resource limits, healthcheck):
+
+```bash
+docker compose up -d --build
 ```
 
-> **Примечание**: Настройки микро-сервиса можно указать в файле `setting.yaml`. Вы можете переопределить настройки, создав файл `setting-local.yaml` рядом с основным файлом конфигурации.
+Compose-файл монтирует каталог `./config` в `/etc/imager` (read-only) и задаёт `IMAGER_CONFIG_DIR=/etc/imager`. Внутри каталога лежат `setting.yaml` (обязательный) и опциональный `setting-local.yaml`.
+
+### Проверка
+
+```bash
+curl -i http://127.0.0.1:8080/healthz
+curl -i http://127.0.0.1:8080/test-jpg/c-120x80@2.webp
+```
 
 ---
 
 ## Конфигурация
 
-`setting.yaml` содержит общие настройки (http/unix/https, пути `source`/`result`) и секцию `asset` — конфигурацию конвейера генерации ассетов:
+### Загрузка конфигурации
+
+**Все** настройки приложения задаются исключительно в YAML. Прикладных CLI-флагов нет. Единственная env-переменная — `IMAGER_CONFIG_DIR` — путь к каталогу, где лежат:
+
+- `setting.yaml` — **обязательный** базовый конфиг (отсутствие или невалидность — ошибка запуска);
+- `setting-local.yaml` — **опциональный** локальный конфиг, который **глубоко переопределяет** базовый.
+
+Механизм загрузки (`internal/adapters/httpapi/configloader.go`):
+
+1. Читается обязательный базовый файл `setting.yaml`.
+2. Если рядом есть `setting-local.yaml` — его настройки **глубоко мержатся** поверх базового:
+   - вложенные `map` объединяются рекурсивно (ключи, не указанные в local, сохраняются);
+   - скаляры заменяются значением из local;
+   - **списки заменяются ЦЕЛИКОМ** (не дополняются) — например `allowed-origins` или `disabled-coders` нельзя «дополнить» в local.
+3. Результат строго декодируется (`yaml.UnmarshalStrict`): **любой ключ, отсутствующий в схеме, считается ошибкой** и валит старт (fail-fast).
+
+> **Важно**: добавляйте только ключи из документации ниже. Полный самодокументированный пример актуальной схемы — в [`config/setting.yaml`](config/setting.yaml).
+
+### Переменные окружения
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `IMAGER_CONFIG_DIR` | `.` | Каталог, где лежат `setting.yaml` и `setting-local.yaml`. |
+| `IMAGER_S3_ACCESS_KEY` | — | Access key для S3-хранилищ (если не задан в YAML). Значение из YAML имеет приоритет. |
+| `IMAGER_S3_SECRET_KEY` | — | Secret key для S3-хранилищ (если не задан в YAML). Значение из YAML имеет приоритет. |
+
+> Legacy-переменная `IMAGER_CONFIG_NAME` в коде **не существует** — не используйте её.
+
+### Схема верхнего уровня
 
 ```yaml
-asset:
-  # Бинарь ImageMagick (по умолчанию "magick").
-  # magick: "magick"
-
-  policy:
-    global:
-      # safe — только размеры из size-rules и разрешённые пресеты.
-      # unsafe — любые канонические запросы (поведение по умолчанию).
-      authorization: "unsafe"
-      # size-rules:
-      #   - "120x80"
-      # allowed-presets:
-      #   - "thumb"
-    # Переопределения политики для конкретных bucket.
-    # buckets:
-    #   - bucket: "private"
-    #     authorization: "safe"
-    presets:
-      - name: "thumb"
-        # Source format в пресете не задаётся: он определяется URL
-        # ({source_name}-{source_format}-{preset_name}.{output_format}).
-        transform: "c"        # "c" (crop), "t" (trim), "ct" (crop+trim)
-        size: "120x80"
-        dpr: 2                # только 2 или 3
-        output-format: "webp"
-
-  process:
-    quality: 85
-    trim:
-      active: false
-      rate: 10
-
-  cache:
-    cache-control: "public"
-    max-age: 2592000
-    s-maxage: 10800
-
-  not-found:
-    pixel: true
+version: "1"          # версия схемы (обязательна; другое значение — ошибка старта)
+server:               # HTTP/TCP сервер: addr, таймауты, лимиты
+http:                 # HTTP-адаптер: CORS, cache-control, not-found и т.д.
+policy:               # политика авторизации запросов (deny-by-default)
+processing:           # умолчания обработки (default-quality, default-loop)
+source:               # source-хранилище (storage, path, параметры backend)
+result:               # result-хранилище (storage, path, параметры backend)
+imagemagick:          # binary, policy.xml, resource limits
+application:          # прикладные лимиты (output-limit, buffer-max-bytes)
+observability:        # log-level
 ```
 
-Форматы источников и выходов проверяются по реальному capability registry ImageMagick (`magick -list format`) при старте — без искусственного whitelist.
+### `server` — HTTP/TCP сервер
 
----
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `addr` | string | `":8080"` | Адрес прослушивания TCP (`host:port`). Пусто = все интерфейсы на порту 8080. |
+| `read-header-timeout` | duration | `"5s"` | Таймаут чтения заголовков запроса (защита от slowloris). |
+| `read-timeout` | duration | `"15s"` | Таймаут чтения тела запроса. |
+| `write-timeout` | duration | `"30s"` | Таймаут записи ответа клиенту. |
+| `idle-timeout` | duration | `"60s"` | Таймаут простаивания keep-alive соединения. |
+| `shutdown-timeout` | duration | `"15s"` | Максимальное время ожидания активных запросов при graceful shutdown. |
+| `max-header-bytes` | int | `32768` | Максимальный суммарный размер заголовков (превышение → HTTP 431). |
+| `max-body-bytes` | int | `4096` | Жёсткий лимит тела запроса. Сервис **не принимает тела запросов**, поэтому лимит мал (защита от slow-body/DoS). `0` = без лимита. |
 
-## Конфигурация (YAML, без env)
+Таймауты задаются строками Go duration (`"5s"`, `"1m30s"`, `"250ms"`). Отрицательные значения запрещены.
 
-**Все** настройки приложения задаются исключительно в YAML. Прикладных
-env-переменных и CLI-флагов нет. Единственная env-переменная —
-`IMAGER_CONFIG_DIR` — путь к каталогу, где лежат:
+### `http` — HTTP-адаптер
 
-- `setting.yaml` — **обязательный** базовый конфиг;
-- `setting-local.yaml` — **опциональный**, глубоко переопределяет базовый
-  (вложенные `map` мержатся, скаляры заменяются, списки заменяются целиком).
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `allowed-origins` | list[string] | пусто | CORS allowlist (deny-by-default). Каждый элемент — схема+хост (`"https://cdn.example.com"`). Пустой список = никакие cross-origin запросы не получают CORS-заголовков. |
+| `allow-credentials` | bool | `false` | Разрешать `Access-Control-Allow-Credentials`. **Несовместим** с wildcard `"*"` в `allowed-origins` (ошибка валидации на старте). |
+| `cache-control` | string | `"public, max-age=31536000, immutable"` | `Cache-Control` для успешно сгенерированных канонических ассетов (immutable). Пусто = заголовок не выставляется. |
+| `not-found-cache-control` | string | `"no-store"` | `Cache-Control` для fallback-ответов (404 и т.п.). Пусто = не выставляется. |
+| `referrer-policy` | string | `"no-referrer"` | Значение заголовка `Referrer-Policy`. |
+| `csp` | string | пусто | Значение `Content-Security-Policy` (выставляется для fallback-страниц). Пусто = не выставляется. |
+| `max-url-len` | int | `1024` | Максимальная длина asset URL (`0` → 1024). Превышение → HTTP 414. |
+| `generate-timeout` | duration | `"30s"` | Таймаут генерации ассета (context deadline). Превышение → HTTP 504. |
+| `not-found.pixel` | bool | `false` | Отдавать прозрачный 1×1 пиксель в **запрошенном** формате при not-found. |
+| `not-found.image` | string | пусто | Путь к статическому файлу-картинке, отдаваемому с HTTP 404. |
+| `not-found.page` | string | пусто | Путь к статическому HTML-файлу, отдаваемому с HTTP 404. |
+| `not-found.redirect` | string | пусто | URL для 301-редиректа при not-found. |
 
-Неизвестные поля в любом файле отклоняются (strict decode, fail-fast).
+Поля `not-found` взаимоисключающие по приоритету: **pixel > redirect > image > page**.
 
-### Хранилища (source / result)
+### `policy` — политика авторизации и лимитов
 
-Source и result настраиваются **независимо** секциями `source:` и `result:`.
-Тип задаётся ключом `storage` (`fs`, `s3`, `sftp`, `ftp`, `ftps`, `http`).
+Политика применяется к каноническим и preset URL. **Всё запрещено по умолчанию**; разрешается только то, что явно покрыто правилами.
+
+#### `policy.global`
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `authorization` | string | `"safe"` | Режим авторизации: `"safe"` — разрешены только явно покрытые случаи (пресеты из `allowed-presets`, размеры из `size-rules`); `"unsafe"` — любые произвольные параметры разрешены (лимиты при этом не отключаются). |
+| `allowed-presets` | list[string] | пусто | Whitelist имён пресетов, доступных в URL. Имена указываются **полностью** (включая `@dpr`-суффикс): чтобы разрешить пресет `thumb@2`, указываем именно `thumb@2`. В режиме `safe` пресет вне списка → 404. Игнорируется при `authorization: "unsafe"`. |
+| `size-rules` | list[string] | пусто | Правила допустимых размеров для канонических запросов. Формат `"minW-maxWxminH-maxH"`; измерение может быть диапазоном (`"0-2000"`) или отсутствовать (пусто = «любая»). `"500x"` = точная ширина 500 при любой высоте. В режиме `safe` запрос отклоняется, если ни одно правило не совпало. Пустой список в режиме `safe` = все канонические запросы отклоняются. |
+| `limits` | — | — | Лимиты обрабатываемого запроса (применяются к **любому** режиму; `0` = без ограничения). |
+
+#### `policy.global.limits`
+
+| Ключ | Тип | Описание |
+|------|-----|----------|
+| `source-bytes` | int64 | Максимум размера исходного файла (байт). |
+| `width` | int | Максимум ширины запрошенного изображения (px). |
+| `height` | int | Максимум высоты запрошенного изображения (px). |
+| `pixels` | int64 | Максимум пикселей запрошенного изображения (w×h). |
+| `dpr` | int | Максимум значения dpr в запросе. |
+| `frames` | int | Максимум кадров анимации (GIF/WebP). |
+| `duration` | int64 | Максимум длительности анимации (мс). |
+| `output-bytes` | int64 | Максимум размера выходного файла (байт). |
+| `concurrency` | int | Максимум одновременных операций обработки от одного клиента. |
+
+#### `policy.path-policies[]`
+
+Политики по префиксам пути канонических URL. Применяются **только** к каноническим URL (не к пресетам) и лишь **ужесточают** глобальную политику (не расширяют права). Выбор — **longest prefix match** (самый длинный совпадающий префикс побеждает). `"/"` — fallback, применяется ко всем путям без более специфичного совпадения.
+
+| Ключ | Тип | Описание |
+|------|-----|----------|
+| `path` | string | Префикс пути. `"basket/products"` нормализуется в `"/basket/products"`. |
+| `dpr` | string | Диапазон допустимых DPR (`"0-1"`, `"2-3"`; пусто = без ограничения). |
+| `crop` | bool/nil | `nil` = неважно; `true` = crop обязан быть в URL; `false` = crop запрещён. |
+| `trim` | bool/nil | Аналогично для trim. |
+
+#### `policy.presets[]`
+
+Именованные конфигурации обработки. Имена должны быть **уникальными**, ≤ 64 символов, без дефисов `-` (допустимы буквы, цифры, `_`, `.`, `@` для суффикса `@dpr`).
+
+| Ключ | Тип | Описание |
+|------|-----|----------|
+| `name` | string | Имя пресета (обязательно, ≤ 64 символов). |
+| `crop` | bool | `false` (дефолт). |
+| `trim` | bool | `false` (дефолт). |
+| `size` | string | `"WxH"`; одно из измерений может быть пустым (`"x400"`); `"x"` = оригинал. |
+| `output-format` | string | `jpeg` \| `png` \| `webp` \| `gif` \| `avif` \| `heif` \| `apng`. |
+| `quality` | int | `0`–`100` (`0` = `default-quality` из `processing`). |
+| `dpr` | int | `0`/`1`/`2`/`3` (`0` = не задан; при не заданном dpr берётся из `@dpr`-суффикса имени). |
+| `frames` | int | Макс. число кадров анимации (`0` = без ограничения). |
+| `duration` | int | Макс. длительность анимации в мс (`0` = без ограничения). |
+| `loop` | bool/nil | `nil` = `default-loop` из `processing`; `true` = бесконечный loop; `false` = однопроходная анимация. |
+
+Комбинации `crop`/`trim` формируют трансформацию:
+
+| crop | trim | Трансформация |
+|------|------|---------------|
+| `false` | `false` | resize |
+| `true` | `false` | crop (центрированная обрезка) |
+| `false` | `true` | trim (обрезка краёв) |
+| `true` | `true` | crop-trim (trim затем crop) |
+
+### `processing` — умолчания обработки
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `default-quality` | int | `85` | Качество сжатия по умолчанию (`0`–`100`; вне диапазона — ошибка валидации). Применяется к lossy-форматам (jpeg/webp). На PNG влияет `png-compression-level`. |
+| `default-loop` | bool/nil | `true` | Зацикливание анимаций по умолчанию (GIF/WebP/APNG/HEIF), если в пресете не задан `loop`. |
+
+### `source` / `result` — хранилища
+
+Source и result настраиваются **независимо** секциями `source:` и `result:`. Тип задаётся ключом `storage` (`fs`, `s3`, `sftp`, `ftp`, `ftps`, `http`). `fs` (или пустое значение) — локальный filesystem на `path`.
+
+Общая схема одной секции:
 
 ```yaml
-source:
-  storage: fs
-  path: /var/www/site.ru/images
-result:
-  storage: fs
-  path: /var/cache/imager
+source:            # или result:
+  storage: fs      # fs | s3 | sftp | ftp | ftps | http
+  path: "./data/source"   # локальный каталог при storage: fs
+  # + параметры backend (см. ниже)
 ```
-
-> **Важно**: и FTP, и FTPS поддерживают и source, и result. Публикация
-> выполняется через temp-upload + rename и требует от сервера команд
-> `STOR`, `RNFR`/`RNTO` и `DELE` (базовый RFC 959). Если сервер не
-> поддерживает эти команды, `Publish` вернёт ошибку `ErrUnavailable`.
 
 Общие ключи (применимы к обеим секциям):
 
-| Ключ | По умолчанию | Описание |
-|-----|--------------|----------|
+| Ключ | Дефолт | Описание |
+|------|--------|----------|
 | `storage` | `fs` | Тип хранилища: `fs`, `s3`, `sftp`, `ftp`, `ftps`, `http`. |
 | `path` | `./data/source` / `./data/result` | Локальный каталог для `fs`. |
 | `spool-dir` | `os.TempDir()` | Каталог временных spool при чтении remote-объектов. |
 | `spool-max-bytes` | `0` (нет) | Лимит размера spool при чтении (превышение → quota error). |
-| `dial-timeout` | `30s` | Таймаут соединения для SFTP/FTP/FTPS и HTTP-запросов (например `10s`). |
+| `dial-timeout` | `30s` | Таймаут соединения для SFTP/FTP/FTPS, HTTP и S3. |
+| `read-timeout` | `60s` (S3/HTTP) | Таймаут выполнения операции для S3/HTTP. |
+| `max-attempts` | `3` | Число попыток операции (S3/HTTP). |
+| `max-idle-conns` | `100` | Макс. idle-соединений в пуле (S3/HTTP). |
+| `max-idle-conns-per-host` | `10` | Макс. idle-соединений на хост (S3/HTTP). |
+| `idle-conn-timeout` | `90s` | Время жизни idle-соединения (S3/HTTP). |
+| `metadata-ttl` | `30s` | TTL кэша метаданных S3 (`0` = кэш отключён). |
+
+> **Важно**: и FTP, и FTPS поддерживают и source, и result. Публикация выполняется через temp-upload + rename и требует от сервера команд `STOR`, `RNFR`/`RNTO` и `DELE` (базовый RFC 959). Если сервер не поддерживает эти команды, `Publish` вернёт ошибку `ErrUnavailable`.
 
 #### S3 (`storage: s3`)
 
-| Ключ | По умолчанию | Описание |
-|-----|--------------|----------|
+| Ключ | Дефолт | Описание |
+|------|--------|----------|
 | `bucket` | — | Имя bucket (**обязательно**). |
 | `prefix` | — | Префикс ключей внутри bucket (опционально). |
-| `endpoint` | AWS | Endpoint для S3-совместимых хранилищ (MinIO и т.п.). |
-| `region` | — | Регион AWS. |
+| `endpoint` | AWS | Endpoint для S3-совместимых хранилищ (MinIO, Yandex Object Storage и т.п.). Пусто = AWS. |
+| `region` | — | Регион. |
 | `access-key` | — | Access key. |
 | `secret-key` | — | Secret key. |
 
-Если `access-key`/`secret-key` не заданы, используется стандартная цепочка
-credentials AWS SDK (env/instance role и т.д.). S3 поддерживает и source, и
-result. `NoOverwrite` реализуется через conditional PUT (`If-None-Match: "*"`).
+Требования валидации:
+
+- `bucket` обязателен;
+- `access-key` и `secret-key` задаются **только парой** (один без другого — ошибка);
+- если ключи не заданы в YAML, используются env `IMAGER_S3_ACCESS_KEY` / `IMAGER_S3_SECRET_KEY` (значение из YAML имеет приоритет).
+
+S3 поддерживает и source, и result. `NoOverwrite` реализуется через conditional PUT (`If-None-Match: "*"`).
 
 #### SFTP (`storage: sftp`)
 
-| Ключ | По умолчанию | Описание |
-|-----|--------------|----------|
+| Ключ | Дефолт | Описание |
+|------|--------|----------|
 | `addr` | — | Адрес `host:port` (**обязательно**). |
 | `user` | — | Пользователь (**обязательно**). |
 | `password` | — | Пароль (password auth). |
 | `private-key-file` | — | Путь к файлу приватного ключа (key auth). |
 | `root` | — | Корневой каталог внутри SFTP (пусто = домашний каталог). |
+| `host-key-fingerprint` | — | SHA-256 fingerprint host key (**обязательно**, например `SHA256:...`). |
 
-Требуется хотя бы один метод аутентификации: `password` или
-`private-key-file`. Поддерживает и source, и result. Result публикуется через
-temp-upload + rename (атомарно); `NoOverwrite` — через эксклюзивное создание
-(`O_EXCL`).
+Требования валидации:
 
-> **SSH host key**: адаптер использует `ssh.InsecureIgnoreHostKey()` — проверка
-> host key **отключена**. Используйте только в доверенных сетях или за
-> VPN/SSH-туннелем.
+- `addr`, `user` и `host-key-fingerprint` обязательны;
+- требуется хотя бы один метод аутентификации: `password` или `private-key-file`.
 
-#### FTPS (`storage: ftps`) и FTP (`storage: ftp`)
+SFTP поддерживает и source, и result. Result публикуется через temp-upload + rename (атомарно); `NoOverwrite` — через эксклюзивное создание (`O_EXCL`).
 
-| Ключ | По умолчанию | Описание |
-|-----|--------------|----------|
+> **SSH host key**: для SFTP **обязательно** задать `host-key-fingerprint` (SHA-256). Без него конфигурация отклоняется на этапе валидации. Fingerprint можно получить командой `ssh-keyscan -t ed25519 host | ssh-keygen -lf -`.
+
+#### FTP (`storage: ftp`) и FTPS (`storage: ftps`)
+
+| Ключ | Дефолт | Описание |
+|------|--------|----------|
 | `addr` | — | Адрес `host:port` (**обязательно**). |
-| `user` | — | Пользователь (**обязательно**). |
+| `user` | — | Пользователь. |
 | `password` | — | Пароль. |
 | `root` | — | Корневой каталог (пусто = корень). |
 | `tls` | `false` | Для `ftps` всегда `true` (explicit TLS, AUTH TLS). |
+| `tls-verify` | `true` | Проверять TLS-сертификат. Для `ftps` значение `false` **запрещено** (ошибка валидации). |
 
-- **FTPS** (`ftps`): поддерживает и source, и result. Result публикуется через
-  temp-upload + rename; `NoOverwrite` — best-effort проверка существования
-  перед rename (не атомарно).
-- **FTP** (`ftp`): поддерживает и source, и result (аналогично FTPS, но без
-  TLS). Публикация требует команд `STOR`, `RNFR`/`RNTO` и `DELE`; при их
-  отсутствии `Publish` вернёт `ErrUnavailable`. `NoOverwrite` — best-effort
-  проверка существования перед rename (не атомарно).
+- **FTPS** (`ftps`): поддерживает и source, и result. Result публикуется через temp-upload + rename; `NoOverwrite` — best-effort проверка существования перед rename (не атомарно).
+- **FTP** (`ftp`): поддерживает и source, и result (аналогично FTPS, но без TLS). Публикация требует команд `STOR`, `RNFR`/`RNTO` и `DELE`; при их отсутствии `Publish` вернёт `ErrUnavailable`.
 
-> **TLS**: FTPS использует `tls.Config{InsecureSkipVerify: true}` — проверка
-> сертификата **отключена**. Используйте только в доверенных сетях.
+> **TLS**: FTPS проверяет сертификат по умолчанию (`tls-verify: true`). Отключение проверки (`tls-verify: false`) **запрещено** на этапе валидации. Для самоподписанных сертификатов настройте доверенные CA в системе.
 
 #### HTTP/HTTPS (`storage: http`)
 
-HTTP/HTTPS — **source-only** backend: он реализует только чтение исходников
-и **не может** использоваться как result.
+HTTP/HTTPS — **source-only** backend: реализует только чтение исходников и **не может** использоваться как result (ошибка старта).
+
+| Ключ | Дефолт | Описание |
+|------|--------|----------|
+| `base-url` | — | Базовый адрес исходников (**обязательно**). Не должен содержать query-параметры или fragment. |
 
 ```yaml
 source:
@@ -254,68 +384,264 @@ URL:      https://addr.site/path_to_image/foo/bar.jpg
 
 - `Lookup` — через `HEAD`, `Open` — через `GET`.
 - **Redirects запрещены**: любой ответ `3xx` → `ErrUnavailable`.
-- `404`/`410` → `ErrNotFound`; `401`/`403`, `408`, `429`, `5xx` и прочие
-  non-2xx → `ErrUnavailable`.
-- Размер ограничивается `spool-max-bytes` (превышение → `ErrQuota`); при
-  наличии `Content-Length` объект отклоняется до скачивания.
+- `404`/`410` → `ErrNotFound`; `401`/`403`, `408`, `429`, `5xx` и прочие non-2xx → `ErrUnavailable`.
+- Размер ограничивается `spool-max-bytes` (превышение → `ErrQuota`); при наличии `Content-Length` объект отклоняется до скачивания.
 - Метаданные — из `Content-Length`, `Last-Modified`, `Content-Type`, `ETag`.
 - Таймаут запроса — `dial-timeout` (по умолчанию `30s`).
-- `base-url` не должен содержать query-параметры или fragment.
 
-### Примеры
+### `imagemagick` — процессор ImageMagick
 
-Source из S3, result в локальный FS (фрагмент `setting-local.yaml`):
+Процессор запускает бинарник ImageMagick как subprocess для каждой операции. Лимиты применяются **тремя слоями**:
+
+1. `-limit` аргументы командной строки (`limits` ниже);
+2. сгенерированный `policy.xml` (`policy` ниже) через `MAGICK_CONFIGURE_PATH`;
+3. application-level ограничения: bounded writer (`output-bytes`) и context deadline (`timeout`) — не полагаются только на policy.
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `binary` | string | `"magick"` | Имя или путь к исполняемому файлу ImageMagick. Для версии 6 укажите `"convert"`. |
+
+#### `imagemagick.policy` — deny-by-default policy.xml
+
+При `enabled: true` генерируется политика:
+
+- запрет всех coders/delegates по умолчанию, разрешён только безопасный whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/PNM/TIFF/BMP/ICO);
+- явный запрет network- и scripting-coders (URL/HTTPS/HTTP/FTP/MSL/MVG/LABEL/TEXT/PLASMA/WPG/PS/PDF/SVG и др.) и delegates (curl, wget, ssh, rsvg, inkscape...);
+- resource limits (`0` = не задавать соответствующую директиву).
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `true` | Включать генерацию policy.xml. `false` = полагаться на системную policy. |
+| `dir` | string | пусто | Каталог, куда пишется policy.xml. Пусто = временный каталог (удаляется при закрытии). Файл пишется атомарно (права 0600, каталог 0700). |
+| `max-memory-bytes` | int64 | `0` | Resource policy: память (байт). |
+| `max-map-bytes` | int64 | `0` | Resource policy: виртуальная память (байт). |
+| `max-disk-bytes` | int64 | `0` | Resource policy: дисковый кэш (байт). |
+| `max-threads` | int | `0` | Resource policy: потоки. |
+| `max-time-seconds` | int | `0` | Resource policy: время выполнения (сек). |
+| `max-width` | int64 | `0` | Resource policy: ширина (px). |
+| `max-height` | int64 | `0` | Resource policy: высота (px). |
+| `max-pixels` | int64 | `0` | Resource policy: площадь (px, защита от decompression bomb). |
+| `max-frames` | int | `0` | Resource policy: кадры анимации. |
+| `disable-network` | bool | `true` | Отключать network-capable delegates (URL, HTTPS, FTP, MSL, MVG...) в policy.xml. **Не отключайте в production** (риск SSRF). |
+| `disabled-coders` | list[string] | пусто | Дополнительные coders для явного запрета (помимо встроенного опасного списка). |
+| `disabled-delegates` | list[string] | пусто | Дополнительные delegates для явного запрета. |
+
+#### `imagemagick.limits` — resource limits subprocess
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `timeout` | duration | — | Application-level context deadline на один subprocess. Превышение → убийство процесса и `LimitError`. |
+| `output-bytes` | int64 | `0` | Application-level лимит размера выходного файла (bounded writer на stdout; при превышении подпроцесс отменяется). |
+| `memory-bytes` | int64 | `0` | `-limit memory` (байт). |
+| `map-bytes` | int64 | `0` | `-limit map` (байт). |
+| `disk-bytes` | int64 | `0` | `-limit disk` (байт). |
+| `threads` | int | `0` | `-limit threads` (`0` = авто). |
+| `time-seconds` | int | `0` | `-limit time` (сек). |
+| `width` | int64 | `0` | `-limit width` (px). |
+| `height` | int64 | `0` | `-limit height` (px). |
+| `pixels` | int64 | `0` | `-limit area` (px = w×h; защита от decompression bomb). |
+| `frames` | int | `0` | Лимит кадров анимации (list-length в policy). |
+| `concurrency` | int | `16` | Максимум одновременно работающих ImageMagick subprocess (реальная защита CPU/RAM). `0` = в коде применяется `16`. Рекомендуется задавать явное разумное значение (например 2–4). |
+| `webp-method` | int | `0` | Метод сжатия WebP (`0`–`6`; `0` = умолчание ImageMagick, `4` = баланс, `6` = максимальное сжатие). |
+| `png-compression-level` | int | `0` | Уровень сжатия PNG (`0`–`9`; `0` = умолчание ImageMagick, обычно `6`). |
+
+### `application` — прикладные лимиты
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `output-limit` | int64 | `0` | Максимальный размер выходного файла, который будет сохранён (`0` = без лимита). При превышении генерация прерывается, результат не сохраняется. |
+| `buffer-max-bytes` | int64 | `524288000` | Общий бюджет памяти для spillable-буфера (source и result вместе). При исчерпании — спул на диск. `0` = без лимита (не рекомендуется). |
+
+### `observability` — логирование
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `log-level` | string | `"info"` | Уровень логирования: `debug`, `info`, `warn`, `error` (регистронезависимо). |
+
+---
+
+## Политики и лимиты (сводка)
+
+Лимиты применяются на нескольких уровнях:
+
+1. **`policy.global.limits`** — лимиты запроса (размер исходника, размеры, пиксели, dpr, кадры, длительность, размер выхода, concurrency). Применяются к любому режиму авторизации.
+2. **`imagemagick.policy`** — resource policies в сгенерированном `policy.xml` (память, диск, потоки, время, размеры, пиксели, кадры). Применяются ImageMagick на уровне policy **до** `-limit`.
+3. **`imagemagick.limits`** — `-limit` аргументы subprocess (memory/map/disk/threads/time/width/height/area/frames) + application-level (`timeout`, `output-bytes`, `concurrency`).
+4. **`application`** — `output-limit` (размер сохраняемого файла) и `buffer-max-bytes` (бюджет памяти буферов).
+
+---
+
+## Безопасность
+
+- **Deny-by-default `policy.xml`**: запрещает все coders/delegates, разрешает только безопасный whitelist; network- и scripting-coders отключены (`imagemagick.policy.enabled`, `disable-network`).
+- **Resource limits**: ImageMagick subprocess ограничен по памяти/времени/размеру выхода; application-level bounded writer и context deadline не полагаются только на policy.
+- **CORS deny-by-default**: пустой `allowed-origins` = никакие cross-origin запросы не получают CORS-заголовков; комбинация `"*"` + `allow-credentials: true` запрещена.
+- **HTTP hardening**: security-заголовки (`Referrer-Policy`, опционально `CSP`), bounded URL length (414), `max-header-bytes` (431), `max-body-bytes` (сервис не принимает тела запросов), таймауты сервера.
+- **Not-found fallback**: при отсутствии ассета — пиксель/редирект/картинка/страница (приоритет: pixel > redirect > image > page), с `Cache-Control: no-store`.
+- **SFTP**: обязательная проверка host key (`host-key-fingerprint`).
+- **FTPS**: обязательная проверка TLS-сертификата (`tls-verify: false` запрещён).
+- **HTTP source**: redirects запрещены (защита от SSRF через редиректы).
+- **Секреты**: не логируются, не попадают в метрики; задаются в `setting-local.yaml` (не коммитится) или через env `IMAGER_S3_ACCESS_KEY` / `IMAGER_S3_SECRET_KEY`.
+
+---
+
+## Эндпоинты
+
+| Endpoint | Назначение |
+|----------|------------|
+| `/*` | Asset URL (канонический или preset) — обрабатывается через fallback-семантику. |
+| `/healthz` | Liveness. `200` пока процесс жив; `503` при shutdown. |
+| `/readyz` | Readiness. `200` пока сервис принимает запросы (включая проверку зависимостей); `503` при shutdown или недоступности зависимостей. |
+| `/metrics` | Метрики в Prometheus exposition format (bounded cardinality). |
+| `/debug/vars` | Сырые expvar-переменные (тот же источник, что `/metrics`). |
+| всё прочее | 404 через fallback-семантику (not-found). |
+
+Healthcheck в Dockerfile/compose использует `/healthz`.
+
+### Observability
+
+- **Логи**: структурированные JSON-логи в **stderr** через `log/slog`. Каждый запрос получает `request_id` (заголовок `X-Request-Id` или сгенерированный).
+- **Приватность**: URL/query/raw user input и секреты **не** логируются и не попадают в метрики. Логируются только bounded-события (статус-классы, ошибки по категориям, длительности).
+- **Метрики** (stdlib `expvar`, без внешних зависимостей; все label-ы — фиксированные enum-ы):
+  - `imager_requests{class}` — счётчик запросов по классу статуса (`2xx/3xx/4xx/5xx`);
+  - `imager_request_duration_seconds` — гистограмма длительности запросов;
+  - `imager_cache_hits` / `imager_cache_misses` — кэш-стадии;
+  - `imager_processor_success` / `imager_processor_errors` — стадия процессора;
+  - `imager_processor_duration_seconds` — гистограмма обработки;
+  - `imager_storage_ops{op}` — операции хранилища (`source_lookup`, `source_open`, `result_lookup`, `result_open`, `result_publish`) с суффиксом `_success`/`_error`;
+  - `imager_storage_duration_seconds_{op}` — гистограммы длительности storage ops.
+
+---
+
+## Примеры конфигураций
+
+### FS → FS (минимальный)
+
+```yaml
+version: "1"
+
+server:
+  addr: ":8080"
+
+http:
+  allowed-origins:
+    - "https://cdn.example.com"
+  allow-credentials: false
+  cache-control: "public, max-age=31536000, immutable"
+  not-found:
+    pixel: true
+
+policy:
+  global:
+    authorization: "safe"
+    allowed-presets: ["thumb"]
+    size-rules: ["0-2000x0-2000"]
+    limits:
+      source-bytes: 10485760        # 10 MiB
+      output-bytes: 10485760        # 10 MiB
+  presets:
+    - name: "thumb"
+      size: "200x200"
+      output-format: webp
+      quality: 85
+      dpr: 1
+
+processing:
+  default-quality: 85
+
+source:
+  storage: fs
+  path: "./data/source"
+
+result:
+  storage: fs
+  path: "./data/result"
+
+imagemagick:
+  binary: "magick"
+  policy:
+    enabled: true
+  limits:
+    timeout: "30s"
+    output-bytes: 10485760
+    concurrency: 2
+
+application:
+  output-limit: 10485760
+  buffer-max-bytes: 524288000
+
+observability:
+  log-level: "info"
+```
+
+### S3 → S3
 
 ```yaml
 source:
   storage: s3
-  bucket: my-images
-  region: eu-central-1
+  bucket: "my-images-source"
+  prefix: "source/"
+  endpoint: "https://storage.yandexcloud.net"
+  region: "ru-central1"
+  access-key: "AKIA..."            # или env IMAGER_S3_ACCESS_KEY
+  secret-key: "..."                # или env IMAGER_S3_SECRET_KEY
+  dial-timeout: "30s"
+  read-timeout: "60s"
+  max-attempts: 3
+  max-idle-conns: 100
+  max-idle-conns-per-host: 10
+  idle-conn-timeout: "90s"
+  metadata-ttl: "30s"
+
+result:
+  storage: s3
+  bucket: "my-result-bucket"
+  prefix: "gen"
+  endpoint: "https://storage.yandexcloud.net"
+  region: "ru-central1"
   access-key: "AKIA..."
   secret-key: "..."
 ```
 
-Source из SFTP, result в S3 (фрагмент `setting-local.yaml`):
+### SFTP → S3
 
 ```yaml
 source:
   storage: sftp
-  addr: storage.example.com:22
-  user: imager
-  private-key-file: /run/secrets/id_ed25519
-  root: /var/imager/source
+  addr: "sftp.example.com:22"
+  user: "imager"
+  private-key-file: "/etc/imager/id_ed25519"
+  root: "/srv/images"
+  host-key-fingerprint: "SHA256:AbCd..."   # обязательно
+  dial-timeout: "30s"
+
 result:
   storage: s3
-  bucket: imager-cache
-  prefix: thumbs
+  bucket: "imager-cache"
+  prefix: "thumbs"
 ```
 
-Source из HTTP/HTTPS, result в локальный FS (фрагмент `setting-local.yaml`):
+### HTTP → FS
 
 ```yaml
 source:
   storage: http
-  base-url: "https://addr.site/path_to_image/"
+  base-url: "https://cdn.example.com/images"
   spool-max-bytes: 10485760
+  dial-timeout: "30s"
+  read-timeout: "60s"
+  max-attempts: 3
+
+result:
+  storage: fs
+  path: "./data/result"
 ```
 
 ---
 
-## Пример настройки микро-сервиса с Nginx
+## Пример настройки с Nginx
 
-Если вы хотите использовать Nginx для проксирования запросов, выполните следующие шаги.
-
-### Запуск с Docker
-
-```bash
-docker run -d -p 8181:80 --volume ".:/app/example:rw" --restart=always altrap/imager:v0.0.2
-```
-
-### Конфигурация Nginx
-
-Файлы должны быть доступны для Nginx. Если файл не существует, запрос будет перенаправлен на микро-сервис, который создаст превью изображения.
-
-**Пример конфигурации для Nginx**:
+Если вы хотите использовать Nginx для проксирования запросов: если файл не существует, запрос перенаправляется на микросервис, который создаст превью изображения.
 
 ```nginx
 server {
@@ -338,13 +664,15 @@ server {
 }
 
 upstream imager {
-    server http://127.0.0.1:8181;
+    server http://127.0.0.1:8080;
 }
 ```
 
-> **Примечание**: Imager можно использовать как самостоятельный сервер. Для этого необходимо установить зависимости: 
-> - [ImageMagick](https://imagemagick.org/script/download.php)
-> - [FFmpeg](https://ffmpeg.org/download.html)
+---
+
+## Production
+
+Полное руководство по production-запуску, env/config, security assumptions, resource limits, health endpoints и storage roadmap — в [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
 
 ---
 
@@ -354,15 +682,11 @@ upstream imager {
 
 ### [Golang](https://github.com/pkg-ru/imager-client/blob/master/doc/GO-RU.md)
 
-Для установки клиента Golang:
-
 ```bash
 go get github.com/pkg-ru/imager-client
 ```
 
 ### [PHP](https://github.com/pkg-ru/imager-client/blob/master/doc/PHP-RU.md)
-
-Для установки клиента PHP:
 
 ```bash
 composer require pkg-ru/imager-client
@@ -370,16 +694,11 @@ composer require pkg-ru/imager-client
 
 ### [JavaScript (TypeScript)](https://github.com/pkg-ru/imager-client/blob/master/doc/TS-RU.md)
 
-Для установки клиента JavaScript (или TypeScript):
-
 ```bash
 npm i imager-client
 ```
 
 ### [Python3](https://github.com/pkg-ru/imager-client/blob/master/doc/PY-RU.md)
 
-Для установки клиента Python:
-
 ```bash
 pip install imager-client
-```

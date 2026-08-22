@@ -6,7 +6,7 @@ import (
 
 func TestCanonicalIDStable(t *testing.T) {
 	// Один и тот же запрос всегда даёт один и тот же CanonicalID.
-	url := "/v1/photos/photo-1-jpg/c-120x80@2.webp"
+	url := "/photos/photo-1-jpg/c-120x80@2.webp"
 	req1, err := Parse(url)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
@@ -34,11 +34,11 @@ func TestCanonicalIDStable(t *testing.T) {
 func TestCanonicalIDDistinct(t *testing.T) {
 	// Разные запросы дают разные CanonicalID.
 	urls := []string{
-		"/v1/photos/photo-1-jpg/c-120x80@2.webp",
-		"/v1/photos/photo-1-jpg/c-120x80@3.webp",
-		"/v1/photos/photo-1-jpg/c-121x80@2.webp",
-		"/v1/photos/photo-1-jpg/t-120x80@2.webp",
-		"/v1/photos/photo-2-jpg/c-120x80@2.webp",
+		"/photos/photo-1-jpg/c-120x80@2.webp",
+		"/photos/photo-1-jpg/c-120x80@3.webp",
+		"/photos/photo-1-jpg/c-121x80@2.webp",
+		"/photos/photo-1-jpg/t-120x80@2.webp",
+		"/photos/photo-2-jpg/c-120x80@2.webp",
 	}
 	ids := make(map[string]bool)
 	for _, u := range urls {
@@ -106,7 +106,7 @@ func TestCanonicalPathTooLong(t *testing.T) {
 
 func TestCanonicalizeURLIdempotent(t *testing.T) {
 	// Parse -> Build -> Parse -> Build должен быть идемпотентным.
-	url := "/v1/photos/photo-1-jpg/c-120x80@2.webp"
+	url := "/photos/photo-1-jpg/c-120x80@2.webp"
 	req, err := Parse(url)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
@@ -115,7 +115,7 @@ func TestCanonicalizeURLIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build error: %v", err)
 	}
-	req2, err := Parse("/v1/" + built)
+	req2, err := Parse("/" + built)
 	if err != nil {
 		t.Fatalf("Parse(rebuild) error: %v", err)
 	}

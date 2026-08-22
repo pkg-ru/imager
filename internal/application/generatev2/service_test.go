@@ -78,7 +78,7 @@ func mustPreset(t *testing.T, name string, tr asset.Transform, size string, outF
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
-	p, err := asset.NewPreset(name, tr, sz, of)
+	p, err := asset.NewPreset(name, tr, sz, of, 0, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("preset: %v", err)
 	}

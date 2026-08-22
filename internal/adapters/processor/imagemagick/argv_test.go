@@ -12,7 +12,7 @@ func boolPtr(b bool) *bool { return &b }
 func TestBuildArgv_ValidResize(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 800, Height: 600}, 1, 85, nil,
+		processing.Size{Width: 800, Height: 600}, 1, 85, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -62,7 +62,7 @@ func TestBuildArgv_ValidResize(t *testing.T) {
 func TestBuildArgv_ValidCrop(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpCrop, processing.FormatPNG, processing.FormatJPEG,
-		processing.Size{Width: 400, Height: 300}, 2, 90, nil,
+		processing.Size{Width: 400, Height: 300}, 2, 90, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -80,7 +80,7 @@ func TestBuildArgv_ValidCrop(t *testing.T) {
 func TestBuildArgv_ValidTrim(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpTrim, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -103,7 +103,7 @@ func TestBuildArgv_ValidTrim(t *testing.T) {
 func TestBuildArgv_TrimIM6NoTrimBounds(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpTrim, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -125,7 +125,7 @@ func TestBuildArgv_TrimIM6NoTrimBounds(t *testing.T) {
 func TestBuildArgv_AnimatedOutputNoFrameIndex(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 100, Height: 100}, 1, 80, boolPtr(true),
+		processing.Size{Width: 100, Height: 100}, 1, 80, boolPtr(true), 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -146,7 +146,7 @@ func TestBuildArgv_AnimatedOutputNoFrameIndex(t *testing.T) {
 func TestBuildArgv_RejectsInvalidOperation(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -160,7 +160,7 @@ func TestBuildArgv_RejectsInvalidOperation(t *testing.T) {
 func TestBuildArgv_RejectsUnsafeOutputFormat(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -174,7 +174,7 @@ func TestBuildArgv_RejectsUnsafeOutputFormat(t *testing.T) {
 func TestBuildArgv_RejectsUnsafeSourceFormat(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -189,7 +189,7 @@ func TestBuildArgv_NoUserStringsInArgv(t *testing.T) {
 	// План с экстремальными значениями не должен протаскивать строки в argv.
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -215,7 +215,7 @@ func TestBuildArgv_CapabilityValidation(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -234,7 +234,7 @@ func TestBuildArgv_CapabilityValidation(t *testing.T) {
 func TestBuildArgv_LimitArgs(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -275,7 +275,7 @@ func TestBuildArgv_LimitArgs(t *testing.T) {
 func TestBuildArgv_CropUsesExtent(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 400, Height: 300}, 1, 80, nil,
+		processing.Size{Width: 400, Height: 300}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
@@ -291,6 +291,71 @@ func TestBuildArgv_CropUsesExtent(t *testing.T) {
 	// N12: явный фон для extent.
 	if !strings.Contains(joined, "-background none") {
 		t.Errorf("crop PNG should set -background none, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_CropTrimOrder(t *testing.T) {
+	// Для OpCropTrim порядок операций: сначала trim, затем crop.
+	// В ImageMagick операции применяются слева направо, поэтому -trim должен
+	// предшествовать -thumbnail/-extent.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Width: 400, Height: 300}, 1, 80, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-trim") {
+		t.Fatalf("crop-trim should include -trim, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-thumbnail 400x300^") {
+		t.Fatalf("crop-trim should include crop thumbnail, got: %s", joined)
+	}
+	// -trim должен идти ДО -thumbnail (trim выполняется первым).
+	if strings.Index(joined, "-trim") > strings.Index(joined, "-thumbnail") {
+		t.Errorf("-trim must come before -thumbnail (trim then crop), got: %s", joined)
+	}
+}
+
+func TestBuildArgv_FramesLimit(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 10, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-limit list-length 10") {
+		t.Errorf("frames limit should add -limit list-length 10, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_DurationLimit(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 5000,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	// 5000 мс → ceil(5000/1000) = 5 секунд.
+	if !strings.Contains(joined, "-limit time 5") {
+		t.Errorf("duration limit should add -limit time 5, got: %s", joined)
 	}
 }
 

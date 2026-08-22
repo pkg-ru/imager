@@ -16,7 +16,7 @@ func TestMiddlewareGeneratesRequestID(t *testing.T) {
 	})
 	m := NewMiddleware(NopMetrics(), next)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	rec := httptest.NewRecorder()
 	m.ServeHTTP(rec, req)
 
@@ -36,7 +36,7 @@ func TestMiddlewarePropagatesIncomingRequestID(t *testing.T) {
 	})
 	m := NewMiddleware(NopMetrics(), next)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set(RequestIDHeader, "incoming-id-123")
 	rec := httptest.NewRecorder()
 	m.ServeHTTP(rec, req)
@@ -53,7 +53,7 @@ func TestMiddlewareRecordsStatusClass(t *testing.T) {
 	})
 	m := NewMiddleware(rec, next)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	m.ServeHTTP(httptest.NewRecorder(), req)
 
 	if rec.requests[Status4xx] != 1 {

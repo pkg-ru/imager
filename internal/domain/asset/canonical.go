@@ -14,7 +14,7 @@ import (
 // разделителей. Это гарантирует, что один и тот же ассет всегда имеет один
 // и тот же cache identity.
 type CanonicalID struct {
-	// url — каноническая форма URL (без ведущего "/v1/").
+	// url — каноническая форма URL (без ведущего "/").
 	url string
 	// hash — SHA-256 канонической формы.
 	hash string
@@ -87,7 +87,7 @@ func (c *Canonicalizer) CanonicalFormat(f Format) Format {
 }
 
 // CanonicalizeURL собирает канонический URL из компонентов запроса.
-// Возвращает каноническую форму (без ведущего "/v1/") и CanonicalID.
+// Возвращает каноническую форму (без ведущего "/") и CanonicalID.
 func (c *Canonicalizer) CanonicalizeURL(req *Request) (string, CanonicalID, error) {
 	if req == nil {
 		return "", CanonicalID{}, fmt.Errorf("canonicalize: nil request")

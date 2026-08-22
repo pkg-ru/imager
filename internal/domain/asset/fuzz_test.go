@@ -8,17 +8,17 @@ import (
 // всегда даёт идемпотентную каноническую форму.
 func FuzzParse(f *testing.F) {
 	seeds := []string{
-		"/v1/photos/photo-1-jpg/c-120x80@2.webp",
-		"/v1/logo-png/t-x50@3.png",
-		"/v1/img-jpg/ct-180x@2.avif",
-		"/v1/a/b/c/name-gif/c-10x10@3.gif",
-		"/v1/photos/photo-1-jpg/thumb.webp",
-		"/v1/photos/photo-1-jpg/trumb@2.webp",
-		"/v1/photos/photo-1-jpg/x.webp",
+		"/photos/photo-1-jpg/c-120x80@2.webp",
+		"/logo-png/t-x50@3.png",
+		"/img-jpg/ct-180x@2.avif",
+		"/a/b/c/name-gif/c-10x10@3.gif",
+		"/photos/photo-1-jpg/thumb.webp",
+		"/photos/photo-1-jpg/trumb@2.webp",
+		"/photos/photo-1-jpg/x.webp",
 		"",
-		"/v1/../../etc/passwd-jpg/c-120x80@2.webp",
-		"/v1/a%2fb/photo-jpg/c-120x80@2.webp",
-		"/v1/photo-jpg/c-99999999999999999999x80@2.webp",
+		"/../../etc/passwd-jpg/c-120x80@2.webp",
+		"/a%2fb/photo-jpg/c-120x80@2.webp",
+		"/photo-jpg/c-99999999999999999999x80@2.webp",
 	}
 	for _, s := range seeds {
 		f.Add(s)
@@ -33,7 +33,7 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			t.Fatalf("Build() error after successful Parse(%q): %v", raw, err)
 		}
-		req2, err := Parse("/v1/" + built)
+		req2, err := Parse("/" + built)
 		if err != nil {
 			t.Fatalf("Parse(rebuild %q) error: %v", built, err)
 		}

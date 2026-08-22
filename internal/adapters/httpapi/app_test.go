@@ -17,7 +17,7 @@ policy:
     authorization: unsafe
   presets:
     - name: thumb
-      transform: c
+      crop: true
       size: 120x80
       output-format: webp
 processing:
@@ -91,7 +91,7 @@ func TestBuildFullPipeline(t *testing.T) {
 	}
 
 	// Полный запрос через handler.
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 

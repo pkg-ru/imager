@@ -33,7 +33,7 @@ func TestHandlerGetSuccess(t *testing.T) {
 
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -63,7 +63,7 @@ func TestHandlerHeadNoBody(t *testing.T) {
 
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodHead, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodHead, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -89,7 +89,7 @@ func TestHandlerOptions(t *testing.T) {
 	gen := newFakeGenerator()
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodOptions, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/img-png/c-120x80@2.png", nil)
 	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -112,7 +112,7 @@ func TestHandlerOptionsDeniedOrigin(t *testing.T) {
 	gen := newFakeGenerator()
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodOptions, "/v1/x.png", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/x.png", nil)
 	req.Header.Set("Origin", "https://evil.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -130,7 +130,7 @@ func TestHandlerMethodNotAllowed(t *testing.T) {
 	h := newTestHandler(t, gen, baseConfig())
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
-		req := httptest.NewRequest(method, "/v1/x.png", nil)
+		req := httptest.NewRequest(method, "/x.png", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -147,10 +147,9 @@ func TestHandlerInvalidPath(t *testing.T) {
 	h := newTestHandler(t, gen, baseConfig())
 
 	cases := []string{
-		"/v1/",                      // пустой
-		"/v1/not-an-asset",          // нет структуры
-		"/v1/../etc/passwd",         // traversal
-		"/v1/img-png/c-120x80@2", // нет output format
+		"/not-an-asset",       // нет структуры
+		"/../etc/passwd",      // traversal
+		"/img-png/c-120x80@2", // нет output format
 	}
 	for _, p := range cases {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
@@ -167,7 +166,7 @@ func TestHandlerForbidden(t *testing.T) {
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeForbidden, Reason: "denied"})
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -181,7 +180,7 @@ func TestHandlerNotFoundNoFallback(t *testing.T) {
 	gen := newFakeGenerator()
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -198,7 +197,7 @@ func TestHandlerNotFoundPixelFallback(t *testing.T) {
 	cfg.Pixel = &fakePixel{}
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -219,7 +218,7 @@ func TestHandlerNotFoundPageFallback(t *testing.T) {
 	cfg.NotFound = NotFoundConfig{Page: "testdata/not-found.html"}
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -237,7 +236,7 @@ func TestHandlerETagNotModified(t *testing.T) {
 	h := newTestHandler(t, gen, baseConfig())
 
 	// Первый GET получаем ETag.
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	etag := rec.Header().Get("ETag")
@@ -246,7 +245,7 @@ func TestHandlerETagNotModified(t *testing.T) {
 	}
 
 	// Второй GET с If-None-Match → 304 без body.
-	req2 := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	req2.Header.Set("If-None-Match", etag)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
@@ -267,7 +266,7 @@ func TestHandlerSecurityHeaders(t *testing.T) {
 	cfg.CSP = "default-src 'none'"
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -287,7 +286,7 @@ func TestHandlerCORSAllowedOrigin(t *testing.T) {
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -302,7 +301,7 @@ func TestHandlerCORSDeniedOrigin(t *testing.T) {
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	req.Header.Set("Origin", "https://evil.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -317,7 +316,7 @@ func TestHandlerQuota(t *testing.T) {
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeQuota, Reason: "quota"})
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -332,7 +331,7 @@ func TestHandlerUnavailable(t *testing.T) {
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeUnavailable, Reason: "unavail"})
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -347,7 +346,7 @@ func TestHandlerProcessing(t *testing.T) {
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeProcessing, Reason: "proc"})
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -362,7 +361,7 @@ func TestHandlerCanceled(t *testing.T) {
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeCanceled, Reason: "canceled"})
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -377,7 +376,7 @@ func TestHandlerETagWildcardAndList(t *testing.T) {
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	etag := rec.Header().Get("ETag")
@@ -386,7 +385,7 @@ func TestHandlerETagWildcardAndList(t *testing.T) {
 	}
 
 	// Wildcard "*" → 304.
-	reqW := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	reqW := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	reqW.Header.Set("If-None-Match", "*")
 	recW := httptest.NewRecorder()
 	h.ServeHTTP(recW, reqW)
@@ -395,7 +394,7 @@ func TestHandlerETagWildcardAndList(t *testing.T) {
 	}
 
 	// Список ETag (включая текущий) → 304.
-	reqL := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	reqL := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	reqL.Header.Set("If-None-Match", `"other", `+etag)
 	recL := httptest.NewRecorder()
 	h.ServeHTTP(recL, reqL)
@@ -404,7 +403,7 @@ func TestHandlerETagWildcardAndList(t *testing.T) {
 	}
 
 	// Несовпадающий ETag → 200.
-	reqM := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	reqM := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	reqM.Header.Set("If-None-Match", `"other"`)
 	recM := httptest.NewRecorder()
 	h.ServeHTTP(recM, reqM)
@@ -420,7 +419,7 @@ func TestHandlerRedirectFallbackHeadNoBody(t *testing.T) {
 	h := newTestHandler(t, gen, cfg)
 
 	// HEAD → 301 без body.
-	req := httptest.NewRequest(http.MethodHead, "/v1/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodHead, "/missing-png/c-120x80@2.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMovedPermanently {
@@ -434,7 +433,7 @@ func TestHandlerRedirectFallbackHeadNoBody(t *testing.T) {
 	}
 
 	// GET → 301 с body.
-	reqG := httptest.NewRequest(http.MethodGet, "/v1/missing-png/c-120x80@2.png", nil)
+	reqG := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
 	recG := httptest.NewRecorder()
 	h.ServeHTTP(recG, reqG)
 	if recG.Code != http.StatusMovedPermanently {
@@ -450,7 +449,7 @@ func TestHandlerCORSDeniedVaryOrigin(t *testing.T) {
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
 	req.Header.Set("Origin", "https://evil.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

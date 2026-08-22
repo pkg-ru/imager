@@ -65,13 +65,26 @@ func (r *SizeRule) Matches(s asset.Size) bool {
 	return true
 }
 
-// BucketPolicy — скомпилированная политика для конкретного bucket (префикса пути).
-type BucketPolicy struct {
-	Bucket         string
-	Authorization  Authorization
-	SizeRules      []SizeRule
-	AllowedPresets []string
-	Limits         Limits
+// PathPolicy — скомпилированная path-policy для конкретного префикса пути.
+//
+// Path — нормализованный префикс пути (см. normalizePath). Политика
+// применяется только к каноническим URL (не preset) и является
+// дополнительным ограничением поверх глобальной политики: она не расширяет
+// права, а только ужесточает (dpr/crop/trim).
+type PathPolicy struct {
+	// Path — нормализованный префикс пути (например "/", "/users",
+	// "/basket/products"). "/" — fallback, применяется ко всем путям, если
+	// нет более специфичного совпадения.
+	Path string
+	// DPR — допустимый диапазон DPR (nil = без ограничения). Например
+	// "0-1" разрешает только dpr=1, "2-3" — dpr 2 или 3.
+	DPR *Range
+	// Crop — требование к crop (nil = не задано/неважно). true = crop
+	// обязан присутствовать в transform, false = crop запрещён.
+	Crop *bool
+	// Trim — требование к trim (nil = не задано/неважно). true = trim
+	// обязан присутствовать в transform, false = trim запрещён.
+	Trim *bool
 }
 
 // GlobalPolicy — скомпилированная глобальная политика по умолчанию.
@@ -87,49 +100,64 @@ type GlobalPolicy struct {
 // Политика неизменяема после компиляции. По умолчанию (когда не задан
 // AuthUnsafe и нет правил) все запросы отклоняются (deny-by-default).
 type Policy struct {
-	Global  GlobalPolicy
-	Buckets []BucketPolicy
+	Global       GlobalPolicy
+	PathPolicies []PathPolicy
 }
 
-// bucketIndex возвращает индекс политики bucket для заданного пути или -1.
-func (p *Policy) bucketIndex(path string) int {
+// normalizePath нормализует префикс пути:
+//   - добавляет ведущий "/", если отсутствует;
+//   - убирает завершающий "/" (кроме случая, когда путь — ровно "/").
+//
+// Примеры: "basket/products" → "/basket/products",
+// "/basket/users/" → "/basket/users", "/" → "/". Пустая строка остаётся
+// пустой (невалидный префикс).
+func normalizePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if path != "/" {
+		path = strings.TrimSuffix(path, "/")
+	}
+	return path
+}
+
+// pathIndex возвращает индекс path-policy для заданного пути по правилу
+// longest prefix match или -1, если ни одна не совпала.
+//
+// Путь запроса (req.Path()) — канонический путь без ведущего "/" (например
+// "users", "basket/products"), а префиксы path-policy нормализуются с
+// ведущим "/" (например "/users"). Совпадение по сегментам: путь совпадает
+// с префиксом, если путь == префикс (без ведущего "/") ИЛИ путь начинается
+// с префикс + "/". Префикс "/" — fallback, совпадает с любым путём и
+// применяется, когда нет более специфичного совпадения.
+func (p *Policy) pathIndex(path string) int {
 	best := -1
 	bestLen := -1
-	for i, b := range p.Buckets {
-		if b.Bucket == "" {
+	for i, pp := range p.PathPolicies {
+		if pp.Path == "" {
 			continue
 		}
-		if path == b.Bucket || strings.HasPrefix(path, b.Bucket+"/") {
-			if len(b.Bucket) > bestLen {
+		if pp.Path == "/" {
+			// "/" — fallback: совпадает с любым путём, но проигрывает
+			// любому более специфичному префиксу (длина 1).
+			if bestLen < 1 {
 				best = i
-				bestLen = len(b.Bucket)
+				bestLen = 1
+			}
+			continue
+		}
+		prefix := strings.TrimPrefix(pp.Path, "/")
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			if len(prefix) > bestLen {
+				best = i
+				bestLen = len(prefix)
 			}
 		}
 	}
 	return best
-}
-
-// effective возвращает объединённую политику для заданного пути.
-func (p *Policy) effective(path string) (GlobalPolicy, *BucketPolicy) {
-	g := p.Global
-	idx := p.bucketIndex(path)
-	if idx < 0 {
-		return g, nil
-	}
-	b := p.Buckets[idx]
-	if b.Authorization != "" {
-		g.Authorization = b.Authorization
-	}
-	if b.SizeRules != nil {
-		g.SizeRules = b.SizeRules
-	}
-	if b.AllowedPresets != nil {
-		g.AllowedPresets = b.AllowedPresets
-	}
-	if b.Limits != (Limits{}) {
-		g.Limits = b.Limits
-	}
-	return g, &b
 }
 
 // DecisionReason — причина решения политики.
@@ -148,6 +176,12 @@ const (
 	ReasonNilRequest DecisionReason = "nil_request"
 	// ReasonLimitExceeded — превышен лимит.
 	ReasonLimitExceeded DecisionReason = "limit_exceeded"
+	// ReasonDPRNotAllowed — DPR не попадает в диапазон path-policy.
+	ReasonDPRNotAllowed DecisionReason = "dpr_not_allowed"
+	// ReasonCropNotAllowed — crop не соответствует требованию path-policy.
+	ReasonCropNotAllowed DecisionReason = "crop_not_allowed"
+	// ReasonTrimNotAllowed — trim не соответствует требованию path-policy.
+	ReasonTrimNotAllowed DecisionReason = "trim_not_allowed"
 )
 
 // Decision — результат авторизации запроса.
@@ -164,11 +198,19 @@ type Decision struct {
 //
 // Политика deny-by-default: если режим не задан как unsafe и запрос не
 // покрыт правилами, он отклоняется.
+//
+// Порядок проверок:
+//  1. Глобальная логика: preset → allowed-presets; канонический → size-rules
+//     (unsafe пропускает эти проверки).
+//  2. Для канонических запросов применяется path-policy как дополнительное
+//     ограничение (dpr/crop/trim). Path-policy не расширяет права — она
+//     применяется только после того, как запрос разрешён глобальной
+//     политикой, и может только ужесточить решение.
 func (p *Policy) Authorize(req *asset.Request) Decision {
 	if req == nil {
 		return Decision{Allowed: false, Reason: ReasonNilRequest}
 	}
-	g, _ := p.effective(req.Path())
+	g := p.Global
 
 	if req.IsPreset() {
 		if g.Authorization == AuthUnsafe {
@@ -184,29 +226,83 @@ func (p *Policy) Authorize(req *asset.Request) Decision {
 		return Decision{Allowed: true, Reason: ReasonAllowed}
 	}
 
-	if g.Authorization == AuthUnsafe {
-		return Decision{Allowed: true, Reason: ReasonAllowed}
-	}
-
-	if len(g.SizeRules) == 0 {
-		return Decision{Allowed: false, Reason: ReasonDenyByDefault}
-	}
-	for _, rule := range g.SizeRules {
-		if rule.Matches(req.Size()) {
-			return Decision{Allowed: true, Reason: ReasonAllowed}
+	// Канонический запрос: глобальная политика (unsafe пропускает size-rules).
+	if g.Authorization != AuthUnsafe {
+		if len(g.SizeRules) == 0 {
+			return Decision{Allowed: false, Reason: ReasonDenyByDefault}
+		}
+		matched := false
+		for _, rule := range g.SizeRules {
+			if rule.Matches(req.Size()) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return Decision{
+				Allowed: false,
+				Reason:  ReasonSizeNotAllowed,
+				Detail:  fmt.Sprintf("size %s is not allowed by any rule", req.Size().String()),
+			}
 		}
 	}
-	return Decision{
-		Allowed: false,
-		Reason:  ReasonSizeNotAllowed,
-		Detail:  fmt.Sprintf("size %s is not allowed by any rule", req.Size().String()),
+
+	// Глобальная политика разрешила канонический запрос. Применяем
+	// path-policy как дополнительное ограничение (не расширяет права).
+	if d := p.authorizePath(req); !d.Allowed {
+		return d
 	}
+	return Decision{Allowed: true, Reason: ReasonAllowed}
 }
 
-// CheckLimits проверяет фактические значения против лимитов политики для пути.
+// authorizePath применяет path-policy к каноническому запросу.
+//
+// Если path-policies не настроены или ни одна не совпала (нет "/" и нет
+// совпадений) — запрос разрешается без ограничений: path-policy опциональна,
+// а "/" обычно задаётся как fallback.
+func (p *Policy) authorizePath(req *asset.Request) Decision {
+	idx := p.pathIndex(req.Path())
+	if idx < 0 {
+		return Decision{Allowed: true, Reason: ReasonAllowed}
+	}
+	pp := p.PathPolicies[idx]
+
+	if pp.DPR != nil {
+		if !pp.DPR.Contains(req.DPR().Int()) {
+			return Decision{
+				Allowed: false,
+				Reason:  ReasonDPRNotAllowed,
+				Detail:  fmt.Sprintf("dpr %d is not allowed for path %q (allowed %d-%d)", req.DPR().Int(), pp.Path, pp.DPR.Min, pp.DPR.Max),
+			}
+		}
+	}
+	if pp.Crop != nil {
+		hasCrop := req.Transform() == asset.TransformCrop || req.Transform() == asset.TransformCropTrim
+		if hasCrop != *pp.Crop {
+			return Decision{
+				Allowed: false,
+				Reason:  ReasonCropNotAllowed,
+				Detail:  fmt.Sprintf("crop=%v is not allowed for path %q (required %v)", hasCrop, pp.Path, *pp.Crop),
+			}
+		}
+	}
+	if pp.Trim != nil {
+		hasTrim := req.Transform() == asset.TransformTrim || req.Transform() == asset.TransformCropTrim
+		if hasTrim != *pp.Trim {
+			return Decision{
+				Allowed: false,
+				Reason:  ReasonTrimNotAllowed,
+				Detail:  fmt.Sprintf("trim=%v is not allowed for path %q (required %v)", hasTrim, pp.Path, *pp.Trim),
+			}
+		}
+	}
+	return Decision{Allowed: true, Reason: ReasonAllowed}
+}
+
+// CheckLimits проверяет фактические значения против лимитов политики.
+// Лимиты задаются только глобально (path-policy не содержит лимитов).
 func (p *Policy) CheckLimits(path string, sourceBytes int64, width, height, dpr, frames int, outputBytes, duration int64) CheckResult {
-	g, _ := p.effective(path)
-	return g.Limits.Check(sourceBytes, width, height, dpr, frames, outputBytes, duration)
+	return p.Global.Limits.Check(sourceBytes, width, height, dpr, frames, outputBytes, duration)
 }
 
 // Validate проверяет корректность скомпилированной политики.
@@ -221,29 +317,29 @@ func (p *Policy) Validate() error {
 		return fmt.Errorf("global limits: %w", err)
 	}
 	seen := map[string]bool{}
-	for i, b := range p.Buckets {
-		if b.Bucket == "" {
-			return fmt.Errorf("bucket %d: empty bucket name", i)
+	for i, pp := range p.PathPolicies {
+		norm := normalizePath(pp.Path)
+		if norm == "" {
+			return fmt.Errorf("path-policy %d: empty path", i)
 		}
-		if seen[b.Bucket] {
-			return fmt.Errorf("duplicate bucket %q", b.Bucket)
+		if seen[norm] {
+			return fmt.Errorf("duplicate path-policy %q", norm)
 		}
-		seen[b.Bucket] = true
-		if b.Authorization != "" && !ValidAuthorization(b.Authorization) {
-			return fmt.Errorf("bucket %q: invalid authorization %q", b.Bucket, b.Authorization)
-		}
-		if _, err := NewLimits(b.Limits); err != nil {
-			return fmt.Errorf("bucket %q limits: %w", b.Bucket, err)
+		seen[norm] = true
+		if pp.DPR != nil {
+			if err := validateDPRRange(*pp.DPR); err != nil {
+				return fmt.Errorf("path-policy %q dpr: %w", norm, err)
+			}
 		}
 	}
 	return nil
 }
 
-// BucketNames возвращает отсортированный список имён bucket.
-func (p *Policy) BucketNames() []string {
-	names := make([]string, 0, len(p.Buckets))
-	for _, b := range p.Buckets {
-		names = append(names, b.Bucket)
+// PathNames возвращает отсортированный список имён path-policy.
+func (p *Policy) PathNames() []string {
+	names := make([]string, 0, len(p.PathPolicies))
+	for _, pp := range p.PathPolicies {
+		names = append(names, pp.Path)
 	}
 	sort.Strings(names)
 	return names

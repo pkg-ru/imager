@@ -70,7 +70,7 @@ func testPlan(t *testing.T) *processing.ProcessingPlan {
 	t.Helper()
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)

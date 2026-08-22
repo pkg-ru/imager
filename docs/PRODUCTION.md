@@ -76,20 +76,20 @@ imagemagick:
 
 ---
 
-## 2. Asset URL (v1)
+## 2. Asset URL
 
 Сервис принимает только канонические и preset URL:
 
 ```text
 # Канонический
-/v1/{path}/{source_name}-{source_format}-{transform}-{size}@{dpr}.{output_format}
+/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
 
 # Preset
-/v1/{path}/{source_name}-{source_format}-{preset_name}.{output_format}
+/{path}/{source_name}-{source_format}/{preset_name}.{output_format}
 ```
 
-- `transform` — ровно один из кодов: `c` (crop), `t` (trim), `ct` (crop затем
-  trim). Комбинация `tc` и словесные значения (`crop`, `trim`) недопустимы.
+- `transform` — ровно один из кодов: `c` (crop), `t` (trim), `ct` (trim затем
+  crop). Комбинация `tc` и словесные значения (`crop`, `trim`) недопустимы.
 - `dpr` — только `2` или `3`.
 - Preset не содержит `source-format` в конфигурации: исходный формат
   определяется URL. `output-format` пресета обязан совпадать с расширением
@@ -98,8 +98,8 @@ imagemagick:
 Пример для исходника `test.jpg` (source name `test`, source format `jpg`):
 
 ```text
-GET /v1/test-jpg-c-120x80@2.webp     # канонический crop 120x80, dpr 2
-GET /v1/test-jpg-thumb.webp          # пресет "thumb" (crop 120x80, dpr 2, webp)
+GET /test-jpg/c-120x80@2.webp        # канонический crop 120x80, dpr 2
+GET /test-jpg/thumb.webp             # пресет "thumb" (crop 120x80, dpr 2, webp)
 ```
 
 ---
@@ -143,7 +143,8 @@ observability:     # log-level
 ```
 
 Полный пример — в [`setting.yaml`](../setting.yaml) (с комментариями всех
-полей).
+полей). Подробное описание всех секций, параметров, дефолтов и ограничений,
+а также примеры конфигураций — в [`README.md`](../README.md).
 
 ### Хранилища (source / result)
 

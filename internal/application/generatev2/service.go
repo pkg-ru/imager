@@ -130,7 +130,7 @@ type Result struct {
 	// Key — канонический cache key (canonical URL), под которым ассет
 	// опубликован.
 	Key object.ObjectKey
-	// URL — каноническая форма URL (без ведущего "/v1/").
+	// URL — каноническая форма URL (без ведущего "/").
 	URL string
 	// Request — конечный канонический запрос (уже с разрешённым preset).
 	Request *asset.Request
@@ -356,6 +356,10 @@ func (s *Service) sourceKey(req *asset.Request) object.ObjectKey {
 }
 
 // buildPlan преобразует канонический запрос в валидированный план обработки.
+//
+// Quality/frames/duration/loop берутся из запроса (заполняются при
+// разрешении пресета); если не заданы (0/nil), используются значения по
+// умолчанию из Deps (Quality) или остаются без ограничения.
 func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, error) {
 	var op processing.Operation
 	switch req.Transform() {
@@ -382,13 +386,21 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	if dpr <= 0 {
 		dpr = asset.DefaultDPR
 	}
+	// Параметры обработки: пресет имеет приоритет, иначе default-quality.
+	quality := req.Quality()
+	if quality == 0 {
+		quality = s.deps.Quality
+	}
+	loop := req.Loop()
+	frames := req.Frames()
+	duration := req.Duration()
 	var w, h int
 	if req.Size().IsOriginal() {
 		// size=x: сохранить исходный размер изображения.
 		return processing.NewProcessingPlan(
 			op, srcFmt, outFmt,
 			processing.Size{Original: true},
-			dpr, s.deps.Quality, nil,
+			dpr, quality, loop, frames, duration,
 		)
 	}
 	if dw := req.Size().Width(); dw != nil {
@@ -400,7 +412,7 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	return processing.NewProcessingPlan(
 		op, srcFmt, outFmt,
 		processing.Size{Width: w, Height: h},
-		dpr, s.deps.Quality, nil,
+		dpr, quality, loop, frames, duration,
 	)
 }
 

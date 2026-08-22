@@ -24,9 +24,9 @@ const (
 	OpResize Operation = "resize"
 	// OpCrop — обрезка (centre-crop) до целевого размера.
 	OpCrop Operation = "crop"
-	// OpTrim — обрезка по краям (trim) с последующим кропом.
+	// OpTrim — обрезка по краям (trim).
 	OpTrim Operation = "trim"
-	// OpCropTrim — последовательное применение crop и trim.
+	// OpCropTrim — последовательное применение trim и crop (сначала trim).
 	OpCropTrim Operation = "crop-trim"
 )
 
@@ -153,10 +153,15 @@ type ProcessingPlan struct {
 	Quality int
 	// Loop — зацикливание анимации (nil = по умолчанию).
 	Loop *bool
+	// Frames — максимальное число кадров анимации (0 = без ограничения).
+	Frames int
+	// Duration — максимальная длительность анимации в миллисекундах
+	// (0 = без ограничения).
+	Duration int
 }
 
 // NewProcessingPlan создаёт ProcessingPlan с валидацией.
-func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool) (*ProcessingPlan, error) {
+func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool, frames, duration int) (*ProcessingPlan, error) {
 	if !ValidOperation(op) {
 		return nil, fmt.Errorf("processing plan: invalid operation %q", op)
 	}
@@ -175,6 +180,12 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 	if quality < 0 || quality > 100 {
 		return nil, fmt.Errorf("processing plan: quality must be in [0,100], got %d", quality)
 	}
+	if frames < 0 {
+		return nil, fmt.Errorf("processing plan: frames must be non-negative, got %d", frames)
+	}
+	if duration < 0 {
+		return nil, fmt.Errorf("processing plan: duration must be non-negative, got %d", duration)
+	}
 	return &ProcessingPlan{
 		Operation:    op,
 		SourceFormat: sourceFormat,
@@ -183,6 +194,8 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 		DPR:          dpr,
 		Quality:      quality,
 		Loop:         loop,
+		Frames:       frames,
+		Duration:     duration,
 	}, nil
 }
 
@@ -208,6 +221,12 @@ func (p *ProcessingPlan) Validate() error {
 	}
 	if p.Quality < 0 || p.Quality > 100 {
 		return fmt.Errorf("processing plan: quality must be in [0,100], got %d", p.Quality)
+	}
+	if p.Frames < 0 {
+		return fmt.Errorf("processing plan: frames must be non-negative, got %d", p.Frames)
+	}
+	if p.Duration < 0 {
+		return fmt.Errorf("processing plan: duration must be non-negative, got %d", p.Duration)
 	}
 	return nil
 }

@@ -10,9 +10,9 @@ import (
 
 // Config — конфигурация политики (DTO, не связан с YAML).
 type Config struct {
-	Global  GlobalConfig   `yaml:"global"`
-	Buckets []BucketConfig `yaml:"buckets"`
-	Presets []PresetConfig `yaml:"presets"`
+	Global       GlobalConfig       `yaml:"global"`
+	PathPolicies []PathPolicyConfig `yaml:"path-policies"`
+	Presets      []PresetConfig     `yaml:"presets"`
 }
 
 // GlobalConfig — глобальная конфигурация политики.
@@ -23,25 +23,57 @@ type GlobalConfig struct {
 	Limits         Limits   `yaml:"limits"`
 }
 
-// BucketConfig — конфигурация политики для bucket.
-type BucketConfig struct {
-	Bucket         string   `yaml:"bucket"`
-	Authorization  string   `yaml:"authorization"`
-	SizeRules      []string `yaml:"size-rules"`
-	AllowedPresets []string `yaml:"allowed-presets"`
-	Limits         Limits   `yaml:"limits"`
+// PathPolicyConfig — конфигурация path-policy (политики пути).
+//
+// Path — префикс пути. Нормализуется при компиляции (см. normalizePath):
+// добавляется ведущий "/", убирается завершающий "/" (кроме "/").
+//
+// Path-policy применяется только к каноническим URL (не preset) и является
+// дополнительным ограничением поверх глобальной политики.
+type PathPolicyConfig struct {
+	Path string `yaml:"path"`
+	// DPR — строка-диапазон допустимого DPR (nil/пусто = без ограничения).
+	// Например "0-1" (только dpr=1) или "2-3" (dpr 2 или 3).
+	DPR string `yaml:"dpr"`
+	// Crop — требование к crop (nil = не задано/неважно). true = crop
+	// обязан присутствовать в transform, false = crop запрещён.
+	Crop *bool `yaml:"crop"`
+	// Trim — требование к trim (nil = не задано/неважно). true = trim
+	// обязан присутствовать в transform, false = trim запрещён.
+	Trim *bool `yaml:"trim"`
 }
 
 // PresetConfig — конфигурация пресета.
 //
 // Preset не содержит source-format: исходный формат определяется URL
-// ({source_name}-{source_format}/{preset_name}.{output_format}). DPR в
-// пресете не задаётся: он передаётся в URL.
+// ({source_name}-{source_format}/{preset_name}.{output_format}).
+//
+// Имя пресета может содержать фиксированный @dpr-суффикс (например
+// "thumb@2"). Поле dpr (если задано) имеет приоритет над @dpr в имени.
+//
+// crop/trim — булевы флаги, маппящиеся в операции:
+//   - crop=true, trim=false → crop
+//   - crop=false, trim=true → trim
+//   - crop=true, trim=true → crop-trim
+//   - crop=false, trim=false → resize (пустой transform)
 type PresetConfig struct {
 	Name         string `yaml:"name"`
-	Transform    string `yaml:"transform"`
+	Crop         bool   `yaml:"crop"`
+	Trim         bool   `yaml:"trim"`
 	Size         string `yaml:"size"`
 	OutputFormat string `yaml:"output-format"`
+	// DPR — фиксированный DPR пресета (0 = не задан). Допустимы 1, 2, 3
+	// (1 эквивалентен отсутствию).
+	DPR int `yaml:"dpr"`
+	// Quality — качество сжатия (0-100; 0 = default-quality из processing).
+	Quality int `yaml:"quality"`
+	// Frames — максимальное число кадров анимации (0 = без ограничения).
+	Frames int `yaml:"frames"`
+	// Duration — максимальная длительность анимации в мс (0 = без
+	// ограничения).
+	Duration int `yaml:"duration"`
+	// Loop — зацикливание анимации (nil = default-loop из processing).
+	Loop *bool `yaml:"loop"`
 }
 
 // ValidationError описывает ошибку валидации конфигурации с путём к полю.
@@ -100,32 +132,24 @@ func ValidateConfig(cfg *Config) error {
 		errs = append(errs, &ValidationError{Path: "global.limits", Reason: err.Error()})
 	}
 
-	// Buckets.
+	// Path-policies.
 	seen := map[string]bool{}
-	for i, b := range cfg.Buckets {
-		base := fmt.Sprintf("buckets[%d]", i)
-		if b.Bucket == "" {
-			errs = append(errs, &ValidationError{Path: base + ".bucket", Reason: "bucket name is empty"})
-		} else if seen[b.Bucket] {
-			errs = append(errs, &ValidationError{Path: base + ".bucket", Reason: fmt.Sprintf("duplicate bucket %q", b.Bucket)})
+	for i, pp := range cfg.PathPolicies {
+		base := fmt.Sprintf("path-policies[%d]", i)
+		norm := normalizePath(pp.Path)
+		if norm == "" {
+			errs = append(errs, &ValidationError{Path: base + ".path", Reason: "path is empty"})
+		} else if seen[norm] {
+			errs = append(errs, &ValidationError{Path: base + ".path", Reason: fmt.Sprintf("duplicate path %q (after normalization)", norm)})
 		}
-		seen[b.Bucket] = true
-		if b.Authorization != "" && !ValidAuthorization(Authorization(b.Authorization)) {
-			errs = append(errs, &ValidationError{
-				Path:   base + ".authorization",
-				Reason: fmt.Sprintf("invalid value %q, must be safe or unsafe", b.Authorization),
-			})
-		}
-		for j, rule := range b.SizeRules {
-			if _, err := ParseSizeRule(rule); err != nil {
-				errs = append(errs, &ValidationError{
-					Path:   fmt.Sprintf("%s.size-rules[%d]", base, j),
-					Reason: err.Error(),
-				})
+		seen[norm] = true
+		if pp.DPR != "" {
+			r, err := ParseDPRRange(pp.DPR)
+			if err != nil {
+				errs = append(errs, &ValidationError{Path: base + ".dpr", Reason: err.Error()})
+			} else if err := validateDPRRange(r); err != nil {
+				errs = append(errs, &ValidationError{Path: base + ".dpr", Reason: err.Error()})
 			}
-		}
-		if _, err := NewLimits(b.Limits); err != nil {
-			errs = append(errs, &ValidationError{Path: base + ".limits", Reason: err.Error()})
 		}
 	}
 
@@ -139,17 +163,37 @@ func ValidateConfig(cfg *Config) error {
 			errs = append(errs, &ValidationError{Path: base + ".name", Reason: fmt.Sprintf("duplicate preset %q", p.Name)})
 		}
 		presetNames[p.Name] = true
-		if !asset.ValidTransform(asset.Transform(p.Transform)) {
-			errs = append(errs, &ValidationError{
-				Path:   base + ".transform",
-				Reason: fmt.Sprintf("invalid value %q, must be c, t or ct", p.Transform),
-			})
-		}
 		if _, err := asset.ParseSize(p.Size); err != nil {
 			errs = append(errs, &ValidationError{Path: base + ".size", Reason: err.Error()})
 		}
 		if p.OutputFormat == "" {
 			errs = append(errs, &ValidationError{Path: base + ".output-format", Reason: "output format is empty"})
+		}
+		if p.DPR != 0 {
+			if p.DPR < asset.DefaultDPR || p.DPR > asset.MaxDPR {
+				errs = append(errs, &ValidationError{
+					Path:   base + ".dpr",
+					Reason: fmt.Sprintf("dpr must be in [%d,%d], got %d", asset.DefaultDPR, asset.MaxDPR, p.DPR),
+				})
+			}
+		}
+		if p.Quality < 0 || p.Quality > 100 {
+			errs = append(errs, &ValidationError{
+				Path:   base + ".quality",
+				Reason: fmt.Sprintf("quality must be in [0,100], got %d", p.Quality),
+			})
+		}
+		if p.Frames < 0 {
+			errs = append(errs, &ValidationError{
+				Path:   base + ".frames",
+				Reason: fmt.Sprintf("frames must be non-negative, got %d", p.Frames),
+			})
+		}
+		if p.Duration < 0 {
+			errs = append(errs, &ValidationError{
+				Path:   base + ".duration",
+				Reason: fmt.Sprintf("duration must be non-negative, got %d", p.Duration),
+			})
 		}
 	}
 
@@ -184,21 +228,17 @@ func Compile(cfg *Config) (*Compiled, error) {
 		policy.Global.SizeRules = append(policy.Global.SizeRules, rule)
 	}
 
-	for _, b := range cfg.Buckets {
-		bp := BucketPolicy{
-			Bucket:         b.Bucket,
-			Authorization:  Authorization(b.Authorization),
-			AllowedPresets: b.AllowedPresets,
-			Limits:         b.Limits,
+	for _, pp := range cfg.PathPolicies {
+		compiled := PathPolicy{
+			Path: normalizePath(pp.Path),
+			Crop: pp.Crop,
+			Trim: pp.Trim,
 		}
-		if b.SizeRules != nil {
-			bp.SizeRules = make([]SizeRule, 0, len(b.SizeRules))
-			for _, r := range b.SizeRules {
-				rule, _ := ParseSizeRule(r)
-				bp.SizeRules = append(bp.SizeRules, rule)
-			}
+		if pp.DPR != "" {
+			r, _ := ParseDPRRange(pp.DPR)
+			compiled.DPR = &r
 		}
-		policy.Buckets = append(policy.Buckets, bp)
+		policy.PathPolicies = append(policy.PathPolicies, compiled)
 	}
 
 	presets := make([]*asset.Preset, 0, len(cfg.Presets))
@@ -206,9 +246,14 @@ func Compile(cfg *Config) (*Compiled, error) {
 		size, _ := asset.ParseSize(p.Size)
 		preset, err := asset.NewPreset(
 			p.Name,
-			asset.Transform(p.Transform),
+			transformFromCropTrim(p.Crop, p.Trim),
 			size,
 			asset.Format(p.OutputFormat),
+			asset.DPR(p.DPR),
+			p.Quality,
+			p.Frames,
+			p.Duration,
+			p.Loop,
 		)
 		if err != nil {
 			return nil, err
@@ -221,6 +266,25 @@ func Compile(cfg *Config) (*Compiled, error) {
 	}
 
 	return &Compiled{Policy: policy, Presets: presetSet}, nil
+}
+
+// transformFromCropTrim маппит булевы флаги crop/trim в Transform:
+//
+//	crop=true, trim=false → crop
+//	crop=false, trim=true → trim
+//	crop=true, trim=true → crop-trim
+//	crop=false, trim=false → resize (пустой transform)
+func transformFromCropTrim(crop, trim bool) asset.Transform {
+	switch {
+	case crop && trim:
+		return asset.TransformCropTrim
+	case crop:
+		return asset.TransformCrop
+	case trim:
+		return asset.TransformTrim
+	default:
+		return ""
+	}
 }
 
 // ParseSizeRule разбирает строку правила размера.
@@ -254,6 +318,30 @@ func ParseSizeRule(s string) (SizeRule, error) {
 		return SizeRule{}, fmt.Errorf("size rule must specify width or height")
 	}
 	return rule, nil
+}
+
+// ParseDPRRange разбирает строку-диапазон DPR (например "0-1" или "2-3").
+// Поддерживает одиночное значение ("2" → [2,2]) и диапазон "min-max".
+func ParseDPRRange(s string) (Range, error) {
+	if s == "" {
+		return Range{}, fmt.Errorf("empty dpr range")
+	}
+	return parseRange(s)
+}
+
+// validateDPRRange проверяет, что диапазон DPR корректен: min>=0, max>=min,
+// значения в [0, MaxDPR] (dpr не может быть больше 3).
+func validateDPRRange(r Range) error {
+	if r.Min < 0 {
+		return fmt.Errorf("dpr range min must be non-negative, got %d", r.Min)
+	}
+	if r.Max < r.Min {
+		return fmt.Errorf("dpr range min %d greater than max %d", r.Min, r.Max)
+	}
+	if r.Max > asset.MaxDPR {
+		return fmt.Errorf("dpr range max %d exceeds maximum %d", r.Max, asset.MaxDPR)
+	}
+	return nil
 }
 
 func parseRange(s string) (Range, error) {

@@ -1,139 +1,569 @@
 ########################################
-# Производственная конфигурация (монтируется в /etc/imager).
+# Полный самодокументированный конфигурационный файл сервиса Imager.
 #
-# Все настройки — только здесь. Единственная env-переменная —
-# IMAGER_CONFIG_DIR=/etc/imager (см. docker-compose.yaml).
+# Единственный env-переменная: IMAGER_CONFIG_DIR — каталог с конфигурацией
+# (например /etc/imager, см. docker-compose.yaml). В нём должны лежать
+# setting.yaml (этот файл) и, опционально, setting-local.yaml.
 #
-# Опциональный setting-local.yaml в этом же каталоге глубоко переопределяет
-# базовый (вложенные map мержатся, скаляры заменяются, списки заменяются
-# целиком). Отсутствие local-файла — нормальная ситуация.
+# Механизм загрузки (internal/adapters/httpapi/configloader.go):
+#   1. Читается обязательный базовый файл setting.yaml.
+#   2. Если рядом есть setting-local.yaml — его настройки ГЛУБОКО мержатся
+#      поверх базового: вложенные map объединяются рекурсивно, скаляры
+#      заменяются, СПИСКИ заменяются ЦЕЛИКОМ (не дополняются).
+#   3. Результат строго декодируется (yaml.UnmarshalStrict): ЛЮБОЙ ключ,
+#      отсутствующий в схеме ниже, считается ошибкой и валит старт.
+#
+# Важно: добавляйте только ключи из документации ниже. «Примеры» других
+# хранилищ и опций в этом файле закомментированы, чтобы не менять активное
+# поведение — раскомментируйте по необходимости.
+#
+# Актуальная версия схемы конфигурации — "1". Другое значение — ошибка
+# старта (config: unsupported version).
+########################################
 
 version: "1"
 
+########################################
+# server — HTTP/TCP сервер (внутренние настройки прослушивания).
+#
+# Настраивает адрес, таймауты и лимиты входящего HTTP-запроса.
+# Если указать таймаут пустым (убрать ключ) — применится дефолт runtime.
+# Тип значений таймаутов — строковый duration (parse duration Go):
+#   "5s", "1m30s", "250ms" и т.п. Отрицательные значения запрещены.
+# Параметры max-* — целые числа (байты).
+########################################
 server:
+  # addr — адрес прослушивания TCP (host:port).
+  # Тип: string. Дефолт в коде: ":8080".
+  # Пусто = слушать все интерфейсы на порту 8080.
   addr: ":8080"
-  # Таймауты и лимиты HTTP-сервера (п.7, п.8, п.9).
+
   # read-header-timeout — таймаут чтения заголовков запроса.
+  # Тип: duration-строка. Дефолт в коде: "5s".
+  # Защита от медленных/незавершённых клиентов (slowloris).
   read-header-timeout: "5s"
-  # read-timeout — таймаут чтения тела запроса.
+
+  # read-timeout — таймаут чтения ТЕЛА запроса.
+  # Тип: duration-строка. Дефолт в коде: "15s".
+  # Сервис тело не принимает, но лимит ограничивает время чтения соединения.
   read-timeout: "15s"
-  # write-timeout — таймаут записи ответа. Поднят для больших медиа-ответов.
+
+  # write-timeout — таймаут записи ОТВЕТА клиенту.
+  # Тип: duration-строка. Дефолт в коде: "30s".
+  # В production поднят до 120s, чтобы большие медиа-ответы (крупные
+  # изображения, анимации) успевали дотянуться до медленных клиентов.
   write-timeout: "120s"
-  # idle-timeout — таймаут idle-соединений (keep-alive).
+
+  # idle-timeout — таймаут простаивания keep-alive соединения.
+  # Тип: duration-строка. Дефолт в коде: "60s".
+  # После бездействия дольше этого срока соединение закрывается.
   idle-timeout: "60s"
+
   # shutdown-timeout — максимальное время ожидания активных запросов при
-  # graceful shutdown.
+  # graceful shutdown (SIGINT/SIGTERM).
+  # Тип: duration-строка. Дефолт в коде: "15s".
+  # По истечении — принудительное закрытие соединений и завершение.
   shutdown-timeout: "15s"
-  # max-header-bytes — максимальный размер заголовков запроса (32 KiB).
+
+  # max-header-bytes — максимальный суммарный размер заголовков запроса.
+  # Тип: int (байты). Дефолт в коде: 32768 (32 KiB, уменьшено с 1 MiB).
+  # Превышение → HTTP 431 Request Header Fields Too Large.
   max-header-bytes: 32768
-  # max-body-bytes — жёсткий лимит тела запроса (4 KiB). Сервис не принимает
-  # тела, поэтому лимит мал (защита от slow-body / DoS).
+
+  # max-body-bytes — жёсткий лимит размера ТЕЛА запроса.
+  # Тип: int (байты). Дефолт в коде: 4096 (4 KiB).
+  # 0 = без лимита. Сервис НЕ принимает тела запросов, поэтому по умолчанию
+  # жёсткий небольшой лимит — защита от slow-body и DoS через раздутие тела.
   max-body-bytes: 4096
 
+########################################
+# http — HTTP-адаптер (обработка asset-URL, безопасность, fallback).
+#
+# Настраивает: CORS, кэширующие заголовки, security-заголовки, лимит длины
+# URL, таймаут генерации ассета и поведение при не найденном ассете
+# (not-found fallback).
+########################################
 http:
-  cache-control: "public, max-age=2592000"
-  # generate-timeout — таймаут генерации ассета (превышение → 504).
+  # allowed-origins — CORS allowlist (deny-by-default).
+  # Тип: list[string]. Дефолт: пусто (ни один origin не разрешён).
+  # Каждый элемент — схема+хост: "https://cdn.example.com". "http://..." —
+  # тоже допустимо, но не рекомендуется. Пустой список = никакие cross-origin
+  # запросы не получают CORS-заголовков.
+  # ВАЖНО: комбинация wildcard "*" + allow-credentials: true ЗАПРЕЩЕНА
+  # (ошибка валидации на старте) — несовместимо со спецификацией CORS.
+  # Примеры (раскомментируйте при необходимости):
+  # allowed-origins:
+  #   - "https://cdn.example.com"
+  #   - "https://images.example.net"
+  #
+
+  # allow-credentials — разрешать ли Access-Control-Allow-Credentials.
+  # Тип: bool. Дефолт: false.
+  # true = разрешить отправку cookies/авторизационных заголовков при CORS.
+  # Не совместим с wildcard "*" в allowed-origins.
+  allow-credentials: false
+
+  # cache-control — значение заголовка Cache-Control для УСПЕШНО
+  # сгенерированных канонических ассетов (эти ассеты immutable).
+  # Тип: string. Дефолт в коде: "public, max-age=31536000, immutable" (1 год).
+  # Пустое значение = заголовок не выставляется вовсе.
+  # В production переопределён на 1 месяц (2592000 сек) — месячная палитра
+  # для CDN/браузеров.
+  cache-control: "public, max-age=2592000"   # месяц
+
+  # not-found-cache-control — Cache-Control для fallback-ответов (404 и т.п.).
+  # Тип: string. Дефолт в коде: "no-store".
+  # Пустое значение = заголовок не выставляется.
+  # Значение описывает кэширование страниц ошибок/пикселя, поэтому по
+  # умолчанию no-store. Явно задаём дефолт — поведение не меняется.
+  not-found-cache-control: "no-store"
+
+  # referrer-policy — значение заголовка Referrer-Policy.
+  # Тип: string. Дефолт в коде: "no-referrer".
+  # no-referrer = браузер не отправляет заголовок Referer вообще (privacy).
+  referrer-policy: "no-referrer"
+
+  # csp — значение Content-Security-Policy (выставляется для fallback-страниц).
+  # Тип: string. Дефолт: пусто (заголовок не выставляется).
+  # Например: "default-src 'none'; img-src 'self'".
+  # Актуально, если http.not-found.page используется для HTML-страницы ошибки.
+  # csp: "default-src 'none'"
+
+  # max-url-len — максимальная длина asset URL.
+  # Тип: int (символов). Дефолт в коде: 1024 (0 → 1024, asset.MaxURLLen).
+  # Превышение → HTTP 414 URI Too Long.
+  max-url-len: 1024
+
+  # generate-timeout — таймаут генерации ассета (context deadline для
+  # вызова Generate).
+  # Тип: duration-строка. Дефолт в коде: "30s".
+  # Превышение → HTTP 504 Gateway Timeout (плюс отмена ImageMagick).
   generate-timeout: "30s"
+
+  # not-found — поведение при отсутствии запрашиваемого ассета (мимо кэша
+  # и мимо source). Поля взаимоисключающие по приоритету:
+  #   pixel > redirect > image > page.
   not-found:
+    # pixel — отдавать прозрачный 1x1 пиксель в ЗАПРОШЕННОМ формате (через
+    # PixelGenerator, метаданные соответствуют формату URL).
+    # Тип: bool. Дефолт: false.
+    # Если true и формат не поддерживается — выполняется следующий fallback.
     pixel: true
 
-policy:
-  global:
-    authorization: "unsafe"
-  presets:
-    - name: "thumb"
-      transform: "c"
-      size: "120x80"
-      output-format: "webp"
+    # image — путь к СТАТИЧЕСКОМУ файлу-картинке, отдаваемому с HTTP 404.
+    # Тип: string (путь к файлу). Дефолт: пусто.
+    # Пример: "not-found.png" (см. каталог example/)
+    # image: "example/not-found.png"
 
+    # page — путь к СТАТИЧЕСКОМУ HTML-файлу, отдаваемому с HTTP 404.
+    # Тип: string (путь к файлу). Дефолт: пусто.
+    # Раскомментируйте и укажите путь до HTML.
+    # page: "example/not-found.html"
+
+    # redirect — URL для 301-редиректа при not-found.
+    # Тип: string (URL). Дефолт: пусто.
+    # redirect: "https://example.com/404"
+
+########################################
+# policy — deny-by-default политика авторизации и лимитов.
+#
+# Всё запрещено по умолчанию; разрешается только то, что явно покрыто
+# правилами ниже. Политика применяется к КАНОНИЧЕСКИМ asset URL вида
+#   /v1/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output}
+# и к ПРЕСЕТ URL вида
+#   /v1/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output}
+#
+# Два уровня:
+#   global  — глобальные правила и лимиты;
+#   path-policies — более специфичные ограничения по префиксу пути
+#   (только ужесточают глобальные, не расширяют).
+########################################
+policy:
+  # global — глобальная политика.
+  global:
+    # authorization — режим авторизации.
+    # "safe":   разрешены ТОЛЬКО явно покрытые случаи: preset — по имени из
+    #           allowed-presets; канонический URL — размер, покрытый хотя бы
+    #           одним size-rules. Рекомендуется для production.
+    # "unsafe": любые произвольные параметры разрешены (включая
+    #           произвольные размеры/transform/dpr). НЕ отключает лимиты.
+    authorization: "safe"
+
+    # allowed-presets — whitelist имён пресетов, доступных в URL.
+    # Тип: list[string]. Дефолт: пусто.
+    # Имена указываются ПОЛНОСТЬЮ (включая @dpr-суффикс): чтобы разрешить
+    # пресет "thumb@2", указываем именно "thumb@2". В режиме "safe" пресет
+    # вне списка → 404.
+    # ВАЖНО: allowed-presets игнорируются, если authorization = "unsafe".
+    allowed-presets: ["thumb", "thumb@2"]
+
+    # size-rules — правила допустимых РАЗМЕРОВ для канонических запросов.
+    # Тип: list[string], формат "minW-maxWxminH-maxH"; каждое измерение может
+    # быть диапазоном ("0-2000") или отсутствовать (пусто = «любая»).
+    # Правило "0-2000x0-2000" = ширина и высота от 0 до 2000 px.
+    # Single value "500x" = точная ширина 500 при любой высоте.
+    # В режиме safe запрос отклоняется, если ни одно правило не Матчится.
+    # Пустой список в режиме safe = ВСЕ канонические запросы отклоняются.
+    size-rules: ["0-2000x0-2000"]
+
+    # special-note: для animated-GIF/WebP канонических запросов нет особых
+    # правил — лимиты по кадрам/длительности применяются через limits ниже.
+
+    # limits — лимиты обрабатываемого запроса (применяются к ЛЮБОМУ режиму);
+    # 0 = соответствующий лимит не ограничен (unlimited).
+    limits:
+      # source-bytes — максимум размера ИСХОДНОГО файла (байт).
+      source-bytes: 10485760                    # 10 MiB
+      # width — максимум ширины запрошенного изображения (px).
+      # width: 2000
+      # height — максимум высоты запрошенного изображения (px).
+      # height: 2000
+      # pixels — максимум пикселей запрошенного изображения (wxh).
+      # pixels: 4000000                          # 4 MP
+      # dpr — максимум значения dpr в запросе (1/2/3).
+      # dpr: 3
+      # frames — максимум кадров анимации (для GIF/WebP).
+      # frames: 150
+      # duration — максимум длительности анимации (максимальные секунды, мс).
+      # duration: 60000                          # 60 000 мс = 60 c
+      # concurrency — максимум одновременных операций обработки от одного
+      # клиента (int).
+      # concurrency: 10
+      # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
+      output-bytes: 10485760                    # 10 MiB
+      # Примечание: параметры width/height/pixels/frames/dpr/duration/
+      # concurrency не заданы в этом файле — 0 => без ограничения.
+      # Задание только source-bytes и output-bytes.
+
+  # presets — именованные конфигурации обработки (ссылка из URL на пресет).
+  # Каждый пресет:
+  #   name (обязательный, ≤64 символов, без дефисов "-" в имени; допустимы
+  #         буквы, цифры, "_", ".", "@" для суффикса @dpr);
+  #   crop/trim (bool; по умолчанию false) — формируют трансформацию:
+  #     crop=false trim=false → resize
+  #     crop=true  trim=false → crop       (центрированная обрезка)
+  #     crop=false trim=true  → trim       (обрезка краёв)
+  #     crop=true  trim=true  → crop-trim  (trim затем crop)
+  #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
+  #   output-format — jpeg | png | webp | gif | avif | heif | apng;
+  #   quality — 0-100 (0 = default-quality из `processing`);
+  #   dpr — 0/1/2/3 (0 = не задан; при не заданном dpr берётся из @dpr-суффикса
+  #         имени — разрешение пресета "thumb@2" форсирует dpr=2);
+  #   frames — макс. число кадров анимации (0 = без ограничения);
+  #   duration — макс. длительность анимации в мс (0 = без ограничения);
+  #   loop — *bool: nil (не задано) = default-loop из processing;
+  #          true = бесконечный loop, false = однопроходная анимация.
+  # Пресеты перечисляются ровно те, что доступны в URL (см. allowed-presets).
+  # Имена пресетов должны быть УНИКАЛЬНЫМИ.
+  presets:
+    # пресет "thumb" — маленький resize-центра.
+    - name: "thumb"
+      size: "200x200"
+      output-format: webp
+      quality: 85
+      dpr: 1
+
+    # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
+    # @2 в имени фиксирует dpr=2 при разрешении.
+    - name: "thumb@2"
+      size: "400x400"
+      output-format: webp
+      quality: 85
+      dpr: 2
+
+    # пресет "banner" — анимационный WebP-баннер 1200x400.
+    - name: "banner"
+      size: "1200x400"
+      output-format: webp
+      quality: 80
+      dpr: 1
+      frames: 0       # 0 = без ограничения кадров
+      duration: 0     # 0 = без ограничения длительности
+      loop: true      # зацикленная анимация (bool; nil = по default-loop)
+
+  # path-policies — политики по префиксам пути канонических URL.
+  # Применяются ТОЛЬКО к каноническим URL (не к пресетам) и лишь
+  # ужесточают глобальную политику (не расширяют права).
+  # Выбор: LONGEST prefix match (самый длинный совпадающий префикс побеждает).
+  #   "basket/products" нормализуется в "/basket/products";
+  #   "/" — fallback: применяется ко всем путям без более специфичного совпадения.
+  # Поля (все опциональны):
+  #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
+  #   crop  — *bool: nil (не задано) = неважно; true = crop должен быть в URL;
+  #           false = crop запрещён в URL;
+  #   trim  — аналогично для trim.
+  path-policies:
+    # "/" — fallback для всех путей. Здесь dpr/crop/trim не заданы
+    # (нил/отсутствуют) — политика НЕ накладывает ограничений на эти
+    # параметры для путей без более специфичного совпадения:
+    - path: "/"
+    - path: "/thumbs"        # для префикса /thumbs
+      dpr: "0-1"
+      crop: true             # crop обязателен
+    - path: "/banners"
+      dpr: "0-2"
+    - path: "/originals"
+      dpr: "0-1"
+      crop: false
+      trim: false
+    - path: "/admin"
+      dpr: "0-1"
+
+########################################
+# processing — общие параметры обработки изображений.
+########################################
 processing:
+  # default-quality — качество сжатия ПО УМОЛЧАНИЮ (используется, когда в
+  # пресете или запросе quality не задано или = 0).
+  # Тип: int 0-100. Вне диапазона [0,100] — ошибка валидации на старте.
+  # Применяется к lossy-форматам (jpeg/webp). На PNG влияет не quality,
+  # а png-compression-level (см. imagemagick.limits).
   default-quality: 85
 
+  # default-loop — зацикливание анимаций ПО УМОЛЧАНИЮ.
+  # Тип: *bool (true/false). Не задан (nil) => по умолчанию true (зациклено).
+  # Применяется к GIF/WebP/APNG/HEIF анимациям, если в пресете не задан loop.
+  # Пример: развернуть как значение, чтобы изменить поведение:
+  # default-loop: false
+
+########################################
+# source / result — хранилища исходников и результатов.
+#
+# Поддерживаемые типы (storage):
+#   fs    — локальная файловая система (по умолчанию);
+#   s3    — S3 и S3-совместимые (MinIO, Yandex Object Storage...);
+#   sftp  — SSH File Transfer Protocol;
+#   ftp   — plain FTP;
+#   ftps  — FTP over TLS (explicit); tls: true + tls-verify (false ЗАПРЕЩЁН);
+#   http  — HTTP/HTTPS (ТОЛЬКО для source; use as result — ошибка старта).
+#
+# Общая схема одной секции (применяется для source и result):
+#   storage: <fs|s3|sftp|ftp|ftps|http>
+#   path:    локальный каталог при storage: fs
+#   + для s3: bucket (обязателен), prefix, endpoint, region,
+#             access-key / secret-key (только парой; или env
+#             IMAGER_S3_ACCESS_KEY / IMAGER_S3_SECRET_KEY);
+#   + для sftp: addr, user, password|private-key-file, root,
+#             host-key-fingerprint (ОБЯЗАТЕЛЬНО, "SHA256:..." );
+#   + для ftp/ftps: addr, user, password, root, tls, tls-verify;
+#   + для http: base-url (обязательный);
+#   + для remote всех типов — параметры соединения ниже.
+#
+# Параметры соединения для remote (s3/sftp/ftp/ftps/http):
+#   spool-dir            каталог для временных spool-файлов (пусто = системный tmp);
+#   spool-max-bytes      максимум для spool ключа (0 = без лимита);
+#   dial-timeout         таймаут установления соединения (дефолт "30s");
+#   read-timeout         таймаут выполнения операции для S3/HTTP/SFTP/FTP
+#                        (дефолт "60s" для S3/HTTP);
+#   max-attempts         число попыток операции (дефолт 3);
+#   max-idle-conns       макс. idle-соединений в пуле (дефолт 100);
+#   max-idle-conns-per-host макс. idle-соединений на хост (S3/HTTP; дефолт 10);
+#   idle-conn-timeout    время жизни idle-соединения (дефолт "90s");
+#   metadata-ttl         TTL кэша метаданных S3 (дефолт "30s"; 0 = кэш отключён).
+#
+# Ограничения валидации:
+#   - s3   без bucket или с только одним из access/secret — ошибка;
+#   - sftp требует addr + user + host-key-fingerprint;
+#   - ftp/ftps требует addr; ftps tls-verify=false ЗАПРЕЩЁН;
+#   - http требует base-url и доступен ТОЛЬКО как source.
+########################################
 source:
-  storage: "fs"
-  path: "/data/source"
-  # Для remote-хранилищ (s3/sftp/ftp/ftps/http):
-  #   spool-max-bytes: 10485760   # лимит spool (0 = без лимита)
-  #   dial-timeout: "30s"         # таймаут TCP-соединения (default 30s)
-  #   read-timeout: "60s"         # таймаут операции (default 60s)
-  #   max-attempts: 3             # число попыток операции (default 3)
-  #   max-idle-conns: 100         # пул idle-соединений (default 100)
-  #   idle-conn-timeout: "90s"    # таймаут idle-соединений (default 90s)
-  # Для HTTP-подобных хранилищ (s3 и http) дополнительно:
-  #   max-idle-conns-per-host: 10 # idle-соединений на хост (default 10)
-  # Для s3 (S3 и S3-совместимые хранилища):
-  #   bucket: "my-images"
-  #   prefix: "source/"           # завершающий "/" нормализуется
-  #   region: "ru-central1"
-  #   endpoint: "https://storage.yandexcloud.net"
-  #   access-key: "..."           # или env IMAGER_S3_ACCESS_KEY
-  #   secret-key: "..."           # или env IMAGER_S3_SECRET_KEY
-  #   metadata-ttl: "30s"         # TTL кэша метаданных (0 = выключен)
-  # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
-  # Для ftps по умолчанию tls-verify: true (отключение запрещено).
+  storage: fs
+  path: "/data/source"   # каталог исходных файлов на диске (для fs)
+
+  # ---------- Примеры альтернативных source (закомментировано; включите
+  # необходимое, заменив storage и раскомментировав подходящий блок) --------
+  #
+  # Пример S3 source:
+  # storage: s3
+  # bucket: "my-images-source"        # обязательно
+  # prefix: "source/"                 # завершающий "/" нормализуется
+  # endpoint: "https://storage.yandexcloud.net"   # пусто = AWS
+  # region: "ru-central1"
+  # access-key: "AKIA..."             # или env IMAGER_S3_ACCESS_KEY
+  # secret-key: "..."                 # или env IMAGER_S3_SECRET_KEY
+  # spool-dir: "./spool-src"
+  # dial-timeout: "30s"
+  # read-timeout: "60s"
+  # max-attempts: 3
+  # max-idle-conns: 100
+  # max-idle-conns-per-host: 10
+  # idle-conn-timeout: "90s"
+  # metadata-ttl: "30s"
+  #
+  # Пример SFTP source:
+  # storage: sftp
+  # addr: "sftp.example.com:22"       # обязательно
+  # user: "imager"                     # обязательно
+  # password: "..."                    # либо private-key-file ниже
+  # private-key-file: "/etc/imager/id_ed25519"
+  # root: "/srv/images"               # корневой каталог на сервере
+  # host-key-fingerprint: "SHA256:AbCd..."   # ОБЯЗАТЕЛЬНО (безопасность)
+  # dial-timeout: "30s"
+  # read-timeout: "60s"
+  #
+  # Пример FTPS source:
+  # storage: ftps
+  # addr: "ftps.example.com:21"       # обязательно
+  # user: "imager"
+  # password: "..."
+  # root: "/srv/images"
+  # tls: true                          # FTPS (explicit TLS)
+  # tls-verify: true                   # false запрещён для ftps
+  # dial-timeout: "30s"
+  #
+  # Пример HTTP source (только source!):
+  # storage: http
+  # base-url: "https://cdn.example.com/images"   # обязательно
+  # dial-timeout: "30s"
+  # read-timeout: "60s"
+  # max-attempts: 3
+  # max-idle-conns: 100
+  # max-idle-conns-per-host: 10
+  # idle-conn-timeout: "90s"
+  # --------------------------------------------------------------------------
 
 result:
-  storage: "fs"
-  path: "/data/result"
-  # Для remote-хранилищ (s3/sftp/ftp/ftps):
-  #   spool-max-bytes: 10485760
-  #   dial-timeout: "30s"
-  #   read-timeout: "60s"         # таймаут операции (default 60s)
-  #   max-attempts: 3             # число попыток операции (default 3)
-  #   max-idle-conns: 100         # пул idle-соединений (default 100)
-  #   idle-conn-timeout: "90s"    # таймаут idle-соединений (default 90s)
-  # Для HTTP-подобных хранилищ (s3) дополнительно:
-  #   max-idle-conns-per-host: 10 # idle-соединений на хост (default 10)
-  #   metadata-ttl: "30s"         # TTL кэша метаданных (0 = выключен)
-  # Для sftp обязательно задать host-key-fingerprint (SHA256:...).
-  # Для ftps по умолчанию tls-verify: true (отключение запрещено).
+  storage: fs
+  path: "/data/result"  # каталог результатов на диске (для fs)
 
+  # Для result ДОСТУПНЫ те же remote-хранилища, кроме http (запрещено).
+  # Пути к исходным и результатам могут отличаться (разные хранилища для
+  # чтения и записи). Пример S3 result:
+  # storage: s3
+  # bucket: "my-result-bucket"
+  # prefix: "gen"
+  # ...
+
+########################################
+# imagemagick — настройки процессора ImageMagick.
+#
+# Процессор запускает бинарник ImageMagick как subprocess для каждой
+# операции. Лимиты применяются ТРЁМЯ слоями:
+#   1) -limit аргументы командной строки (limits ниже);
+#   2) сгенерированный policy.xml (policy ниже) через MAGICK_CONFIGURE_PATH;
+#   3) application-level ограничения: bounded writer (output-bytes) и
+#      context deadline (timeout) — не полагаются только на policy.
+########################################
 imagemagick:
+  # binary — имя или путь к исполняемому файлу ImageMagick.
+  # Тип: string. Дефолт в коде: "magick" (ImageMagick 7); для версии 6
+  # укажите "convert". Должен быть в PATH или абсолютным путём.
+  binary: "magick"
+
+  # policy — настройки генерации deny-by-default policy.xml.
+  # При enabled=true генерируется политика:
+  #   - запрет все coders/delegates по умолчанию, разрешает лишь безопасный
+  #     whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/
+  #     PNM/TIFF/BMP/ICO);
+  #   - явный запрет network- и scripting-coders (URL/HTTPS/HTTP/FTP/MSL/MVG/
+  #     LABEL/TEXT/PLASMA/WPG/PS/PDF/SVG и др.) и delegates (curl, wget, ssh,
+  #     rsvg, inkscape...);
+  #   - resource limits (0 = не задавать соответствующую директиву).
   policy:
+    # enabled — включать генерацию policy.xml.
+    # Тип: *bool. Дефолт: true. false = полагаться на системную policy.
     enabled: true
-    disable-network: true
-    # Resource policies в policy.xml (0 = не задавать). Дублируют лимиты
-    # ниже и применяются ImageMagick на уровне policy (до -limit).
-    max-memory-bytes: 1048576000   # 1 GiB
-    max-map-bytes: 2097152000      # 2 GiB
-    max-disk-bytes: 1048576000     # 1 GiB
+
+    # dir — каталог, куда пишется policy.xml.
+    # Тип: string. Пусто = временный каталог (os.MkdirTemp), удаляемый
+    # при закрытии Processor. Файл пишется атомарно (tmp + rename, права 0600,
+    # защита каталога 0700). При указании каталога он НЕ удаляется.
+    dir: ""            # пусто = временный каталог
+
+    # resource-политики (0 = не задавать; значения дублируют лимиты ниже,
+    # но применяются ImageMagick на уровне policy ДО -limit):
+    max-memory-bytes: 1073741824                 # 1 GiB
+    max-map-bytes: 2147483648                    # 2 GiB
+    max-disk-bytes: 1073741824                   # 1 GiB
     max-threads: 4
     max-time-seconds: 30
     max-width: 32768
     max-height: 32768
-    max-pixels: 268435456          # 256 MP (защита от decompression bomb)
+    max-pixels: 268435456                        # 256 MP (защита от decompression bomb)
     max-frames: 100
+
+    # disable-network — отключать network-capable delegates (URL, HTTPS,
+    # FTP, MSL, MVG, /...) в policy.xml.
+    # Тип: *bool. Дефолт: true. НЕ отключайте в production (риск SSRF).
+    disable-network: true
+
+    # disabled-coders — ДОПОЛНИТЕЛЬНЫЕ coders для явного запрета
+    # (помимо встроенного опасного списка).
+    # Тип: list[string]. Дефолт: пусто.
+    # Пример: disabled-coders: ["PALM", "SUN", "SGI"]
+    disabled-coders: []
+
+    # disabled-delegates — дополнительные delegates для явного запрета.
+    # Тип: list[string]. Дефолт: пусто.
+    # disabled-delegates: []
+
+  # limits — resource limits для subprocess ImageMagick.
+  # Значение 0 поля = без ограничения. Лимиты: через -limit для 6/7.
   limits:
+    # timeout — application-level context deadline на один subprocess.
+    # Тип: duration-строка (например "30s"). Превышение → убийство процесса
+    # Через context и LimitError. НЕ полагается только на policy.xml.
     timeout: "30s"
-    output-bytes: 10485760
-    # Resource limits через -limit (ImageMagick 6/7). Защита от
-    # decompression bomb: area = лимит площади (width*height), width/height —
-    # лимиты сторон.
-    memory-bytes: 1048576000       # 1 GiB
-    map-bytes: 2097152000          # 2 GiB
-    disk-bytes: 1048576000         # 1 GiB
+
+    # output-bytes — application-level лимит размера ВЫХОДНОГО файла (bytes).
+    # Реализуется boundedWriter'ом на stdout subprocess; при превышении —
+    # подпроцесс отменяется (отмена ctx). Защита от гигантских результатов.
+    output-bytes: 10485760                       # 10 MiB
+
+    # resource limits (bytes) через -limit memory/map/disk (0 = не задавать):
+    memory-bytes: 1073741824                     # 1 GiB
+    map-bytes: 2147483648                        # 2 GiB
+    disk-bytes: 1073741824                       # 1 GiB
+    # threads — число потоков (0 = авто).
     threads: 4
+    # time-seconds — лимит времени выполнения (сек).
     time-seconds: 30
+    # width / height / pixels — защита от decompression bomb:
     width: 32768
     height: 32768
-    pixels: 268435456              # 256 MP (area)
+    pixels: 268435456                            # 256 MP (area = w*h)
+    # frames — лимит кадров анимации (лимит list-length в policy).
     frames: 100
-    # Максимальное число одновременно работающих ImageMagick subprocess
-    # (0 = без ограничения). Рекомендуется задать явное значение
-    # (например 2) для защиты CPU/RAM от перегрузки.
+
+    # concurrency — максимальное число ОДНОВРЕМЕННО работающих ImageMagick
+    # subprocess (реальная защита CPU/RAM от перегрузки при параллельных
+    # запросах). 0 = в коде применяется 16 (по умолчанию). Рекомендуется
+    # задавать явное разумное значение (например 2-4) под ваши ресурсы.
     concurrency: 2
-    # Параметры сжатия (0 = умолчание ImageMagick). Баланс скорость/размер.
+
+    # webp-method — метод сжатия WebP (0-6). 0 = умолчание ImageMagick;
+    # 4 = баланс скорость/размер. 6 = максимальное сжатие (медленнее).
     webp-method: 4
+
+    # png-compression-level — уровень сжатия PNG (0-9, обычно 6).
+    # 0 = умолчание ImageMagick; больше = меньше размер, медленнее.
     png-compression-level: 6
 
+########################################
+# application — прикладные (application-level) лимиты всего сервиса.
+########################################
 application:
-  # Максимальный размер выходного файла (0 = без лимита).
-  # Рекомендуется задать явный лимит (например 10485760 = 10 MiB).
+  # output-limit — максимальный размер ВЫХОДНОГО файла, который будет
+  # сохранён (0 = без лимита).
+  # Тип: int64 (байт). Дефолт: 0 (= нет). При превышении — генерация
+  # прерывается; результат не сохраняется.
+  # Рекомендуется задавать явно, например 10485760 (10 MiB).
   output-limit: 0
-  # Общий бюджет памяти процесса для spillable-буферов (source+result).
-  # При превышении буфер сбрасывается во временный файл на диске.
-  # 0 = без лимита (не рекомендуется). По умолчанию 500 МБ.
-  buffer-max-bytes: 524288000
 
+  # buffer-max-bytes — общий бюджет памяти для спиллабл-буфера (source и
+  # result вместе). При исчерпании — спул на диск (временный файл) даже
+  # для in-memory данных. 0 = без лимита (не рекомендуется).
+  # Тип: int64 (байты). Дефолт в коде: 524288000 (500 MiB).
+  buffer-max-bytes: 524288000                   # 500 MiB
+
+########################################
+# observability — логирование (и метрики).
+########################################
 observability:
+  # log-level — уровень логирования.
+  # Тип: string. Дефолт: "info".
+  # Допустимое: "debug", "info", "warn", "error" (регистронезависимо,
+  # маппится в slog levels). В production рекомендуется "info"/"warn";
+  # "debug" максимально подробен (для отладки).
   log-level: "info"

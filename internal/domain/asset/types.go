@@ -5,12 +5,12 @@
 // конфигурации. Все value objects неизменяемы (immutable): их поля приватны,
 // а значения создаются только через конструкторы, выполняющие валидацию.
 //
-// URL-грамматика версионирована (v1):
+// URL-грамматика:
 //
-//	/v1/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
-//	/v1/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+//	/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
+//	/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
 //
-// transform — один из кодов: "c" (crop), "t" (trim), "ct" (crop затем trim),
+// transform — один из кодов: "c" (crop), "t" (trim), "ct" (trim затем crop),
 // либо отсутствует (тогда применяется resize). dpr — множитель плотности
 // пикселей: отсутствие суффикса означает 1, явно допустимы только 2 или 3.
 // size "x" означает сохранение исходного размера изображения.
@@ -30,7 +30,7 @@ import (
 
 // Лимиты длины и символов для компонентов URL.
 const (
-	// MaxPathLen — максимальная длина пути (без ведущего "/v1/").
+	// MaxPathLen — максимальная длина пути.
 	MaxPathLen = 512
 	// MaxSourceNameLen — максимальная длина имени исходника.
 	MaxSourceNameLen = 128
@@ -60,22 +60,13 @@ const (
 	// presetNameChars — символы, допустимые в имени пресета. Дефисы
 	// запрещены, чтобы имя пресета в URL
 	// {source_name}-{source_format}/{preset_name}.{output_format} можно было
-	// однозначно отделить от source_format последним дефисом.
-	presetNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_."
+	// однозначно отделить от source_format последним дефисом. "@" допустим:
+	// имя пресета может содержать фиксированный суффикс @dpr (например
+	// "thumb@2"), который отделяется от @dpr-суффикса URL последним "@".
+	presetNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@."
 	// formatChars — символы, допустимые в формате.
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
-
-// Version — версия URL-грамматики.
-type Version string
-
-const (
-	// V1 — текущая версия URL-грамматики.
-	V1 Version = "v1"
-)
-
-// ValidVersion сообщает, является ли v допустимой версией.
-func ValidVersion(v Version) bool { return v == V1 }
 
 // Transform определяет режим обработки изображения.
 type Transform string
@@ -85,7 +76,7 @@ const (
 	TransformCrop Transform = "c"
 	// TransformTrim — обрезка по краям (trim).
 	TransformTrim Transform = "t"
-	// TransformCropTrim — последовательное применение crop и trim.
+	// TransformCropTrim — последовательное применение trim и crop (сначала trim).
 	TransformCropTrim Transform = "ct"
 )
 

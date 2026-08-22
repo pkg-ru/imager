@@ -26,8 +26,7 @@ type MetricsAuthConfig struct {
 //   - /healthz  — liveness
 //   - /readyz   — readiness
 //   - /metrics  — bounded-cardinality метрики (Prometheus exposition)
-//   - /v1/...   — asset URL (делегируется Handler)
-//   - всё прочее — 404 через Handler (fallback semantics)
+//   - asset URL — делегируется Handler (fallback semantics)
 func NewMux(h *Handler, health *Health, metrics observability.Metrics) http.Handler {
 	return NewMuxWithAuth(h, health, metrics, MetricsAuthConfig{})
 }
@@ -40,8 +39,7 @@ func NewMuxWithAuth(h *Handler, health *Health, metrics observability.Metrics, a
 	mux.Handle("/healthz", health.LivenessHandler())
 	mux.Handle("/readyz", health.ReadinessHandler())
 	mux.Handle("/metrics", protectMetrics(observability.MetricsHandler(), auth))
-	mux.Handle("/v1/", h)
-	// Корневой путь и всё остальное — через handler (для fallback/404).
+	// Корневой путь и всё остальное — через handler (asset URL, fallback/404).
 	mux.Handle("/", h)
 
 	// Observability middleware поверх всего mux (request ID + request metrics).

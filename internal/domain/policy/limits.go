@@ -19,23 +19,23 @@ import (
 // случаев, где это явно указано.
 type Limits struct {
 	// SourceBytes — максимальный размер исходного файла в байтах.
-	SourceBytes int64
+	SourceBytes int64 `yaml:"source-bytes"`
 	// Width — максимальная ширина в пикселях.
-	Width int
+	Width int `yaml:"width"`
 	// Height — максимальная высота в пикселях.
-	Height int
+	Height int `yaml:"height"`
 	// Pixels — максимальное число пикселей (width*height).
-	Pixels int64
+	Pixels int64 `yaml:"pixels"`
 	// DPR — максимальный DPR.
-	DPR int
+	DPR int `yaml:"dpr"`
 	// Frames — максимальное число кадров (для анимации).
-	Frames int
+	Frames int `yaml:"frames"`
 	// OutputBytes — максимальный размер выходного файла в байтах.
-	OutputBytes int64
+	OutputBytes int64 `yaml:"output-bytes"`
 	// Duration — максимальная длительность в миллисекундах (для анимации).
-	Duration int64
+	Duration int64 `yaml:"duration"`
 	// Concurrency — максимальное число одновременных операций.
-	Concurrency int
+	Concurrency int `yaml:"concurrency"`
 }
 
 // NewLimits создаёт Limits с валидацией неотрицательности.

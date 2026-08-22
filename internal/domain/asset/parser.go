@@ -26,14 +26,26 @@ func parseErr(url, reason, segment string) error {
 
 // Parse разбирает asset URL в immutable Request.
 //
-// Поддерживаются канонический и preset форматы (v1):
+// Поддерживаются канонический и preset форматы:
 //
-//	/v1/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
-//	/v1/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+//	/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
+//	/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+//
+// Ведущий "/" необязателен: URL принимается как с ним, так и без него.
 //
 // transform — необязателен. size обязателен; "x" означает сохранение
 // исходного размера. @dpr необязателен: отсутствие означает 1, явные 0 и 1
 // отклоняются, допустимы только 2 и 3.
+//
+// Имя пресета может содержать фиксированный @dpr-суффикс (например
+// "thumb@2"). Правило отделения @dpr-суффикса имени от @dpr-суффикса URL:
+//
+//   - канонический URL (transform-size или size): последний "@" — это
+//     @dpr URL;
+//   - preset URL с ровно одним "@": это @dpr имени пресета (имя
+//     распознаётся целиком, dpr URL = 1);
+//   - preset URL с двумя "@" (например "thumb@2@3"): последний "@" — это
+//     @dpr URL, а имя пресета — всё до него ("thumb@2").
 //
 // Разбор выполняется строго от конца URL. Перед разбором выполняется
 // безопасная canonicalization: запрещены traversal-сегменты, encoded
@@ -50,15 +62,8 @@ func Parse(raw string) (*Request, error) {
 		return nil, parseErr(raw, err.Error(), "")
 	}
 
-	// Отделяем версию "/v1/".
-	rest := raw
-	if strings.HasPrefix(rest, "/"+string(V1)+"/") {
-		rest = rest[len("/"+string(V1)+"/"):]
-	} else if strings.HasPrefix(rest, string(V1)+"/") {
-		rest = rest[len(string(V1)+"/"):]
-	} else {
-		return nil, parseErr(raw, "missing version prefix /v1/", "")
-	}
+	// Срезаем ведущий "/" (необязателен).
+	rest := strings.TrimPrefix(raw, "/")
 
 	// Отделяем output_format (последний сегмент после последней точки).
 	lastDot := strings.LastIndex(rest, ".")
@@ -74,26 +79,6 @@ func Parse(raw string) (*Request, error) {
 		return nil, parseErr(raw, "invalid output format: "+err.Error(), outputFormatStr)
 	}
 	core := rest[:lastDot]
-
-	// Отделяем @dpr (после последнего @).
-	atIdx := strings.LastIndex(core, "@")
-	dpr := DPR(DefaultDPR)
-	if atIdx >= 0 {
-		dprStr := core[atIdx+1:]
-		if dprStr == "" {
-			return nil, parseErr(raw, "empty dpr", "@")
-		}
-		v, err := strconv.Atoi(dprStr)
-		if err != nil {
-			return nil, parseErr(raw, "dpr must be an integer", "@"+dprStr)
-		}
-		// Явная передача 0 или 1 — ошибка; допустимы только 2 и 3.
-		if v < MinDPR || v > MaxDPR {
-			return nil, parseErr(raw, fmt.Sprintf("dpr must be in [%d,%d]", MinDPR, MaxDPR), "@"+dprStr)
-		}
-		dpr = DPR(v)
-		core = core[:atIdx]
-	}
 
 	// core = {path}/{source_name}-{source_format}/{rest}.
 	// Последний "/" отделяет rest (transform-size / size / preset_name) от
@@ -145,8 +130,40 @@ func Parse(raw string) (*Request, error) {
 		return nil, parseErr(raw, "invalid source format: "+err.Error(), sourceFormatStr)
 	}
 
-	// Разбираем restPart: transform-size / size / preset_name.
-	if tr, sz, ok := matchTransformPrefix(restPart); ok {
+	// Отделяем @dpr в restPart.
+	dpr := DPR(DefaultDPR)
+	base := restPart
+	if atIdx := strings.LastIndex(restPart, "@"); atIdx >= 0 {
+		dprStr := restPart[atIdx+1:]
+		if dprStr == "" {
+			return nil, parseErr(raw, "empty dpr", "@")
+		}
+		prefix := restPart[:atIdx]
+		// Канонический URL (transform-size или size): @dpr — dpr URL.
+		if _, _, ok := matchTransformPrefix(prefix); ok || strings.Contains(prefix, "x") {
+			v, err := parseURLDPR(dprStr)
+			if err != nil {
+				return nil, parseErr(raw, err.Error(), "@"+dprStr)
+			}
+			dpr = v
+			base = prefix
+		} else if strings.Contains(prefix, "@") {
+			// Preset с двумя "@": последний — dpr URL, имя — всё до него.
+			v, err := parseURLDPR(dprStr)
+			if err != nil {
+				return nil, parseErr(raw, err.Error(), "@"+dprStr)
+			}
+			dpr = v
+			base = prefix
+		} else {
+			// Preset с ровно одним "@": это @dpr имени пресета. Имя
+			// распознаётся целиком, dpr URL = 1 (default).
+			base = restPart
+		}
+	}
+
+	// Разбираем base: transform-size / size / preset_name.
+	if tr, sz, ok := matchTransformPrefix(base); ok {
 		// Канонический URL с transform.
 		transform := Transform(tr)
 		size, err := ParseSize(sz)
@@ -159,24 +176,44 @@ func Parse(raw string) (*Request, error) {
 		return NewRequest(canon, sourceName, sourceFormat, transform, size, dpr, outputFormat)
 	}
 
-	if strings.Contains(restPart, "x") {
-		// Канонический URL без transform: restPart — size.
-		size, err := ParseSize(restPart)
+	if strings.Contains(base, "x") {
+		// Канонический URL без transform: base — size.
+		size, err := ParseSize(base)
 		if err != nil {
-			return nil, parseErr(raw, "invalid size: "+err.Error(), restPart)
+			return nil, parseErr(raw, "invalid size: "+err.Error(), base)
 		}
 		if size.IsEmpty() {
-			return nil, parseErr(raw, "size must not be empty", restPart)
+			return nil, parseErr(raw, "size must not be empty", base)
 		}
 		return NewRequest(canon, sourceName, sourceFormat, "", size, dpr, outputFormat)
 	}
 
-	// Preset: restPart — preset_name.
-	presetName, err := NewPresetName(restPart)
+	// Preset: base — preset_name (может содержать @dpr-суффикс имени).
+	presetName, err := NewPresetName(base)
 	if err != nil {
-		return nil, parseErr(raw, "invalid preset name: "+err.Error(), restPart)
+		return nil, parseErr(raw, "invalid preset name: "+err.Error(), base)
+	}
+	// Валидируем @dpr-суффикс имени пресета (если есть): допустимы @1/@2/@3.
+	if _, _, err := SplitPresetNameDPR(base); err != nil {
+		return nil, parseErr(raw, "invalid preset name: "+err.Error(), base)
 	}
 	return NewPresetRequest(canon, sourceName, sourceFormat, presetName, dpr, outputFormat)
+}
+
+// parseURLDPR разбирает явный @dpr-суффикс URL. Явная передача 0 или 1 —
+// ошибка; допустимы только 2 и 3.
+func parseURLDPR(s string) (DPR, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty dpr")
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("dpr must be an integer")
+	}
+	if v < MinDPR || v > MaxDPR {
+		return 0, fmt.Errorf("dpr must be in [%d,%d]", MinDPR, MaxDPR)
+	}
+	return DPR(v), nil
 }
 
 // matchTransformPrefix проверяет, начинается ли s с "c-", "t-" или "ct-",

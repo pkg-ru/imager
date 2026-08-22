@@ -2,7 +2,7 @@
 // application/generatev2 и domain/asset. Это изолированный adapter/runtime
 // пакет: он НЕ подключает legacy handler, legacy server или legacy config.
 //
-// Адаптер реализует versioned URL grammar (/v1/...), GET/HEAD/OPTIONS,
+// Адаптер реализует URL grammar, GET/HEAD/OPTIONS,
 // реальные HTTP-статусы с типизированным error envelope, ETag/conditional
 // requests, security headers, deny-by-default CORS и not-found fallback.
 package httpapi
