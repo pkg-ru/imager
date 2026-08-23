@@ -74,6 +74,10 @@ type Deps struct {
 	OutputLimit int64
 	// Quality — качество сжатия (0 = по умолчанию).
 	Quality int
+	// DefaultWatermark — ватермарка по умолчанию (nil = не применяется).
+	// Используется для запросов без ватермарки в пресете и без совпавшей
+	// path-policy с watermark. Приоритет: пресет → path-policy → default.
+	DefaultWatermark *processing.WatermarkSpec
 	// Logger — опциональный логгер.
 	Logger Logger
 	// Metrics — опциональные метрики (request/cache/processor/storage).
@@ -356,11 +360,26 @@ func (s *Service) sourceKey(req *asset.Request) object.ObjectKey {
 	return object.ObjectKey(req.Path() + "/" + file)
 }
 
+// resolveWatermark определяет ватермарку запроса по приоритету:
+//  1. ватермарка пресета (заполняется при разрешении preset URL);
+//  2. ватермарка path-policy (longest prefix match по пути);
+//  3. ватермарка по умолчанию из конфигурации (Deps.DefaultWatermark).
+func (s *Service) resolveWatermark(req *asset.Request) *processing.WatermarkSpec {
+	if wm := req.Watermark(); wm != nil {
+		return wm
+	}
+	if pp := s.deps.Policy.MatchPath(req.Path()); pp != nil && pp.Watermark != nil {
+		return pp.Watermark
+	}
+	return s.deps.DefaultWatermark
+}
+
 // buildPlan преобразует канонический запрос в валидированный план обработки.
 //
 // Quality/frames/duration/loop берутся из запроса (заполняются при
 // разрешении пресета); если не заданы (0/nil), используются значения по
 // умолчанию из Deps (Quality) или остаются без ограничения.
+// Ватермарка: пресет → path-policy → default (см. resolveWatermark).
 func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, error) {
 	var op processing.Operation
 	switch req.Transform() {
@@ -395,14 +414,20 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	loop := req.Loop()
 	frames := req.Frames()
 	duration := req.Duration()
+	wm := s.resolveWatermark(req)
 	var w, h int
 	if req.Size().IsOriginal() {
 		// size=x: сохранить исходный размер изображения.
-		return processing.NewProcessingPlan(
+		plan, err := processing.NewProcessingPlan(
 			op, srcFmt, outFmt,
 			processing.Size{Original: true},
 			dpr, quality, loop, frames, duration,
 		)
+		if err != nil {
+			return nil, err
+		}
+		plan.Watermark = wm
+		return plan, nil
 	}
 	if dw := req.Size().Width(); dw != nil {
 		w = dw.Int() * dpr
@@ -410,11 +435,16 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	if dh := req.Size().Height(); dh != nil {
 		h = dh.Int() * dpr
 	}
-	return processing.NewProcessingPlan(
+	plan, err := processing.NewProcessingPlan(
 		op, srcFmt, outFmt,
 		processing.Size{Width: w, Height: h},
 		dpr, quality, loop, frames, duration,
 	)
+	if err != nil {
+		return nil, err
+	}
+	plan.Watermark = wm
+	return plan, nil
 }
 
 // processAndPublish запускает процессор, который пишет результат в

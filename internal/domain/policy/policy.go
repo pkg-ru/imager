@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // Authorization определяет режим авторизации запроса.
@@ -85,6 +86,10 @@ type PathPolicy struct {
 	// Trim — требование к trim (nil = не задано/неважно). true = trim
 	// обязан присутствовать в transform, false = trim запрещён.
 	Trim *bool
+	// Watermark — спецификация ватермарки, применяемая к каноническим
+	// запросам этого префикса пути (nil = не задана). Разрешается по имени
+	// при компиляции конфигурации; приоритет ниже, чем у watermark пресета.
+	Watermark *processing.WatermarkSpec
 }
 
 // GlobalPolicy — скомпилированная глобальная политика по умолчанию.
@@ -158,6 +163,17 @@ func (p *Policy) pathIndex(path string) int {
 		}
 	}
 	return best
+}
+
+// MatchPath возвращает path-policy для заданного пути по правилу longest
+// prefix match или nil, если ни одна не совпала. Используется use case'ом
+// для определения ватермарки канонического запроса (watermark path-policy).
+func (p *Policy) MatchPath(path string) *PathPolicy {
+	idx := p.pathIndex(path)
+	if idx < 0 {
+		return nil
+	}
+	return &p.PathPolicies[idx]
 }
 
 // DecisionReason — причина решения политики.

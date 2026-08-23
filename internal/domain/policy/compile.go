@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // Config — конфигурация политики (DTO, не связан с YAML).
@@ -41,6 +42,10 @@ type PathPolicyConfig struct {
 	// Trim — требование к trim (nil = не задано/неважно). true = trim
 	// обязан присутствовать в transform, false = trim запрещён.
 	Trim *bool `yaml:"trim"`
+	// Watermark — имя ватермарки (ссылка на элемент секции watermarks;
+	// пусто = не задана). Разрешается в спецификацию при компиляции:
+	// неизвестное имя — ошибка старта.
+	Watermark string `yaml:"watermark"`
 }
 
 // PresetConfig — конфигурация пресета.
@@ -74,6 +79,11 @@ type PresetConfig struct {
 	Duration int `yaml:"duration"`
 	// Loop — зацикливание анимации (nil = default-loop из processing).
 	Loop *bool `yaml:"loop"`
+	// Watermark — имя ватермарки (ссылка на элемент секции watermarks;
+	// пусто = не задана). Разрешается в спецификацию при компиляции:
+	// неизвестное имя — ошибка старта. Приоритет выше path-policy и
+	// processing.default-watermark.
+	Watermark string `yaml:"watermark"`
 }
 
 // ValidationError описывает ошибку валидации конфигурации с путём к полю.
@@ -210,9 +220,23 @@ type Compiled struct {
 }
 
 // Compile собирает Policy и PresetSet из валидированной конфигурации.
-func Compile(cfg *Config) (*Compiled, error) {
+//
+// watermarks — реестр скомпилированных спецификаций ватермарок по имени
+// (строится из секции watermarks конфигурации). Имена watermark пресетов
+// и path-policies разрешаются здесь; неизвестное имя — ошибка.
+func Compile(cfg *Config, watermarks map[string]*processing.WatermarkSpec) (*Compiled, error) {
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
+	}
+	resolveWM := func(name, ctx string) (*processing.WatermarkSpec, error) {
+		if name == "" {
+			return nil, nil
+		}
+		wm, ok := watermarks[name]
+		if !ok || wm == nil {
+			return nil, fmt.Errorf("policy: %s: unknown watermark %q", ctx, name)
+		}
+		return wm, nil
 	}
 
 	policy := &Policy{
@@ -228,7 +252,7 @@ func Compile(cfg *Config) (*Compiled, error) {
 		policy.Global.SizeRules = append(policy.Global.SizeRules, rule)
 	}
 
-	for _, pp := range cfg.PathPolicies {
+	for i, pp := range cfg.PathPolicies {
 		compiled := PathPolicy{
 			Path: normalizePath(pp.Path),
 			Crop: pp.Crop,
@@ -238,11 +262,16 @@ func Compile(cfg *Config) (*Compiled, error) {
 			r, _ := ParseDPRRange(pp.DPR)
 			compiled.DPR = &r
 		}
+		wm, err := resolveWM(pp.Watermark, fmt.Sprintf("path-policies[%d] (%s)", i, pp.Path))
+		if err != nil {
+			return nil, err
+		}
+		compiled.Watermark = wm
 		policy.PathPolicies = append(policy.PathPolicies, compiled)
 	}
 
 	presets := make([]*asset.Preset, 0, len(cfg.Presets))
-	for _, p := range cfg.Presets {
+	for i, p := range cfg.Presets {
 		size, _ := asset.ParseSize(p.Size)
 		preset, err := asset.NewPreset(
 			p.Name,
@@ -257,6 +286,13 @@ func Compile(cfg *Config) (*Compiled, error) {
 		)
 		if err != nil {
 			return nil, err
+		}
+		wm, err := resolveWM(p.Watermark, fmt.Sprintf("presets[%d] (%s)", i, p.Name))
+		if err != nil {
+			return nil, err
+		}
+		if wm != nil {
+			preset = preset.WithWatermark(wm)
 		}
 		presets = append(presets, preset)
 	}

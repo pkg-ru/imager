@@ -169,8 +169,10 @@ curl -i http://127.0.0.1:8080/test-jpg/c-120x80@2.webp
 version: "1"          # версия схемы (обязательна; другое значение — ошибка старта)
 server:               # HTTP/TCP сервер: addr, таймауты, лимиты
 http:                 # HTTP-адаптер: CORS, cache-control, not-found и т.д.
+watermarks:           # именованные декларации ватермарок (применяются по имени)
 policy:               # политика авторизации запросов (deny-by-default)
-processing:           # умолчания обработки (default-quality, default-loop)
+processing:           # умолчания обработки (default-quality, default-loop,
+                      # default-watermark)
 source:               # source-хранилище (storage, path, параметры backend)
 result:               # result-хранилище (storage, path, параметры backend)
 imagemagick:          # binary, policy.xml, resource limits
@@ -249,6 +251,7 @@ observability:        # log-level
 | `dpr` | string | Диапазон допустимых DPR (`"0-1"`, `"2-3"`; пусто = без ограничения). |
 | `crop` | bool/nil | `nil` = неважно; `true` = crop обязан быть в URL; `false` = crop запрещён. |
 | `trim` | bool/nil | Аналогично для trim. |
+| `watermark` | string | Имя ватермарки из секции `watermarks`: накладывается на канонические запросы префикса пути. Приоритет ниже пресета, выше `processing.default-watermark`. Пусто = не задана. |
 
 #### `policy.presets[]`
 
@@ -266,6 +269,7 @@ observability:        # log-level
 | `frames` | int | Макс. число кадров анимации (`0` = без ограничения). |
 | `duration` | int | Макс. длительность анимации в мс (`0` = без ограничения). |
 | `loop` | bool/nil | `nil` = `default-loop` из `processing`; `true` = бесконечный loop; `false` = однопроходная анимация. |
+| `watermark` | string | Имя ватермарки из секции `watermarks`. Приоритет выше path-policy и `processing.default-watermark`. Пусто = не задана. |
 
 Комбинации `crop`/`trim` формируют трансформацию:
 
@@ -282,6 +286,36 @@ observability:        # log-level
 |------|-----|--------|----------|
 | `default-quality` | int | `85` | Качество сжатия по умолчанию (`0`–`100`; вне диапазона — ошибка валидации). Применяется к lossy-форматам (jpeg/webp). На PNG влияет `png-compression-level`. |
 | `default-loop` | bool/nil | `true` | Зацикливание анимаций по умолчанию (GIF/WebP/APNG/HEIF), если в пресете не задан `loop`. |
+| `default-watermark` | string | пусто | Ватермарка по умолчанию (имя из `watermarks`). Применяется к запросам без ватермарки в пресете и path-policy. Неизвестное имя — ошибка старта. |
+
+### `watermarks` — декларации ватермарок
+
+Ватермарка описывается один раз и применяется **по имени** в пресетах (`policy.presets[].watermark`), path-policies (`policy.path-policies[].watermark`) или через дефолт (`processing.default-watermark`).
+
+Приоритет применения: **пресет -> path-policy (longest prefix match) -> default-watermark**; нигде не задана — не накладывается.
+
+```yaml
+watermarks:
+  - name: water-test
+    path: "/etc/imager/watermarks/test.png"  # файл должен существовать на старте (fail-fast)
+    position: center   # top | bottom | left | right | center (CSS background-position)
+    repeat: no-repeat  # no-repeat | repeat | repeat-x | repeat-y | round | space (CSS background-repeat)
+    size: contain      # contain | cover | "200px 50px" (CSS background-size)
+```
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `name` | string | — (обязателен) | Уникальное имя для ссылок из пресетов/path-policies/дефолта. |
+| `path` | string | — (обязателен) | Путь к файлу изображения ватермарки на диске. Отсутствующий файл — ошибка старта. |
+| `position` | string | `center` | Позиция одиночной копии (CSS-подобно; вторая ось — центр). |
+| `repeat` | string | `no-repeat` | Заполнение холста копиями (CSS-подобно). `round` масштабирует копии до целого числа по осям; `space` распределяет с равными промежутками. |
+| `size` | string | `contain` | Размер копии относительно целевого холста: `contain`, `cover` или фиксированный `"200px 50px"`. |
+
+Ограничения движков:
+
+- **libvips** (основной движок) реализует `position`/`repeat`/`size` полностью.
+- **ImageMagick** (fallback для APNG): точный размер только в px-форме; `contain`/`cover` рендерятся в натуральном размере файла; все режимы `repeat`, кроме `no-repeat`, — как сплошная плитка.
+- Анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips дают ошибку обработки (комозит применился бы только к первому кадру).
 
 ### `source` / `result` — хранилища
 

@@ -139,6 +139,7 @@ env-переменных и CLI-флагов нет. Единственная en
 version: "1"
 server:            # HTTP-сервер: addr, таймауты, max-header-bytes
 http:              # HTTP-адаптер: CORS, cache-control, not-found и т.д.
+watermarks:        # именованные декларации ватермарок (name/path/position/repeat/size)
 policy:            # политика авторизации запросов
 processing:        # умолчания обработки (default-quality и т.д.)
 source:            # source-хранилище (storage, path, параметры backend)

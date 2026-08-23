@@ -140,6 +140,10 @@ type LibvipsConfig struct {
 type RuntimeConfigFile struct {
 	// Version — версия конфигурации.
 	Version string `yaml:"version"`
+	// Watermarks — именованные декларации ватермарок (пробрасываются в
+	// config.Config; ссылки из пресетов/path-policies разрешаются при
+	// компиляции).
+	Watermarks []config.WatermarkConfig `yaml:"watermarks"`
 	// Server — конфигурация HTTP-сервера.
 	Server ServerYAML `yaml:"server"`
 	// HTTP — конфигурация HTTP-адаптера.
@@ -399,7 +403,16 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	}
 
 	// Собираем config.Config из сырых секций.
-	cfg := &config.Config{Version: raw.Version}
+	cfg := &config.Config{Version: raw.Version, Watermarks: raw.Watermarks}
+	// Fail-fast: файлы ватермарок должны существовать на старте.
+	for i, w := range raw.Watermarks {
+		if w.Path == "" {
+			continue // пустой path отклонится в config.Validate
+		}
+		if _, err := os.Stat(w.Path); err != nil {
+			return nil, fmt.Errorf("httpapi: watermarks[%d] (%s): %w", i, w.Name, err)
+		}
+	}
 	if raw.Policy != nil {
 		pol, err := yaml.Marshal(raw.Policy)
 		if err != nil {

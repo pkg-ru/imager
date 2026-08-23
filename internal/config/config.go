@@ -18,16 +18,38 @@ import (
 
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // Config — typed DTO конфигурации конвейера ассетов.
 type Config struct {
 	// Version — версия конфигурации (должна быть "1").
 	Version string `yaml:"version"`
+	// Watermarks — именованные декларации ватермарок. На них ссылаются
+	// пресеты и path-policies по имени (watermark: <name>).
+	Watermarks []WatermarkConfig `yaml:"watermarks"`
 	// Policy — конфигурация политики.
 	Policy policy.Config `yaml:"policy"`
 	// Processing — конфигурация обработки.
 	Processing ProcessingConfig `yaml:"processing"`
+}
+
+// WatermarkConfig — декларация ватермарки в конфигурации.
+type WatermarkConfig struct {
+	// Name — уникальное имя ватермарки (по нему ссылаются пресеты и
+	// path-policies).
+	Name string `yaml:"name"`
+	// Path — путь к файлу изображения ватермарки на диске.
+	Path string `yaml:"path"`
+	// Position — позиция размещения:
+	// top | bottom | left | right | center (CSS-подобно). Пусто = center.
+	Position string `yaml:"position"`
+	// Repeat — режим заполнения копиями: no-repeat | repeat | repeat-x |
+	// repeat-y | round | space (CSS-подобно). Пусто = no-repeat.
+	Repeat string `yaml:"repeat"`
+	// Size — размер копии: contain | cover | "{width}px {height}px"
+	// (CSS background-size). Пусто = contain.
+	Size string `yaml:"size"`
 }
 
 // ProcessingConfig — конфигурация обработки.
@@ -36,6 +58,10 @@ type ProcessingConfig struct {
 	DefaultQuality int `yaml:"default-quality"`
 	// DefaultLoop — зацикливание анимации по умолчанию (nil = true).
 	DefaultLoop *bool `yaml:"default-loop"`
+	// DefaultWatermark — имя ватермарки по умолчанию (пусто = не
+	// применяется). Используется, если ватермарка не задана ни в пресете,
+	// ни в path-policy. Неизвестное имя — ошибка старта.
+	DefaultWatermark string `yaml:"default-watermark"`
 }
 
 // SupportedVersion — поддерживаемая версия конфигурации.
@@ -52,10 +78,66 @@ func (c *Config) Validate() error {
 	if c.Processing.DefaultQuality < 0 || c.Processing.DefaultQuality > 100 {
 		return fmt.Errorf("config: default-quality must be in [0,100], got %d", c.Processing.DefaultQuality)
 	}
+	// Ватермарки: валидность каждой декларации, уникальность имён.
+	for i, w := range c.Watermarks {
+		if _, err := processing.NewWatermarkSpec(w.Name, w.Path,
+			processing.WatermarkPosition(w.Position),
+			processing.WatermarkRepeat(w.Repeat), w.Size); err != nil {
+			return fmt.Errorf("config: watermarks[%d]: %w", i, err)
+		}
+	}
+	seenWM := make(map[string]bool, len(c.Watermarks))
+	for _, w := range c.Watermarks {
+		if seenWM[w.Name] {
+			return fmt.Errorf("config: watermarks: duplicate name %q", w.Name)
+		}
+		seenWM[w.Name] = true
+	}
+	// Ссылки на ватермарки: default-watermark, пресеты, path-policies.
+	checkRef := func(name, what string) error {
+		if name == "" {
+			return nil
+		}
+		if !seenWM[name] {
+			return fmt.Errorf("config: %s: unknown watermark %q", what, name)
+		}
+		return nil
+	}
+	if err := checkRef(c.Processing.DefaultWatermark, "processing.default-watermark"); err != nil {
+		return err
+	}
+	for i, p := range c.Policy.Presets {
+		if err := checkRef(p.Watermark, fmt.Sprintf("policy.presets[%d] (%s).watermark", i, p.Name)); err != nil {
+			return err
+		}
+	}
+	for i, pp := range c.Policy.PathPolicies {
+		if err := checkRef(pp.Watermark, fmt.Sprintf("policy.path-policies[%d] (%s).watermark", i, pp.Path)); err != nil {
+			return err
+		}
+	}
 	if err := policy.ValidateConfig(&c.Policy); err != nil {
 		return fmt.Errorf("config: policy: %w", err)
 	}
 	return nil
+}
+
+// watermarkRegistry собирает реестр скомпилированных спецификаций
+// ватермарок по имени. Вызывать после Validate (декларации валидны,
+// имена уникальны).
+func (c *Config) watermarkRegistry() map[string]*processing.WatermarkSpec {
+	reg := make(map[string]*processing.WatermarkSpec, len(c.Watermarks))
+	for _, w := range c.Watermarks {
+		spec, err := processing.NewWatermarkSpec(w.Name, w.Path,
+			processing.WatermarkPosition(w.Position),
+			processing.WatermarkRepeat(w.Repeat), w.Size)
+		if err != nil {
+			// Не должно случиться после Validate.
+			continue
+		}
+		reg[spec.Name] = spec
+	}
+	return reg
 }
 
 // Normalize приводит DTO к канонической форме.
@@ -75,6 +157,11 @@ type Compiled struct {
 	DefaultQuality int
 	// DefaultLoop — зацикливание по умолчанию.
 	DefaultLoop *bool
+	// Watermarks — реестр скомпилированных спецификаций ватермарок по
+	// имени (ссылки уже разрешены в пресетах и path-policies).
+	Watermarks map[string]*processing.WatermarkSpec
+	// DefaultWatermark — ватермарка по умолчанию (nil = не задана).
+	DefaultWatermark *processing.WatermarkSpec
 }
 
 // Compile собирает доменные объекты из валидированного DTO.
@@ -82,14 +169,21 @@ func (c *Config) Compile() (*Compiled, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	compiled, err := policy.Compile(&c.Policy)
+	reg := c.watermarkRegistry()
+	compiled, err := policy.Compile(&c.Policy, reg)
 	if err != nil {
 		return nil, fmt.Errorf("config: compile policy: %w", err)
 	}
+	var defWM *processing.WatermarkSpec
+	if c.Processing.DefaultWatermark != "" {
+		defWM = reg[c.Processing.DefaultWatermark]
+	}
 	return &Compiled{
-		Policy:         compiled.Policy,
-		Presets:        compiled.Presets,
-		DefaultQuality: c.Processing.DefaultQuality,
-		DefaultLoop:    c.Processing.DefaultLoop,
+		Policy:           compiled.Policy,
+		Presets:          compiled.Presets,
+		DefaultQuality:   c.Processing.DefaultQuality,
+		DefaultLoop:      c.Processing.DefaultLoop,
+		Watermarks:       reg,
+		DefaultWatermark: defWM,
 	}, nil
 }

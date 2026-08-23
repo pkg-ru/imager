@@ -234,6 +234,12 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		args = append(args, "-quality", strconv.Itoa(plan.Quality))
 	}
 
+	// Ватермарка (nil = не применяется). Аргументы вставляются ДО указания
+	// выходного кодера, чтобы композит выполнялся над обработанным холстом.
+	if plan.Watermark != nil {
+		args = appendWatermarkArgs(args, plan.Watermark)
+	}
+
 	// Выход — в stdout в нужном формате.
 	coder := outputCoder[plan.OutputFormat]
 	if coder == "" {
@@ -295,4 +301,81 @@ func resizeString(w, h int, crop bool) string {
 		sb.WriteString("^")
 	}
 	return sb.String()
+}
+
+// watermarkGravity маппит CSS-подобную позицию ватермарки в значение
+// -gravity ImageMagick. Только allowlisted значения (спецификация приходит
+// из доверенного конфига и валидирована на старте).
+func watermarkGravity(p processing.WatermarkPosition) string {
+	switch p {
+	case processing.WatermarkPositionTop:
+		return "North"
+	case processing.WatermarkPositionBottom:
+		return "South"
+	case processing.WatermarkPositionLeft:
+		return "West"
+	case processing.WatermarkPositionRight:
+		return "East"
+	default:
+		return "Center"
+	}
+}
+
+// watermarkResizeGeometry возвращает геометрию масштабирования ватермарки
+// для fallback-движка ImageMagick.
+//
+// Ограничение fallback-движка: argv строится без знания размеров холста,
+// поэтому size: contain/cover рендерятся в НАТУРАЛЬНОМ размере файла
+// ватермарки (пустая геометрия). Точный CSS-подобный масштаб реализует
+// основной движок libvips. size "{w}px {h}px" масштабируется точно
+// ({w}x{h}!).
+func watermarkResizeGeometry(wm *processing.WatermarkSpec) string {
+	if wm.SizeKind == processing.WatermarkSizePixels {
+		return fmt.Sprintf("%dx%d!", wm.WidthPx, wm.HeightPx)
+	}
+	return ""
+}
+
+// appendWatermarkArgs добавляет аргументы наложения ватермарки.
+//
+// no-repeat: одна копия с позиционированием через -gravity:
+//
+//	( wm [-resize G] ) -gravity <pos> -geometry +0+0 -compose over -composite
+//
+// repeat*: масштабированная ватермарка кладётся в mpr-регистр, затем клон
+// холста заполняется плиткой (-tile mpr:wm + -draw color reset) и
+// накладывается поверх оригинала через -compose over -composite (альфа
+// плитки корректно сохраняется). Для repeat* позиции (gravity) не
+// применяются — плитка покрывает весь холст от (0,0).
+//
+// Путь к файлу ватермарки приходит из доверенного конфигурации (не из URL)
+// и передаётся как отдельный argv-элемент без shell.
+func appendWatermarkArgs(args []string, wm *processing.WatermarkSpec) []string {
+	geom := watermarkResizeGeometry(wm)
+	args = append(args, "(")
+	if geom != "" {
+		args = append(args, wm.Path, "-resize", geom)
+	} else {
+		args = append(args, wm.Path)
+	}
+	if wm.Repeat == processing.WatermarkRepeatNoRepeat {
+		args = append(args,
+			")",
+			"-gravity", watermarkGravity(wm.Position),
+			"-geometry", "+0+0",
+			"-compose", "over",
+			"-composite",
+		)
+		return args
+	}
+	args = append(args,
+		"-write", "mpr:wm", "+delete",
+		")",
+		"-clone", "0",
+		"-tile", "mpr:wm",
+		"-draw", "color 0,0 reset",
+		"-compose", "over",
+		"-composite",
+	)
+	return args
 }

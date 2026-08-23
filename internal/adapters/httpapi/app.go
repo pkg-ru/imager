@@ -103,17 +103,18 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 
 	// Use case.
 	svc, err := generatev2.New(generatev2.Deps{
-		Sources:     sources,
-		Results:     results,
-		Coordinator: coord,
-		Processor:   proc,
-		Policy:      compiled.Policy,
-		Presets:     compiled.Presets,
-		Buffers:     buffers,
-		OutputLimit: opt.OutputLimit,
-		Quality:     compiled.DefaultQuality,
-		Logger:      opt.HTTP.Logger,
-		Metrics:     opt.HTTP.Metrics,
+		Sources:          sources,
+		Results:          results,
+		Coordinator:      coord,
+		Processor:        proc,
+		Policy:           compiled.Policy,
+		Presets:          compiled.Presets,
+		Buffers:          buffers,
+		OutputLimit:      opt.OutputLimit,
+		Quality:          compiled.DefaultQuality,
+		DefaultWatermark: compiled.DefaultWatermark,
+		Logger:           opt.HTTP.Logger,
+		Metrics:          opt.HTTP.Metrics,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: build: generatev2: %w", err)

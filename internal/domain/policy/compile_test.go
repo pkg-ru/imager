@@ -173,7 +173,7 @@ func TestCompile(t *testing.T) {
 			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	compiled, err := Compile(cfg)
+	compiled, err := Compile(cfg, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 			{Path: "/basket/users/", DPR: "0-1"},
 		},
 	}
-	compiled, err := Compile(cfg)
+	compiled, err := Compile(cfg, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestCompileCropTrimMapping(t *testing.T) {
 			{Name: "resize", Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	compiled, err := Compile(cfg)
+	compiled, err := Compile(cfg, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestCompilePresetOptions(t *testing.T) {
 			{Name: "thumb@2", Crop: true, Size: "240x160", OutputFormat: "webp", DPR: 2, Quality: 80, Frames: 10, Duration: 5000, Loop: &loop},
 		},
 	}
-	compiled, err := Compile(cfg)
+	compiled, err := Compile(cfg, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestCompileDuplicatePreset(t *testing.T) {
 			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	if _, err := Compile(cfg); err == nil {
+	if _, err := Compile(cfg, nil); err == nil {
 		t.Error("expected duplicate preset error")
 	}
 }
@@ -324,7 +324,7 @@ func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 			{Name: "thumb@2", Crop: true, Size: "240x160", OutputFormat: "webp"},
 		},
 	}
-	if _, err := Compile(cfg); err != nil {
+	if _, err := Compile(cfg, nil); err != nil {
 		t.Errorf("expected valid config with distinct names, got %v", err)
 	}
 }

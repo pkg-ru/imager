@@ -162,6 +162,11 @@ type ProcessingPlan struct {
 	// Duration — максимальная длительность анимации в миллисекундах
 	// (0 = без ограничения).
 	Duration int
+	// Watermark — спецификация ватермарки (nil = не применяется).
+	// Заполняется из конфигурации (пресет → path-policy → default);
+	// НЕ является частью URL-грамматики. Спецификация приходит из
+	// доверенного конфига и маппится процессорами через allowlists.
+	Watermark *WatermarkSpec
 }
 
 // NewProcessingPlan создаёт ProcessingPlan с валидацией.
@@ -231,6 +236,18 @@ func (p *ProcessingPlan) Validate() error {
 	}
 	if p.Duration < 0 {
 		return fmt.Errorf("processing plan: duration must be non-negative, got %d", p.Duration)
+	}
+	if p.Watermark != nil {
+		wm := p.Watermark
+		if wm.Name == "" || wm.Path == "" {
+			return fmt.Errorf("processing plan: watermark name and path must not be empty")
+		}
+		if !ValidWatermarkPosition(wm.Position) {
+			return fmt.Errorf("processing plan: invalid watermark position %q", wm.Position)
+		}
+		if !ValidWatermarkRepeat(wm.Repeat) {
+			return fmt.Errorf("processing plan: invalid watermark repeat %q", wm.Repeat)
+		}
 	}
 	return nil
 }

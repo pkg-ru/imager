@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/davidbyttow/govips/v2/vips"
@@ -96,6 +97,14 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 
 	if err := b.applyOperation(ctx, img, plan); err != nil {
 		return nil, err
+	}
+
+	// Ватермарка (nil = не применяется): накладывается ПОСЛЕ операции
+	// (resize/crop/trim) — размер холста уже целевой, ДО экспорта.
+	if plan.Watermark != nil {
+		if err := b.applyWatermark(img, plan); err != nil {
+			return nil, err
+		}
 	}
 
 	// К2: проверка отмены контекста перед экспортом.
@@ -268,4 +277,89 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 	default:
 		return nil, fmt.Errorf("libvips: unsupported output format %q", plan.OutputFormat)
 	}
+}
+
+// maxWatermarkTiles — защитный лимит числа копий ватермарки на холсте
+// (защита от патологических конфигураций тайлинга: крошечный файл при
+// repeat покроет холст миллионами копий).
+const maxWatermarkTiles = 4096
+
+// wmCacheMu / wmCache — кэш содержимого файлов ватермарок по пути.
+// Файлы задаются администратором в конфиге и не меняются в рантайме;
+// кэш избавляет от чтения с диска на каждый запрос.
+var (
+	wmCacheMu sync.RWMutex
+	wmCache   = map[string][]byte{}
+)
+
+// loadWatermark читает файл ватермарки (с кэшем по пути).
+func loadWatermark(path string) ([]byte, error) {
+	wmCacheMu.RLock()
+	data, ok := wmCache[path]
+	wmCacheMu.RUnlock()
+	if ok {
+		return data, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read watermark file: %w", err)
+	}
+	wmCacheMu.Lock()
+	wmCache[path] = data
+	wmCacheMu.Unlock()
+	return data, nil
+}
+
+// applyWatermark накладывает ватермарку из плана на изображение.
+//
+// Семантика CSS:
+//   - size contain/cover/{w}px {h}px — масштабирование одной копии
+//     относительно ЦЕЛЕВОГО холста;
+//   - position top/bottom/left/right/center — якорь одиночной копии
+//     (вторая ось — центр);
+//   - repeat no-repeat/repeat/repeat-x/repeat-y/round/space — раскладка
+//     копий (см. WatermarkSpec.Layout); round дополнительно масштабирует
+//     копию до шага сетки (RoundStep), чтобы копии точно укладывались.
+//
+// Для анимированных выходов (GIF/WebP/APNG) ватермарка не поддерживается:
+// композит на многокадровое изображение применился бы только к первому
+// кадру, что дало бы неконсистентный результат — возвращается явная
+// ошибка обработки (fail loudly вместо молчаливой отдачи без водяного
+// знака).
+func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.ProcessingPlan) error {
+	wm := plan.Watermark
+	if plan.OutputFormat.Animated() {
+		return fmt.Errorf("libvips: watermark %q is not supported for animated output %q", wm.Name, plan.OutputFormat)
+	}
+	data, err := loadWatermark(wm.Path)
+	if err != nil {
+		return fmt.Errorf("libvips: watermark %q: %w", wm.Name, err)
+	}
+	wmImg, err := vips.NewImageFromBuffer(data)
+	if err != nil {
+		return fmt.Errorf("libvips: watermark %q: decode: %w", wm.Name, err)
+	}
+	defer wmImg.Close()
+
+	W, H := img.Width(), img.Height()
+	tw, th := wm.TargetSize(W, H, wmImg.Width(), wmImg.Height())
+	// Режим round: копия масштабируется до шага сетки, чтобы целое число
+	// копий точно укладывалось по осям холста.
+	if wm.RoundScale() {
+		tw, th = wm.RoundStep(W, H, tw, th)
+	}
+	if err := wmImg.ThumbnailWithSize(tw, th, vips.InterestingNone, vips.SizeForce); err != nil {
+		return fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
+	}
+
+	pts := wm.Layout(W, H, tw, th)
+	if len(pts) > maxWatermarkTiles {
+		return fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, len(pts), maxWatermarkTiles)
+	}
+	for _, pt := range pts {
+		if err := img.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
+			return fmt.Errorf("libvips: watermark %q: composite at (%d,%d): %w", wm.Name, pt.X, pt.Y, err)
+		}
+	}
+	return nil
 }

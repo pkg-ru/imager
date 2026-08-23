@@ -261,7 +261,9 @@ policy:
   #   frames — макс. число кадров анимации (0 = без ограничения);
   #   duration — макс. длительность анимации в мс (0 = без ограничения);
   #   loop — *bool: nil (не задано) = default-loop из processing;
-  #          true = бесконечный loop, false = однопроходная анимация.
+  #          true = бесконечный loop, false = однопроходная анимация;
+  #   watermark — имя ватермарки из секции watermarks (пусто = не задана;
+  #         приоритет выше path-policy и processing.default-watermark).
   # Пресеты перечисляются ровно те, что доступны в URL (см. allowed-presets).
   # Имена пресетов должны быть УНИКАЛЬНЫМИ.
   presets:
@@ -300,7 +302,10 @@ policy:
   #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
   #   crop  — *bool: nil (не задано) = неважно; true = crop должен быть в URL;
   #           false = crop запрещён в URL;
-  #   trim  — аналогично для trim.
+  #   trim  — аналогично для trim;
+  #   watermark — имя ватермарки из секции watermarks: применяется к
+  #           каноническим запросам префикса пути (приоритет ниже пресета,
+  #           выше processing.default-watermark).
   path-policies:
     # "/" — fallback для всех путей. Здесь dpr/crop/trim не заданы
     # (нил/отсутствуют) — политика НЕ накладывает ограничений на эти
@@ -319,6 +324,49 @@ policy:
       dpr: "0-1"
 
 ########################################
+# watermarks — именованные декларации ватермарок.
+#
+# Ватермарка описывается ОДИН раз здесь и применяется по имени в пресетах
+# (policy.presets[].watermark), path-policies
+# (policy.path-policies[].watermark) или по умолчанию
+# (processing.default-watermark).
+#
+# Приоритет применения: пресет -> path-policy (longest prefix match) ->
+# processing.default-watermark. Нигде не задана -> не накладывается.
+#
+# Поля:
+#   name     (обязательный) — уникальное имя для ссылок;
+#   path     (обязательный) — путь к файлу изображения ватермарки на диске.
+#              Файл должен существовать на старте (иначе — fail-fast).
+#   position — позиция размещения (CSS background-position):
+#              top | bottom | left | right | center. Дефолт: center.
+#   repeat   — заполнение копиями (CSS background-repeat):
+#              no-repeat | repeat | repeat-x | repeat-y | round | space.
+#              Дефолт: no-repeat.
+#   size     — размер копии относительно холста (CSS background-size):
+#              contain | cover | "{width}px {height}px" (например "200px 50px").
+#              Дефолт: contain.
+#
+# Ограничения движков:
+#   - libvips (основной) реализует position/repeat/size полностью;
+#   - ImageMagick (fallback): точный размер только в px-форме; contain/cover
+#     рендерятся в натуральном размере файла; все repeat-режимы кроме
+#     no-repeat — как сплошная плитка;
+#   - анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips дают
+#     ошибку обработки (комозит применился бы только к первому кадру).
+#
+# Секция опциональна: без неё ни одна ватермарка не применяется.
+########################################
+watermarks: []
+# Пример:
+# watermarks:
+#   - name: water-test
+#     path: "/etc/imager/watermarks/test.png"
+#     position: center        # top | bottom | left | right | center
+#     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space
+#     size: contain           # contain | cover | "200px 50px"
+
+########################################
 # processing — общие параметры обработки изображений.
 ########################################
 processing:
@@ -334,6 +382,13 @@ processing:
   # Применяется к GIF/WebP/APNG/HEIF анимациям, если в пресете не задан loop.
   # Пример: развернуть как значение, чтобы изменить поведение:
   # default-loop: false
+
+  # default-watermark — ватермарка ПО УМОЛЧАНИЮ (имя из секции watermarks).
+  # Тип: string. Дефолт: пусто (= не применяется). Применяется к запросам,
+  # где ватермарка не задана ни в пресете, ни в path-policy. Неизвестное
+  # имя — ошибка старта.
+  # Пример:
+  # default-watermark: water-test
 
 ########################################
 # source / result — хранилища исходников и результатов.

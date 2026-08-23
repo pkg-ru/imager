@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // Preset — immutable именованный набор параметров обработки.
@@ -27,6 +29,7 @@ type Preset struct {
 	frames       int
 	duration     int
 	loop         *bool
+	watermark    *processing.WatermarkSpec
 }
 
 // NewPreset создаёт Preset с валидацией.
@@ -87,6 +90,21 @@ func NewPreset(name string, transform Transform, size Size, outputFormat Format,
 
 // Name возвращает имя пресета.
 func (p *Preset) Name() string { return p.name }
+
+// Watermark возвращает спецификацию ватермарки пресета (nil = не задана).
+func (p *Preset) Watermark() *processing.WatermarkSpec { return p.watermark }
+
+// WithWatermark возвращает копию пресета с привязанной спецификацией
+// ватермарки. Используется при компиляции конфигурации: имя ватермарки из
+// YAML резервируется в реестре и подставляется готовой спецификацией.
+func (p *Preset) WithWatermark(wm *processing.WatermarkSpec) *Preset {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.watermark = wm
+	return &cp
+}
 
 // Transform возвращает режим трансформации.
 func (p *Preset) Transform() Transform { return p.transform }
@@ -260,7 +278,7 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 			Reason:     err.Error(),
 		}
 	}
-	return resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop), nil
+	return resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark), nil
 }
 
 // SplitPresetNameDPR отделяет фиксированный @dpr-суффикс от имени пресета.

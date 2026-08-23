@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // Request — immutable типизированное представление asset URL.
@@ -32,6 +34,7 @@ type Request struct {
 	frames       int
 	duration     int
 	loop         *bool
+	watermark    *processing.WatermarkSpec
 }
 
 // NewRequest создаёт канонический Request.
@@ -121,6 +124,11 @@ func (r *Request) Duration() int { return r.duration }
 // Заполняется при разрешении пресета.
 func (r *Request) Loop() *bool { return r.loop }
 
+// Watermark возвращает спецификацию ватермарки (nil = не задана).
+// Заполняется при разрешении пресета; для канонических запросов
+// ватермарка определяется path-policy/дефолтом на уровне use case.
+func (r *Request) Watermark() *processing.WatermarkSpec { return r.watermark }
+
 // SourceName возвращает имя исходника.
 func (r *Request) SourceName() SourceName { return r.sourceName }
 
@@ -205,9 +213,9 @@ func (r *Request) String() string {
 }
 
 // WithProcessingOptions возвращает копию запроса с параметрами обработки
-// (quality/frames/duration/loop). Используется при разрешении пресета:
-// параметры не являются частью URL-грамматики и не влияют на Build().
-func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool) *Request {
+// (quality/frames/duration/loop/watermark). Используется при разрешении
+// пресета: параметры не являются частью URL-грамматики и не влияют на Build().
+func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec) *Request {
 	if r == nil {
 		return nil
 	}
@@ -216,6 +224,7 @@ func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *boo
 	cp.frames = frames
 	cp.duration = duration
 	cp.loop = loop
+	cp.watermark = watermark
 	return &cp
 }
 
