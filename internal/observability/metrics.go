@@ -146,6 +146,13 @@ type StdMetrics struct {
 	// (п.11). Ключ — фиксированный набор "op_success"/"op_error". sync.Map
 	// даёт lock-free чтение (LoadOrStore) без глобального мьютекса.
 	storageDur sync.Map // string -> *histogram
+
+	// Gauges (У8): текущие значения, а не накопительные счётчики.
+	httpInflight     *expvar.Int // число обрабатываемых HTTP-запросов
+	singleflightKeys *expvar.Int // число ключей в singleflight
+	bufferPoolBytes  *expvar.Int // занятый бюджет buffer pool (байты)
+	cacheEvictions   *expvar.Int // всего eviction-файлов из кэша
+	cacheEntries     *expvar.Int // число записей в кэше
 }
 
 // NewStdMetrics создаёт StdMetrics и регистрирует expvar-переменные.
@@ -157,16 +164,21 @@ type StdMetrics struct {
 func NewStdMetrics() *StdMetrics {
 	m := &StdMetrics{
 		requests:    getOrNewMap("imager_requests"),
-		requestDur:  newHistogram(durationBuckets),
+		requestDur:  getOrNewHistogram("imager_request_duration_seconds"),
 		cacheHit:    getOrNewInt("imager_cache_hits"),
 		cacheMiss:   getOrNewInt("imager_cache_misses"),
 		procSuccess: getOrNewInt("imager_processor_success"),
 		procError:   getOrNewInt("imager_processor_errors"),
-		procDur:     newHistogram(durationBuckets),
+		procDur:     getOrNewHistogram("imager_processor_duration_seconds"),
 		storageOps:  getOrNewMap("imager_storage_ops"),
+
+		// Gauges (У8): публикуем как expvar-переменные.
+		httpInflight:     getOrNewInt("imager_http_inflight"),
+		singleflightKeys: getOrNewInt("imager_singleflight_keys"),
+		bufferPoolBytes:  getOrNewInt("imager_buffer_pool_bytes"),
+		cacheEvictions:   getOrNewInt("imager_cache_evictions_total"),
+		cacheEntries:     getOrNewInt("imager_cache_entries"),
 	}
-	publishOnce("imager_request_duration_seconds", m.requestDur)
-	publishOnce("imager_processor_duration_seconds", m.procDur)
 	return m
 }
 
@@ -197,6 +209,19 @@ func getOrNewMap(name string) *expvar.Map {
 		}
 	}
 	return expvar.NewMap(name)
+}
+
+// getOrNewHistogram возвращает существующую expvar-гистограмму или создаёт
+// новую и публикует её. Идемпотентно (см. publishOnce).
+func getOrNewHistogram(name string) *histogram {
+	if v := expvar.Get(name); v != nil {
+		if h, ok := v.(*histogram); ok {
+			return h
+		}
+	}
+	h := newHistogram(durationBuckets)
+	publishOnce(name, h)
+	return h
 }
 
 // durationBuckets — фиксированные границы бакетов длительности (секунды).
@@ -265,6 +290,45 @@ func (m *StdMetrics) storageDurFor(key string) *histogram {
 	actual, _ := m.storageDur.LoadOrStore(key, h)
 	publishOnce("imager_storage_duration_seconds_"+key, actual.(*histogram))
 	return actual.(*histogram)
+}
+
+// Gauges (У8): методы обновления текущих значений. Используются адаптерами
+// (middleware, singleflight, buffer pool, cache) для публикации текущего
+// состояния, а не накопительных счётчиков.
+
+// SetHttpInflight обновляет число обрабатываемых HTTP-запросов.
+func (m *StdMetrics) SetHttpInflight(v int64) {
+	if m.httpInflight != nil {
+		m.httpInflight.Set(v)
+	}
+}
+
+// SetSingleflightKeys обновляет число ключей в singleflight.
+func (m *StdMetrics) SetSingleflightKeys(v int64) {
+	if m.singleflightKeys != nil {
+		m.singleflightKeys.Set(v)
+	}
+}
+
+// SetBufferPoolBytes обновляет занятый бюджет buffer pool (байты).
+func (m *StdMetrics) SetBufferPoolBytes(v int64) {
+	if m.bufferPoolBytes != nil {
+		m.bufferPoolBytes.Set(v)
+	}
+}
+
+// SetCacheEvictions обновляет счётчик eviction-файлов из кэша.
+func (m *StdMetrics) SetCacheEvictions(v int64) {
+	if m.cacheEvictions != nil {
+		m.cacheEvictions.Set(v)
+	}
+}
+
+// SetCacheEntries обновляет число записей в кэше.
+func (m *StdMetrics) SetCacheEntries(v int64) {
+	if m.cacheEntries != nil {
+		m.cacheEntries.Set(v)
+	}
 }
 
 // String реализует expvar.Var для текстового вывода.

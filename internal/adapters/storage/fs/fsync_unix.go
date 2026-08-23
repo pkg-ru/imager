@@ -6,13 +6,14 @@ import "os"
 
 // fsyncDir синхронизирует каталог после rename/delete, чтобы запись была
 // durable (пережила сбой питания). На Unix открывается каталог и вызывается
-// fsync. Ошибки игнорируются: fsync каталога не поддерживается на всех ФС
-// (например, некоторые сетевые ФС), поэтому это best-effort гарантия.
-func fsyncDir(dir string) {
+// fsync. Ошибка возвращается вызывающему (У10): fsync каталога не
+// поддерживается на всех ФС (например, некоторые сетевые ФС), поэтому
+// вызывающий решает, логировать ли её.
+func fsyncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
-		return
+		return err
 	}
 	defer d.Close()
-	_ = d.Sync()
+	return d.Sync()
 }

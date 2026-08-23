@@ -35,15 +35,32 @@ func NewMux(h *Handler, health *Health, metrics observability.Metrics) http.Hand
 // /metrics (п.17). Если MetricsAuthConfig пуст — /metrics доступен без
 // аутентификации (совместимость).
 func NewMuxWithAuth(h *Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig) http.Handler {
+	return NewMuxWithAdmission(h, health, metrics, auth, 0)
+}
+
+// NewMuxWithAdmission собирает корневой http.Handler с опциональной защитой
+// /metrics (п.17) и admission control (В11). maxConcurrent — максимальное
+// число одновременно обрабатываемых asset-запросов (0 = без ограничения).
+// Admission применяется ТОЛЬКО к asset handler ("/"), не к health/metrics,
+// чтобы liveness/readiness оставались доступными при перегрузке.
+func NewMuxWithAdmission(h *Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig, maxConcurrent int) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", health.LivenessHandler())
 	mux.Handle("/readyz", health.ReadinessHandler())
 	mux.Handle("/metrics", protectMetrics(observability.MetricsHandler(), auth))
 	// Корневой путь и всё остальное — через handler (asset URL, fallback/404).
-	mux.Handle("/", h)
+	// Admission control ограничивает число одновременно обрабатываемых
+	// asset-запросов (В11): при переполнении семафора — HTTP 503 + Retry-After.
+	var assetHandler http.Handler = h
+	if maxConcurrent > 0 {
+		assetHandler = NewAdmissionControl(maxConcurrent).Wrap(h)
+	}
+	mux.Handle("/", assetHandler)
 
 	// Observability middleware поверх всего mux (request ID + request metrics).
-	return observability.NewMiddleware(metrics, mux)
+	// gzip (У2) применяется к JSON-ответам (error envelope) при поддержке
+	// клиентом Accept-Encoding: gzip.
+	return observability.NewMiddleware(metrics, gzipHandler(mux))
 }
 
 // protectMetrics оборачивает metrics handler защитой (токен/IP-фильтр).

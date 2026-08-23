@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -352,6 +354,24 @@ func TestHandlerUnavailable(t *testing.T) {
 	assertErrorCode(t, rec, "unavailable")
 }
 
+func TestHandlerOverloaded(t *testing.T) {
+	gen := newFakeGenerator()
+	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeOverloaded, Reason: "overloaded"})
+	h := newTestHandler(t, gen, baseConfig())
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if ra := rec.Header().Get("Retry-After"); ra != "1" {
+		t.Fatalf("Retry-After = %q, want 1", ra)
+	}
+	assertErrorCode(t, rec, "overloaded")
+}
+
 func TestHandlerProcessing(t *testing.T) {
 	gen := newFakeGenerator()
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeProcessing, Reason: "proc"})
@@ -481,5 +501,122 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 	}
 	if env.Error.Code != want {
 		t.Errorf("error code = %q, want %q", env.Error.Code, want)
+	}
+}
+
+// TestEtagCacheLRUEviction проверяет, что etagCache ограничен по числу ключей
+// (В2): при превышении max вытесняется наименее недавно использованный ключ.
+func TestEtagCacheLRUEviction(t *testing.T) {
+	c := newEtagCache(3)
+
+	c.Set("a", "1")
+	c.Set("b", "2")
+	c.Set("c", "3")
+	// Touch "a", затем добавляем "d" — должен вытесниться "b" (LRU).
+	_, _ = c.Get("a")
+	c.Set("d", "4")
+
+	if _, ok := c.Get("b"); ok {
+		t.Fatal("expected b evicted (LRU)")
+	}
+	if v, ok := c.Get("a"); !ok || v != "1" {
+		t.Fatalf("a = %q ok=%v, want 1", v, ok)
+	}
+	if v, ok := c.Get("d"); !ok || v != "4" {
+		t.Fatalf("d = %q ok=%v, want 4", v, ok)
+	}
+	if c.lru.Len() > c.max {
+		t.Fatalf("cache size %d exceeds max %d", c.lru.Len(), c.max)
+	}
+}
+
+// TestGzipJSONResponse проверяет, что JSON-ответ (error envelope) сжимается
+// gzip при Accept-Encoding: gzip (У2).
+func TestGzipJSONResponse(t *testing.T) {
+	gen := newFakeGenerator()
+	h := newTestHandler(t, gen, baseConfig())
+	gh := gzipHandler(h)
+
+	// Ошибка → JSON error envelope.
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	gh.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if ce := rec.Header().Get("Content-Encoding"); ce != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", ce)
+	}
+	if vary := rec.Header().Get("Vary"); !strings.Contains(vary, "Accept-Encoding") {
+		t.Errorf("Vary = %q, want contains Accept-Encoding", vary)
+	}
+	// Content-Length должен быть удалён (длина после сжатия неизвестна).
+	if cl := rec.Header().Get("Content-Length"); cl != "" {
+		t.Errorf("Content-Length = %q, want empty for gzip", cl)
+	}
+
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	defer zr.Close()
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("read gzip body: %v", err)
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decompressed body not JSON: %v (body=%q)", err, body)
+	}
+	if env.Error.Code != "not_found" {
+		t.Errorf("error code = %q, want not_found", env.Error.Code)
+	}
+}
+
+// TestGzipNotAppliedToImages проверяет, что изображения не сжимаются (У2:
+// gzip только для JSON).
+func TestGzipNotAppliedToImages(t *testing.T) {
+	gen := newFakeGenerator()
+	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
+	h := newTestHandler(t, gen, baseConfig())
+	gh := gzipHandler(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	gh.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
+		t.Errorf("Content-Encoding = %q, want empty for image", ce)
+	}
+	if body := rec.Body.String(); body != "PNGDATA" {
+		t.Errorf("body = %q, want PNGDATA", body)
+	}
+}
+
+// TestGzipNotAppliedWithoutAcceptEncoding проверяет, что без Accept-Encoding
+// ответ не сжимается.
+func TestGzipNotAppliedWithoutAcceptEncoding(t *testing.T) {
+	gen := newFakeGenerator()
+	h := newTestHandler(t, gen, baseConfig())
+	gh := gzipHandler(h)
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	rec := httptest.NewRecorder()
+	gh.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if ce := rec.Header().Get("Content-Encoding"); ce != "" {
+		t.Errorf("Content-Encoding = %q, want empty", ce)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl == "" {
+		t.Error("Content-Length should be present without gzip")
 	}
 }

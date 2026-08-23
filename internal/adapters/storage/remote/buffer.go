@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pkg-ru/imager/internal/application/ports/buffer"
 )
@@ -422,13 +423,14 @@ func (r *BufferReader) Close() error {
 
 // BufferPool — общий бюджет памяти процесса для spillable-буферов.
 //
-// Потокобезопасный учёт занятых байт. Буферы резервируют память из пула;
-// если остатка не хватает, буфер спилляет на диск. Память возвращается в
-// пул при Close.
+// Потокобезопасный учёт занятых байт без глобальной блокировки на горячем
+// пути записи: бюджет хранится в атомарном счётчике, а резервирование
+// выполняется CAS-циклом. Буферы резервируют память из пула; если остатка
+// не хватает, буфер спилляет на диск. Память возвращается в пул при Close.
 type BufferPool struct {
-	mu   sync.Mutex
+	// used — занятые байты (атомарный счётчик, без мьютекса на tryReserve).
+	used atomic.Int64
 	max  int64
-	used int64
 }
 
 // NewBufferPool создаёт пул с бюджетом maxBytes (0 = без лимита).
@@ -446,27 +448,27 @@ func (p *BufferPool) Close() error {
 	if p == nil {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.used = 0
+	p.used.Store(0)
 	return nil
 }
 
 // Used возвращает текущее число занятых байт.
 func (p *BufferPool) Used() int64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.used
+	if p == nil {
+		return 0
+	}
+	return p.used.Load()
 }
 
 // Available возвращает доступный остаток бюджета.
 func (p *BufferPool) Available() int64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p == nil {
+		return -1
+	}
 	if p.max <= 0 {
 		return -1 // без лимита
 	}
-	avail := p.max - p.used
+	avail := p.max - p.used.Load()
 	if avail < 0 {
 		avail = 0
 	}
@@ -475,21 +477,26 @@ func (p *BufferPool) Available() int64 {
 
 // tryReserve пытается зарезервировать n байт. Возвращает false, если
 // бюджет исчерпан (или n превышает доступный остаток).
+//
+// Использует CAS-цикл вместо глобального мьютекса: на горячем пути записи
+// (каждый 32 КБ чанк) нет блокировки, только атомарная операция.
 func (p *BufferPool) tryReserve(n int64) bool {
 	if p == nil {
 		return true
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.max <= 0 {
-		p.used += n
+		p.used.Add(n)
 		return true
 	}
-	if p.used+n > p.max {
-		return false
+	for {
+		cur := p.used.Load()
+		if cur+n > p.max {
+			return false
+		}
+		if p.used.CompareAndSwap(cur, cur+n) {
+			return true
+		}
 	}
-	p.used += n
-	return true
 }
 
 // release возвращает n байт в пул.
@@ -497,11 +504,16 @@ func (p *BufferPool) release(n int64) {
 	if p == nil {
 		return
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.used -= n
-	if p.used < 0 {
-		p.used = 0
+	p.used.Add(-n)
+	// Не даём счётчику уйти в минус (защита от двойного release).
+	for {
+		cur := p.used.Load()
+		if cur >= 0 {
+			return
+		}
+		if p.used.CompareAndSwap(cur, 0) {
+			return
+		}
 	}
 }
 

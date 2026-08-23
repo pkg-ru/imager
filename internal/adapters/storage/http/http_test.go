@@ -328,3 +328,26 @@ func TestSourceStoreSeekable(t *testing.T) {
 		t.Fatalf("read after seek = %q, want %q", string(buf), "e-bo")
 	}
 }
+
+// TestRetryBackoffJitter проверяет, что backoff растёт экспоненциально и
+// содержит случайный джиттер (У1): задержка не должна быть детерминированной.
+func TestRetryBackoffJitter(t *testing.T) {
+	// Первая попытка: base*1 + jitter ∈ [100ms, 200ms).
+	d0 := retryBackoff(0)
+	if d0 < 100*time.Millisecond || d0 >= 200*time.Millisecond {
+		t.Fatalf("retryBackoff(0) = %v, want in [100ms, 200ms)", d0)
+	}
+	// Вторая попытка: base*2 + jitter ∈ [200ms, 300ms).
+	d1 := retryBackoff(1)
+	if d1 < 200*time.Millisecond || d1 >= 300*time.Millisecond {
+		t.Fatalf("retryBackoff(1) = %v, want in [200ms, 300ms)", d1)
+	}
+	// Джиттер: несколько вызовов с одним индексом не должны быть одинаковыми.
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		seen[retryBackoff(0)] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("retryBackoff(0) deterministic over 50 calls: %d distinct values", len(seen))
+	}
+}

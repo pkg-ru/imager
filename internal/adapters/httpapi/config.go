@@ -70,6 +70,11 @@ type Config struct {
 	// Metrics — опциональные метрики (request/cache/processor/storage).
 	// Если nil, используется NopMetrics.
 	Metrics observability.Metrics
+
+	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
+	// HTTP-запросов (admission control, В11). 0 = без ограничения. При
+	// превышении лимита возвращается HTTP 503 + Retry-After: 1.
+	MaxConcurrentRequests int
 }
 
 // Logger — минимальный интерфейс логирования.

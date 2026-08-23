@@ -33,6 +33,7 @@ import (
 	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
+	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 	"github.com/pkg-ru/imager/internal/observability"
@@ -120,9 +121,29 @@ func main() {
 	rt.AddCloser(proc)
 	rt.AddCloser(app.Pool)
 
-	// 6) Health (readiness/liveness) + metrics привязаны к runtime.
+	// У5: периодическая уборка осиротевших temp-файлов публикации.
+	// Запускаем janitor для каталога результатов (каждые 5 минут, файлы
+	// старше 1 часа). Останавливается при shutdown через rt.AddCloser.
+	janitor, jErr := fs.NewJanitor(rc.ResultDir, fs.JanitorOptions{
+		Interval: 5 * time.Minute,
+		MaxAge:   1 * time.Hour,
+	})
+	if jErr != nil {
+		logger.Errorf("imager: janitor: %v", jErr)
+		os.Exit(1)
+	}
+	if err := janitor.Start(); err != nil {
+		logger.Errorf("imager: janitor start: %v", err)
+		os.Exit(1)
+	}
+	rt.AddCloser(janitorCloser{j: janitor})
+
+	// 6) Health (readiness + liveness) + metrics привязаны к runtime.
 	health := httpapi.NewHealth(rt)
-	rt.SetHandler(httpapi.NewMux(app.Handler, health, metrics))
+	// Admission control (В11): ограничиваем число одновременно обрабатываемых
+	// asset-запросов лимитом из конфигурации (http.max-concurrent-requests).
+	rt.SetHandler(httpapi.NewMuxWithAdmission(app.Handler, health, metrics,
+		httpapi.MetricsAuthConfig{}, rc.HTTP.MaxConcurrentRequests))
 
 	logger.Infof("imager: listening on %s", rt.Addr())
 
@@ -347,4 +368,15 @@ func newPixelGenerator(binary string) *pixelGenerator {
 
 func (p *pixelGenerator) GeneratePixel(ctx context.Context, format string) ([]byte, error) {
 	return generatePixel(ctx, p.binary, format)
+}
+
+// janitorCloser адаптирует *fs.Janitor к io.Closer для rt.AddCloser:
+// при shutdown останавливает периодическую уборку (У5).
+type janitorCloser struct {
+	j *fs.Janitor
+}
+
+func (c janitorCloser) Close() error {
+	c.j.Stop()
+	return nil
 }

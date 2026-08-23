@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -39,9 +40,14 @@ type Handler struct {
 	log    Logger
 	format map[string]string // output format -> content-type
 
-	// etagCache — кэш вычисленных ETag по identity (canonical URL + size),
-	// чтобы не пересчитывать SHA-256 на каждый запрос (п.15).
-	etagCache sync.Map // string -> string
+	// etagCache — bounded LRU-кэш вычисленных ETag по identity
+	// (canonical URL + size), чтобы не пересчитывать SHA-256 на каждый запрос
+	// (п.15). Ограничен по числу ключей (В2), чтобы не расти безгранично.
+	etagCache *etagCache
+
+	// copyPool — sync.Pool буферов копирования (64 KiB), чтобы не аллоцировать
+	// новый буфер на каждый запрос (оптимизация горячего пути).
+	copyPool sync.Pool
 }
 
 // New создаёт Handler. Конфигурация валидируется и нормализуется.
@@ -58,10 +64,16 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 		log = nopLogger{}
 	}
 	return &Handler{
-		gen:    gen,
-		cfg:    cfg,
-		log:    log,
-		format: buildFormatMap(),
+		gen:       gen,
+		cfg:       cfg,
+		log:       log,
+		format:    buildFormatMap(),
+		etagCache: newEtagCache(4096),
+		copyPool: sync.Pool{
+			New: func() any {
+				return make([]byte, 64*1024)
+			},
+		},
 	}, nil
 }
 
@@ -84,6 +96,66 @@ func buildFormatMap() map[string]string {
 		m[f] = strings.ToLower(ct)
 	}
 	return m
+}
+
+// etagCache — bounded LRU-кэш для ETag по identity (В2). Ограничен по числу
+// ключей: при превышении max вытесняется наименее недавно использованный.
+type etagCache struct {
+	mu    sync.Mutex
+	m     map[string]string        // key -> etag
+	elems map[string]*list.Element // key -> элемент списка (для O(1) touch)
+	lru   *list.List               // для eviction (элементы = ключи)
+	max   int
+}
+
+// newEtagCache создаёт bounded LRU-кэш с лимитом max записей.
+func newEtagCache(max int) *etagCache {
+	if max <= 0 {
+		max = 4096
+	}
+	return &etagCache{
+		m:     make(map[string]string),
+		elems: make(map[string]*list.Element),
+		lru:   list.New(),
+		max:   max,
+	}
+}
+
+// Get возвращает etag по ключу и помечает его как недавно использованный.
+func (c *etagCache) Get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.m[key]
+	if ok {
+		// Перемещаем ключ в конец списка (недавно использованный).
+		if n := c.elems[key]; n != nil {
+			c.lru.MoveToBack(n)
+		}
+	}
+	return v, ok
+}
+
+// Set сохраняет etag по ключу. При превышении max вытесняет LRU-запись.
+func (c *etagCache) Set(key, etag string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.m[key]; ok {
+		c.m[key] = etag
+		if n := c.elems[key]; n != nil {
+			c.lru.MoveToBack(n)
+		}
+		return
+	}
+	c.m[key] = etag
+	c.elems[key] = c.lru.PushBack(key)
+	if c.lru.Len() > c.max {
+		if front := c.lru.Front(); front != nil {
+			old := front.Value.(string)
+			c.lru.Remove(front)
+			delete(c.elems, old)
+			delete(c.m, old)
+		}
+	}
 }
 
 // ServeHTTP обрабатывает запрос.
@@ -219,7 +291,10 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 		return
 	}
 	// П.7: буферизованное копирование (64 KiB) вместо дефолтных 8 KiB.
-	_, _ = io.CopyBuffer(w, result.Opened, make([]byte, 64*1024))
+	// Буфер берём из sync.Pool, чтобы не аллоцировать на каждый запрос.
+	buf := h.copyPool.Get().([]byte)
+	defer h.copyPool.Put(buf)
+	_, _ = io.CopyBuffer(w, result.Opened, buf)
 }
 
 // etagFor вычисляет стабильный ETag из metadata/content identity.
@@ -232,12 +307,12 @@ func (h *Handler) etagFor(meta object.ObjectMetadata, result *generatev2.Result)
 	}
 	// Иначе — стабильная identity из canonical URL + size, кэшируем.
 	identity := result.URL + ":" + strconv.FormatInt(meta.Size, 10)
-	if v, ok := h.etagCache.Load(identity); ok {
-		return v.(string)
+	if v, ok := h.etagCache.Get(identity); ok {
+		return v
 	}
 	sum := sha256.Sum256([]byte(identity))
 	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
-	h.etagCache.Store(identity, etag)
+	h.etagCache.Set(identity, etag)
 	return etag
 }
 
@@ -295,6 +370,11 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
 	case generatev2.OutcomeUnavailable:
 		h.log.Errorf("httpapi: unavailable: %v", oe)
 		h.writeError(w, r, http.StatusServiceUnavailable, "unavailable", "service temporarily unavailable")
+	case generatev2.OutcomeOverloaded:
+		// Перегрузка процессоров: клиенту следует повторить позже.
+		h.log.Warnf("httpapi: overloaded: %v", oe)
+		w.Header().Set("Retry-After", "1")
+		h.writeError(w, r, http.StatusServiceUnavailable, "overloaded", "service overloaded, retry later")
 	case generatev2.OutcomeProcessing:
 		h.log.Errorf("httpapi: processing: %v", oe)
 		h.writeError(w, r, http.StatusInternalServerError, "processing", "processing error")

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -200,13 +201,26 @@ func (s *SourceStore) do(ctx context.Context, method, u string) (*http.Response,
 		if ctx.Err() != nil {
 			break
 		}
+		// Экспоненциальный backoff с джиттером (У1): при синхронных сбоях
+		// множество клиентов бьют в источник одновременно (thundering herd),
+		// поэтому к экспоненциальной задержке добавляем случайный разброс.
+		backoff := retryBackoff(i)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(time.Duration(i+1) * 100 * time.Millisecond):
+		case <-time.After(backoff):
 		}
 	}
 	return nil, lastErr
+}
+
+// retryBackoff возвращает экспоненциальную задержку с джиттером для попытки i
+// (i = 0 — первая неудача): base * (1 << i) + rand.Int63n(jitter).
+func retryBackoff(i int) time.Duration {
+	const base = 100 * time.Millisecond
+	const jitter = 100 * time.Millisecond
+	exp := time.Duration(1) << min(i, 6) // ограничиваем рост, чтобы не уйти в долгий сон
+	return base*exp + time.Duration(rand.Int63n(int64(jitter)))
 }
 
 // Lookup возвращает метаданные исходного объекта через HEAD.

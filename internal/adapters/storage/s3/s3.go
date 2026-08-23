@@ -8,11 +8,13 @@ package s3
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -186,10 +188,15 @@ func (o Options) key(key object.ObjectKey) (string, error) {
 
 // metadataCache — потокобезопасный in-memory TTL-кэш метаданных объектов.
 // Ключ — полный S3-ключ, значение — метаданные + время записи.
+// Ограничен по числу ключей (LRU, В3), чтобы не расти безгранично при шквале
+// уникальных ключей.
 type metadataCache struct {
 	mu    sync.Mutex
 	ttl   time.Duration
+	max   int
 	items map[string]cacheEntry
+	elems map[string]*list.Element // key -> элемент списка (для O(1) touch)
+	lru   *list.List               // для eviction (элементы = ключи)
 }
 
 type cacheEntry struct {
@@ -201,7 +208,13 @@ func newMetadataCache(ttl time.Duration) *metadataCache {
 	if ttl <= 0 {
 		return nil
 	}
-	return &metadataCache{ttl: ttl, items: map[string]cacheEntry{}}
+	return &metadataCache{
+		ttl:   ttl,
+		max:   10000,
+		items: map[string]cacheEntry{},
+		elems: map[string]*list.Element{},
+		lru:   list.New(),
+	}
 }
 
 func (c *metadataCache) get(full string) (object.ObjectMetadata, bool) {
@@ -216,7 +229,15 @@ func (c *metadataCache) get(full string) (object.ObjectMetadata, bool) {
 	}
 	if time.Since(e.at) > c.ttl {
 		delete(c.items, full)
+		if n := c.elems[full]; n != nil {
+			c.lru.Remove(n)
+			delete(c.elems, full)
+		}
 		return object.ObjectMetadata{}, false
+	}
+	// Помечаем как недавно использованный.
+	if n := c.elems[full]; n != nil {
+		c.lru.MoveToBack(n)
 	}
 	return e.meta, true
 }
@@ -227,7 +248,23 @@ func (c *metadataCache) put(full string, meta object.ObjectMetadata) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, ok := c.items[full]; ok {
+		c.items[full] = cacheEntry{meta: meta, at: time.Now()}
+		if n := c.elems[full]; n != nil {
+			c.lru.MoveToBack(n)
+		}
+		return
+	}
 	c.items[full] = cacheEntry{meta: meta, at: time.Now()}
+	c.elems[full] = c.lru.PushBack(full)
+	if c.lru.Len() > c.max {
+		if front := c.lru.Front(); front != nil {
+			old := front.Value.(string)
+			c.lru.Remove(front)
+			delete(c.elems, old)
+			delete(c.items, old)
+		}
+	}
 }
 
 func (c *metadataCache) invalidate(full string) {
@@ -237,6 +274,10 @@ func (c *metadataCache) invalidate(full string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.items, full)
+	if n := c.elems[full]; n != nil {
+		c.lru.Remove(n)
+		delete(c.elems, full)
+	}
 }
 
 func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
@@ -464,8 +505,23 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 	return nil
 }
 
+// partData — нарезанная часть multipart upload'а, читаемая из src строго в
+// одной горутине (продюсер). Данные передаются воркерам по каналу, поэтому
+// не-потокобезопасный src никогда не читается конкурентно (К1).
+type partData struct {
+	num  int
+	data []byte
+}
+
 // publishMultipart загружает объект через multipart upload с параллельными
 // частями. size должен быть известен заранее.
+//
+// К1 (race fix): src не обязан быть потокобезопасным (например,
+// remote.BufferReader при output-limit: 0). Поэтому чтение src сериализуется:
+// продюсерская горутина последовательно нарезает парты в память (по partSize),
+// а пул воркеров конкурентно загружает готовые байты через bytes.NewReader.
+// Память ограничена буфером канала (multipartWorkers партов в полёте).
+// Ошибка любой части прерывает продюсера и приводит к abort multipart.
 func (r *ResultStore) publishMultipart(ctx context.Context, full string, src io.Reader, size int64, opts object.PublishOptions) error {
 	parts := int((size + multipartPartSize - 1) / multipartPartSize)
 	if parts > multipartMaxParts {
@@ -493,53 +549,100 @@ func (r *ResultStore) publishMultipart(ctx context.Context, full string, src io.
 	}
 	uploadID := *created.UploadId
 
-	// Параллельная загрузка частей с пулом воркеров.
 	completed := make([]types.CompletedPart, parts)
-	errs := make([]error, parts)
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, multipartWorkers)
-	for i := 0; i < parts; i++ {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(idx int) {
-			defer func() { wg.Done(); sem <- struct{}{} }()
+
+	// Продюсер: последовательное чтение src (строго одна горутина).
+	partCh := make(chan partData, multipartWorkers)
+	stopProduce := make(chan struct{})
+	var firstErr error
+	var errOnce sync.Once
+	var abort atomic.Bool
+	setErr := func(e error) {
+		errOnce.Do(func() {
+			firstErr = e
+			abort.Store(true)
+			close(stopProduce)
+		})
+	}
+
+	var produceWg sync.WaitGroup
+	produceWg.Add(1)
+	go func() {
+		defer produceWg.Done()
+		defer close(partCh)
+		for idx := 0; idx < parts; idx++ {
 			start := int64(idx) * partSize
 			length := partSize
 			if start+length > size {
 				length = size - start
 			}
-			partBody := &io.LimitedReader{R: src, N: length}
-			out, perr := r.opts.Client.UploadPart(ctx, &s3.UploadPartInput{
-				Bucket:            aws.String(r.opts.Bucket),
-				Key:               aws.String(full),
-				UploadId:          aws.String(uploadID),
-				PartNumber:        aws.Int32(int32(idx + 1)),
-				Body:              partBody,
-				ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
-			})
-			if perr != nil {
-				errs[idx] = perr
+			buf := make([]byte, length)
+			if _, err := io.ReadFull(src, buf); err != nil {
+				setErr(fmt.Errorf("s3: read part %d: %w", idx+1, err))
 				return
 			}
-			cp := types.CompletedPart{PartNumber: aws.Int32(int32(idx + 1))}
-			if out.ETag != nil {
-				cp.ETag = aws.String(*out.ETag)
+			// Проверяем отмену контекста между партами.
+			if err := ctx.Err(); err != nil {
+				setErr(err)
+				return
 			}
-			completed[idx] = cp
-		}(i)
-	}
-	wg.Wait()
-
-	// При ошибке любой части — abort multipart upload.
-	for _, e := range errs {
-		if e != nil {
-			_, _ = r.opts.Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(r.opts.Bucket),
-				Key:      aws.String(full),
-				UploadId: aws.String(uploadID),
-			})
-			return MapError("s3 upload part", e)
+			select {
+			case partCh <- partData{num: idx + 1, data: buf}:
+			case <-stopProduce:
+				return
+			}
 		}
+	}()
+
+	// Воркеры: конкурентная загрузка готовых партов из памяти.
+	var uploadWg sync.WaitGroup
+	for i := 0; i < multipartWorkers; i++ {
+		uploadWg.Add(1)
+		go func() {
+			defer uploadWg.Done()
+			for p := range partCh {
+				// При уже произошедшей ошибке продолжаем потреблять канал,
+				// чтобы не заблокировать продюсера, но не выполняем загрузку.
+				if abort.Load() {
+					continue
+				}
+				out, perr := r.opts.Client.UploadPart(ctx, &s3.UploadPartInput{
+					Bucket:            aws.String(r.opts.Bucket),
+					Key:               aws.String(full),
+					UploadId:          aws.String(uploadID),
+					PartNumber:        aws.Int32(int32(p.num)),
+					Body:              bytes.NewReader(p.data),
+					ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+				})
+				if perr != nil {
+					setErr(perr)
+					continue
+				}
+				cp := types.CompletedPart{PartNumber: aws.Int32(int32(p.num))}
+				if out.ETag != nil {
+					cp.ETag = aws.String(*out.ETag)
+				}
+				// Разные индексы пишутся разными воркерами — гонки нет.
+				completed[p.num-1] = cp
+			}
+		}()
+	}
+	uploadWg.Wait()
+	produceWg.Wait()
+
+	// При ошибке (чтение или загрузка любой части) — abort multipart upload.
+	if firstErr != nil {
+		abortCtx, abortCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer abortCancel()
+		_, _ = r.opts.Client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(r.opts.Bucket),
+			Key:      aws.String(full),
+			UploadId: aws.String(uploadID),
+		})
+		if errors.Is(firstErr, context.Canceled) || errors.Is(firstErr, context.DeadlineExceeded) {
+			return firstErr
+		}
+		return MapError("s3 upload part", firstErr)
 	}
 
 	// CompleteMultipartUpload собирает объект из частей.

@@ -3,102 +3,172 @@ package sftp
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// pooledClient оборачивает client и делает Close() no-op,
-// так как пул управляет жизненным циклом соединения.
+// pooledClient оборачивает клиента и делает Close() no-op, потому что
+// жизненным циклом клиента управляет пул (release/discard).
 type pooledClient struct {
 	client
-	pool *connPool
+	pool     *connPool
+	released atomic.Bool
+	// lastUsed — время последнего возврата в пул (UnixNano) для проверки
+	// IdleConnTimeout при повторном acquire.
+	lastUsed int64
 }
 
 func (p *pooledClient) Close() error {
 	return nil // пул управляет закрытием
 }
 
-// connPool — lazy singleton SFTP-соединение с автоматическим
-// восстановлением при ошибках. Все операции в рамках одного
-// экземпляра Store переиспользуют одно TCP+SSH+SFTP-соединение,
-// что устраняет накладные расходы handshake на каждую операцию.
+// release возвращает клиента в пул. Идемпотентно.
+func (p *pooledClient) release() {
+	if p == nil || p.released.Swap(true) {
+		return
+	}
+	if p.pool == nil {
+		_ = p.client.Close()
+		return
+	}
+	p.pool.put(p)
+}
+
+// discard закрывает клиента, позволяя пулу dial-ить нового. Идемпотентно.
+func (p *pooledClient) discard() {
+	if p == nil || p.released.Swap(true) {
+		return
+	}
+	if p.pool == nil {
+		_ = p.client.Close()
+		return
+	}
+	p.pool.discard(p)
+}
+
+// connPool — пул SFTP-клиентов с dial() вне блокировки.
+//
+// Держит до MaxConns одновременных клиентов (минимум 2). Idle-клиенты
+// хранятся в буферизованном канале; конкурентные операции могут выполняться
+// параллельно, а медленный/упавший dial не блокирует другие ключи.
 //
 // Параметры пула:
-//   - MaxIdleConns == 0 — не кэшировать соединение между операциями
-//     (каждый acquire создаёт новое, release закрывает).
-//   - IdleConnTimeout > 0 — закрывать простаивающее соединение, если
-//     оно не использовалось дольше таймаута.
+//   - MaxConns — максимальное число одновременных клиентов (0 = 2).
+//   - MaxIdleConns — сохранён для совместимости конфигурации; управлял
+//     числом idle-клиентов в старой реализации и больше не применяется
+//     напрямую (число idle ограничено MaxConns).
+//   - IdleConnTimeout > 0 — закрывать простаивающий клиент, если он
+//     не использовался дольше таймаута.
 type connPool struct {
 	opts   Options
-	mu     sync.Mutex
-	client client
-	// lastUsed — время последнего возврата соединения в пул.
-	lastUsed time.Time
-	closed   atomic.Bool
+	max    int
+	idle   chan *pooledClient
+	cur    atomic.Int32
+	closed atomic.Bool
 }
 
 func newConnPool(opts Options) *connPool {
-	return &connPool{opts: opts}
+	max := opts.MaxConns
+	if max < 2 {
+		max = 2
+	}
+	return &connPool{
+		opts: opts,
+		max:  max,
+		idle: make(chan *pooledClient, max),
+	}
 }
 
-// acquire возвращает клиента из пула. При первом вызове создаёт
-// соединение через opts.dial(). При ошибке соединение сбрасывается.
-func (p *connPool) acquire(ctx context.Context) (client, error) {
+// acquire возвращает клиента из пула.
+//
+// Сначала пробует взять idle-клиента. Если подходящих нет и число созданных
+// клиентов меньше max — создаёт нового через p.opts.dial() БЕЗ удержания
+// блокировки: параллельные acquire могут диалить одновременно, а единственное
+// общее состояние (счётчик cur) защищено атомарно. Если достигнут предел
+// max — ждёт idle-клиента до закрытия ctx.
+func (p *connPool) acquire(ctx context.Context) (*pooledClient, error) {
 	if p.closed.Load() {
 		return nil, fmt.Errorf("sftp: connection pool closed")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.client != nil {
-		// Если соединение простаивало дольше IdleConnTimeout — закрываем.
-		if p.opts.IdleConnTimeout > 0 && time.Since(p.lastUsed) > p.opts.IdleConnTimeout {
-			_ = p.client.Close()
-			p.client = nil
-		} else {
-			return &pooledClient{client: p.client, pool: p}, nil
+	for {
+		select {
+		case pc := <-p.idle:
+			if !p.fresh(pc) {
+				p.closeStale(pc)
+				continue
+			}
+			return pc, nil
+		default:
+		}
+		cur := p.cur.Load()
+		if cur < int32(p.max) && p.cur.CompareAndSwap(cur, cur+1) {
+			c, err := p.opts.dial()
+			if err != nil {
+				p.cur.Add(-1)
+				return nil, err
+			}
+			return &pooledClient{client: c, pool: p}, nil
+		}
+		select {
+		case pc := <-p.idle:
+			if !p.fresh(pc) {
+				p.closeStale(pc)
+				continue
+			}
+			return pc, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
-	c, err := p.opts.dial()
-	if err != nil {
-		return nil, err
-	}
-	p.client = c
-	p.lastUsed = time.Now()
-	return &pooledClient{client: c, pool: p}, nil
 }
 
-// release возвращает соединение в пул. Если MaxIdleConns == 0, соединение
-// закрывается сразу (пул не хранит idle-соединения).
-func (p *connPool) release() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.opts.MaxIdleConns == 0 && p.client != nil {
-		_ = p.client.Close()
-		p.client = nil
+// fresh сообщает, не истёк ли idle-таймаут для клиента.
+func (p *connPool) fresh(pc *pooledClient) bool {
+	if p.opts.IdleConnTimeout <= 0 || pc.lastUsed == 0 {
+		return true
+	}
+	return time.Since(time.Unix(0, pc.lastUsed)) < p.opts.IdleConnTimeout
+}
+
+// closeStale закрывает простаревшего idle-клиента и разрешает dial.
+func (p *connPool) closeStale(pc *pooledClient) {
+	_ = pc.client.Close()
+	p.cur.Add(-1)
+}
+
+// put возвращает клиента в пул. Если канал полон или пул закрыт — клиент
+// закрывается (пул не накапливает сверхлимитные).
+func (p *connPool) put(pc *pooledClient) {
+	pc.lastUsed = time.Now().UnixNano()
+	if p.closed.Load() {
+		_ = pc.client.Close()
+		p.cur.Add(-1)
 		return
 	}
-	p.lastUsed = time.Now()
-}
-
-// discard сбрасывает соединение при ошибке, чтобы следующий
-// acquire создал новое.
-func (p *connPool) discard() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.client != nil {
-		_ = p.client.Close()
-		p.client = nil
+	select {
+	case p.idle <- pc:
+	default:
+		_ = pc.client.Close()
+		p.cur.Add(-1)
 	}
 }
 
-// close закрывает соединение и помечает пул как закрытый.
+// discard закрывает конкретного клиента, разрешая пулу создать нового.
+func (p *connPool) discard(pc *pooledClient) {
+	_ = pc.client.Close()
+	p.cur.Add(-1)
+}
+
+// close закрывает пул и всех idle-клиентов.
 func (p *connPool) close() {
 	p.closed.Store(true)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.client != nil {
-		_ = p.client.Close()
-		p.client = nil
+	for {
+		select {
+		case pc := <-p.idle:
+			_ = pc.client.Close()
+			p.cur.Add(-1)
+		default:
+			return
+		}
 	}
 }

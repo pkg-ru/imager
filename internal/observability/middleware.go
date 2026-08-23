@@ -42,6 +42,17 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := WithRequestID(r.Context(), id)
 	w.Header().Set(RequestIDHeader, id)
 
+	// Gauge http_inflight (У8): инкрементируем на время обработки запроса.
+	// Используем type-assert, чтобы не расширять публичный интерфейс Metrics.
+	if sm, ok := m.metrics.(*StdMetrics); ok {
+		sm.SetHttpInflight(sm.httpInflight.Value() + 1)
+	}
+	defer func() {
+		if sm, ok := m.metrics.(*StdMetrics); ok {
+			sm.SetHttpInflight(sm.httpInflight.Value() - 1)
+		}
+	}()
+
 	// Обёртка для захвата статуса. status=0 означает "не записан" — после
 	// обработки подставляем 200 (неявный статус по умолчанию).
 	sw := &statusWriter{ResponseWriter: w}

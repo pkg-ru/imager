@@ -33,6 +33,9 @@ const (
 	OutcomeQuota OutcomeKind = "quota"
 	// OutcomeUnavailable — хранилище/координатор временно недоступны.
 	OutcomeUnavailable OutcomeKind = "unavailable"
+	// OutcomeOverloaded — перегрузка процессоров (bounded очередь переполнена);
+	// клиенту следует повторить позже (503 + Retry-After).
+	OutcomeOverloaded OutcomeKind = "overloaded"
 	// OutcomeProcessing — ошибка обработки изображения.
 	OutcomeProcessing OutcomeKind = "processing"
 	// OutcomeCanceled — операция отменена.

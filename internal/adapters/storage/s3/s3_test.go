@@ -3,9 +3,12 @@ package s3
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,13 +21,21 @@ import (
 
 // fakeS3Handler — минимальный in-memory S3 backend для тестов.
 type fakeS3Handler struct {
+	mu      sync.Mutex
 	objects map[string][]byte
+	// multipart — незавершённые multipart uploads: uploadID -> (part -> data).
+	multipart map[string]map[int][]byte
+	// abortCount — число вызовов AbortMultipartUpload (для тестов).
+	abortCount int
 	// preconditionFailed — если true, PutObject с IfNoneMatch возвращает
 	// PreconditionFailed при существующем объекте.
 	preconditionFailed bool
 	// failStatus — если >0, все операции возвращают ошибку с этим HTTP
 	// status code (для тестов маппинга ошибок).
 	failStatus int
+	// failUploadPart — если true, только UploadPart возвращает ошибку 500
+	// (для теста abort multipart).
+	failUploadPart bool
 	// truncateWithoutToken — если true, ListObjectsV2 возвращает
 	// IsTruncated=true без NextContinuationToken (для теста пагинации).
 	truncateWithoutToken bool
@@ -58,8 +69,86 @@ func (f *fakeS3Handler) initialize(ctx context.Context, in middleware.Initialize
 		return f.handleDelete(in)
 	case "ListObjectsV2":
 		return f.handleList(in)
+	case "CreateMultipartUpload":
+		return f.handleCreateMultipart(in)
+	case "UploadPart":
+		return f.handleUploadPart(in)
+	case "CompleteMultipartUpload":
+		return f.handleCompleteMultipart(in)
+	case "AbortMultipartUpload":
+		return f.handleAbortMultipart(in)
 	}
 	return next.HandleInitialize(ctx, in)
+}
+
+func (f *fakeS3Handler) handleCreateMultipart(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
+	params := in.Parameters.(*s3.CreateMultipartUploadInput)
+	uploadID := "upload-" + *params.Key
+	f.mu.Lock()
+	if f.multipart == nil {
+		f.multipart = map[string]map[int][]byte{}
+	}
+	f.multipart[uploadID] = map[int][]byte{}
+	f.mu.Unlock()
+	return middleware.InitializeOutput{Result: &s3.CreateMultipartUploadOutput{UploadId: aws.String(uploadID)}}, middleware.Metadata{}, nil
+}
+
+func (f *fakeS3Handler) handleUploadPart(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failUploadPart {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, &smithy.GenericAPIError{Code: "InternalError", Message: "upload part forced failure"}
+	}
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
+	params := in.Parameters.(*s3.UploadPartInput)
+	data, err := io.ReadAll(params.Body)
+	if err != nil {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, err
+	}
+	f.mu.Lock()
+	if f.multipart[*params.UploadId] == nil {
+		f.mu.Unlock()
+		return middleware.InitializeOutput{}, middleware.Metadata{}, &smithy.GenericAPIError{Code: "NoSuchUpload", Message: "no such upload"}
+	}
+	f.multipart[*params.UploadId][int(*params.PartNumber)] = data
+	f.mu.Unlock()
+	etag := fmt.Sprintf(`"%x"`, sha256.Sum256(data))
+	return middleware.InitializeOutput{Result: &s3.UploadPartOutput{ETag: aws.String(etag)}}, middleware.Metadata{}, nil
+}
+
+func (f *fakeS3Handler) handleCompleteMultipart(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
+	params := in.Parameters.(*s3.CompleteMultipartUploadInput)
+	key := *params.Key
+	f.mu.Lock()
+	parts := f.multipart[*params.UploadId]
+	if parts == nil {
+		f.mu.Unlock()
+		return middleware.InitializeOutput{}, middleware.Metadata{}, &smithy.GenericAPIError{Code: "NoSuchUpload", Message: "no such upload"}
+	}
+	// Собираем объект из частей по порядку номеров (проверка целостности).
+	var out bytes.Buffer
+	for i := 1; i <= len(parts); i++ {
+		out.Write(parts[i])
+	}
+	delete(f.multipart, *params.UploadId)
+	f.objects[key] = out.Bytes()
+	f.mu.Unlock()
+	return middleware.InitializeOutput{Result: &s3.CompleteMultipartUploadOutput{}}, middleware.Metadata{}, nil
+}
+
+func (f *fakeS3Handler) handleAbortMultipart(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	params := in.Parameters.(*s3.AbortMultipartUploadInput)
+	f.mu.Lock()
+	delete(f.multipart, *params.UploadId)
+	f.abortCount++
+	f.mu.Unlock()
+	return middleware.InitializeOutput{Result: &s3.AbortMultipartUploadOutput{}}, middleware.Metadata{}, nil
 }
 
 func (f *fakeS3Handler) handleHead(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
@@ -425,5 +514,99 @@ func TestS3PrefixNormalization(t *testing.T) {
 	}
 	if meta.Size != int64(len("payload")) {
 		t.Fatalf("size = %d, want %d", meta.Size, len("payload"))
+	}
+}
+
+// nonThreadSafeReader — намеренно НЕ потокобезопасный reader, имитирующий
+// remote.BufferReader при output-limit: 0 (К1). Общее состояние (offset, r)
+// без блокировок: конкурентные Read вызовы привели бы к повреждению данных.
+// Используется в тесте multipart, чтобы доказать, что чтение источника
+// сериализуется продюсером.
+type nonThreadSafeReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *nonThreadSafeReader) Read(p []byte) (int, error) {
+	if r.offset >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.offset:])
+	r.offset += n
+	return n, nil
+}
+
+// TestS3MultipartNoRace verifies that publishMultipart reads the shared
+// (non-thread-safe) source serially: parts are sliced by a single producer
+// goroutine, uploaded concurrently, and the assembled object matches the
+// original payload byte-for-byte. With the previous code (concurrent reads of
+// one reader) this test would fail with corrupted data.
+func TestS3MultipartPublish(t *testing.T) {
+	f := newFakeS3Handler()
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+	key := object.ObjectKey("big/object.webp")
+
+	// 3 полных парта (по multipartPartSize) + хвост: ~15.5 МБ.
+	payload := make([]byte, multipartPartSize*3+12345)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	src := &nonThreadSafeReader{data: payload}
+
+	if err := r.Publish(ctx, key, src, object.PublishOptions{}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Объект должен быть собран из всех частей в правильном порядке.
+	got, ok := f.objects["big/object.webp"]
+	if !ok {
+		t.Fatalf("object %q not published", "big/object.webp")
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("multipart payload corrupted: got %d bytes, want %d (race in parallel reader?)", len(got), len(payload))
+	}
+
+	// Проверяем через Open, что объект читается корректно.
+	art, err := r.Open(ctx, key)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer art.Close()
+	read, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !bytes.Equal(read, payload) {
+		t.Fatalf("read back mismatch")
+	}
+}
+
+// TestS3MultipartAbortOnError verifies, что при ошибке загрузки любой части
+// выполняется AbortMultipartUpload и возвращается типизированная ошибка.
+func TestS3MultipartAbortOnError(t *testing.T) {
+	f := newFakeS3Handler()
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	payload := make([]byte, multipartPartSize*2)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	// UploadPart должен завершиться ошибкой 500 (IsUnavailable).
+	f.failUploadPart = true
+	err = r.Publish(context.Background(), object.ObjectKey("fail.bin"), bytes.NewReader(payload), object.PublishOptions{})
+	if !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+	f.mu.Lock()
+	aborted := f.abortCount
+	f.mu.Unlock()
+	if aborted == 0 {
+		t.Fatal("expected AbortMultipartUpload after upload part failure")
 	}
 }

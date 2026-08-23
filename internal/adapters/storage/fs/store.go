@@ -313,10 +313,16 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		}
 	}()
 
-	written, err := writeTemp(tmp, src)
+	written, err := writeTemp(tmp, src, ctx)
 	if err != nil {
 		if qErr := quotaErr(err); qErr != nil {
 			return qErr
+		}
+		// В4: отмена контекста во время копирования — возвращаем как есть.
+		if ctx != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return cErr
+			}
 		}
 		return fmt.Errorf("fs: write temp: %w", err)
 	}
@@ -358,7 +364,12 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			return fmt.Errorf("fs: link temp: %w", lnErr)
 		}
 		_ = os.Remove(tmpName)
-		fsyncDir(dir)
+		if err := fsyncDir(dir); err != nil {
+			// У10: fsync каталога не удался — запись может быть не durable.
+			// Возвращаем ошибку, чтобы вызывающий знал о риске потери.
+			r.cache.releaseBytes(written)
+			return fmt.Errorf("fs: fsync dir: %w", err)
+		}
 		r.cache.releaseBytes(written)
 		r.cache.recordPublish(key, written)
 		_, _ = r.cache.evictIfNeeded()
@@ -371,7 +382,11 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("fs: rename temp: %w", err)
 	}
-	fsyncDir(dir)
+	if err := fsyncDir(dir); err != nil {
+		// У10: fsync каталога не удался — запись может быть не durable.
+		r.cache.releaseBytes(written)
+		return fmt.Errorf("fs: fsync dir: %w", err)
+	}
 	r.cache.releaseBytes(written)
 	r.cache.recordPublish(key, written)
 	_, _ = r.cache.evictIfNeeded()
@@ -424,7 +439,10 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		}
 		return err
 	}
-	fsyncDir(filepath.Dir(full))
+	if err := fsyncDir(filepath.Dir(full)); err != nil {
+		// У10: fsync каталога не удался — удаление может быть не durable.
+		return fmt.Errorf("fs: fsync dir: %w", err)
+	}
 	r.cache.remove(key)
 	return nil
 }

@@ -73,6 +73,9 @@ type Options struct {
 	// MaxIdleConns — максимальное число idle-соединений в пуле
 	// (0 = не держать соединение между операциями).
 	MaxIdleConns int
+	// MaxConns — максимальное число одновременных соединений в пуле
+	// (0 = 2). Позволяет конкурентным операциям работать параллельно.
+	MaxConns int
 	// IdleConnTimeout — таймаут idle-соединений (0 = без ограничения).
 	IdleConnTimeout time.Duration
 	// Dialer — опциональный кастомный dialer (для тестов).
@@ -255,19 +258,16 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 }
 
 // getConn возвращает соединение из пула или opts.Dialer для тестов.
-func (s *SourceStore) getConn(ctx context.Context) (conn, error) {
+func (s *SourceStore) getConn(ctx context.Context) (*pooledConn, error) {
 	if s.pool != nil {
 		return s.pool.acquire(ctx)
 	}
 	// Для тестов с Dialer используем прямой вызов.
-	return s.opts.dial(ctx)
-}
-
-// discardConn сбрасывает соединение пула при ошибке.
-func (s *SourceStore) discardConn() {
-	if s.pool != nil {
-		s.pool.discard()
+	c, err := s.opts.dial(ctx)
+	if err != nil {
+		return nil, err
 	}
+	return &pooledConn{conn: c}, nil
 }
 
 // Lookup возвращает метаданные исходного объекта.
@@ -294,7 +294,7 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				s.discardConn()
+				c.discard()
 			}
 		}()
 
@@ -304,7 +304,7 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 			if !isConnErr(err) {
 				return nil, lastErr
 			}
-			s.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -361,18 +361,15 @@ func NewResultStore(opts Options) (*ResultStore, error) {
 }
 
 // getConn возвращает соединение из пула или opts.Dialer для тестов.
-func (r *ResultStore) getConn(ctx context.Context) (conn, error) {
+func (r *ResultStore) getConn(ctx context.Context) (*pooledConn, error) {
 	if r.pool != nil {
 		return r.pool.acquire(ctx)
 	}
-	return r.opts.dial(ctx)
-}
-
-// discardConn сбрасывает соединение пула при ошибке.
-func (r *ResultStore) discardConn() {
-	if r.pool != nil {
-		r.pool.discard()
+	c, err := r.opts.dial(ctx)
+	if err != nil {
+		return nil, err
 	}
+	return &pooledConn{conn: c}, nil
 }
 
 // Lookup возвращает метаданные результата.
@@ -399,7 +396,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardConn()
+				c.discard()
 			}
 		}()
 
@@ -409,7 +406,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 			if !isConnErr(err) {
 				return nil, lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -463,7 +460,7 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardConn()
+				c.discard()
 			}
 		}()
 
@@ -473,7 +470,7 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 			if !isConnErr(err) {
 				return nil, lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -482,17 +479,17 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		meta := object.ObjectMetadata{Key: key}
 		needDiscard = false
 		// rc закрывается через Stream.Close; соединение возвращается в пул
-		// после закрытия потока (discardConn вызывается в Close).
-		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, discard: r.discardConn}, meta), nil
+		// после закрытия потока (c.discard вызывается в Close).
+		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, conn: c}, meta), nil
 	}
 	return nil, lastErr
 }
 
 // ftpStreamCloser закрывает поток и сбрасывает соединение пула.
 type ftpStreamCloser struct {
-	rc      io.Closer
-	discard func()
-	once    bool
+	rc   io.Closer
+	conn *pooledConn
+	once bool
 }
 
 func (c *ftpStreamCloser) Close() error {
@@ -501,7 +498,7 @@ func (c *ftpStreamCloser) Close() error {
 	}
 	c.once = true
 	err := c.rc.Close()
-	c.discard()
+	c.conn.discard()
 	return err
 }
 
@@ -526,7 +523,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardConn()
+				c.discard()
 			}
 		}()
 
@@ -554,7 +551,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			if !isConnErr(err) {
 				return lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return lastErr
 			}
@@ -577,7 +574,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			if !isConnErr(err) {
 				return lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return lastErr
 			}
@@ -608,7 +605,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardConn()
+				c.discard()
 			}
 		}()
 		if err := c.Delete(full); err != nil {
@@ -616,7 +613,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 			if !isConnErr(err) {
 				return lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return lastErr
 			}
@@ -643,7 +640,7 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardConn()
+				c.discard()
 			}
 		}()
 		root := r.opts.Root
@@ -656,7 +653,7 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 			if !isConnErr(err) {
 				return object.StoreStats{}, lastErr
 			}
-			r.discardConn()
+			c.discard()
 			if ctx.Err() != nil {
 				return object.StoreStats{}, lastErr
 			}

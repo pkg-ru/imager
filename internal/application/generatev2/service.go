@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -442,6 +443,11 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		s.metrics.IncProcessorError()
 		s.metrics.ObserveProcessorDuration(time.Since(procStart))
 		_ = buf.Close()
+		// Перегрузка процессора (bounded очередь переполнена) — сигнал
+		// клиенту повторить позже (503 + Retry-After), а не 500.
+		if isTooManyConcurrency(procErr) {
+			return nil, outcome(OutcomeOverloaded, "processor overloaded", procErr)
+		}
 		return nil, outcome(OutcomeProcessing, "process image", procErr)
 	}
 	if buf.Size() > s.deps.OutputLimit && s.deps.OutputLimit > 0 {
@@ -851,4 +857,15 @@ func (r *memBufferReader) Close() error {
 	}
 	r.buf.releaseLocked()
 	return nil
+}
+
+// isTooManyConcurrency распознаёт сигнал перегрузки процессора (bounded
+// очередь ожидания слота переполнена). Оба процессора (ImageMagick, libvips)
+// возвращают sentinel-ошибку с одинаковым текстом; распознаём по нему, чтобы
+// не завязывать application-слой на конкретные адаптеры.
+func isTooManyConcurrency(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "too many concurrent")
 }

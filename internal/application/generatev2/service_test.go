@@ -399,6 +399,24 @@ func TestGenerateProcessorError(t *testing.T) {
 	}
 }
 
+// TestGenerateProcessorOverloaded проверяет, что перегрузка процессора
+// (ErrTooManyConcurrency) маппится в OutcomeOverloaded, а не OutcomeProcessing.
+func TestGenerateProcessorOverloaded(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.add("photo.png", []byte("SRC"))
+	env.proc.setErr(errors.New("libvips: too many concurrent requests waiting for a slot"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected overloaded error")
+	}
+	if !IsOutcome(err, OutcomeOverloaded) {
+		t.Fatalf("kind = %v, want overloaded", err)
+	}
+}
+
 func TestGeneratePublishError(t *testing.T) {
 	env := newTestEnv(t)
 	env.src.add("photo.png", []byte("SRC"))

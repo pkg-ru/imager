@@ -70,6 +70,9 @@ type Options struct {
 	// MaxIdleConns — максимальное число idle-соединений в пуле
 	// (0 = не держать соединение между операциями).
 	MaxIdleConns int
+	// MaxConns — максимальное число одновременных соединений в пуле
+	// (0 = 2). Позволяет конкурентным операциям работать параллельно.
+	MaxConns int
 	// IdleConnTimeout — таймаут idle-соединений (0 = без ограничения).
 	IdleConnTimeout time.Duration
 	// HostKeyFingerprint — ожидаемый SHA-256 fingerprint host key
@@ -271,7 +274,7 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 }
 
 // getClient возвращает клиента из пула или opts.Client для тестов.
-func (s *SourceStore) getClient(ctx context.Context) (client, error) {
+func (s *SourceStore) getClient(ctx context.Context) (*pooledClient, error) {
 	if s.pool != nil {
 		return s.pool.acquire(ctx)
 	}
@@ -279,14 +282,11 @@ func (s *SourceStore) getClient(ctx context.Context) (client, error) {
 	if s.opts.Client != nil {
 		return &pooledClient{client: s.opts.Client}, nil
 	}
-	return s.opts.dial()
-}
-
-// discardClient сбрасывает соединение при ошибке.
-func (s *SourceStore) discardClient() {
-	if s.pool != nil {
-		s.pool.discard()
+	c, err := s.opts.dial()
+	if err != nil {
+		return nil, err
 	}
+	return &pooledClient{client: c}, nil
 }
 
 // Lookup возвращает метаданные исходного объекта. При ошибке соединения
@@ -313,7 +313,7 @@ func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 			return meta, remote.MapError("sftp stat", err)
 		}
 		lastErr = remote.MapError("sftp stat", err)
-		s.discardClient()
+		cl.discard()
 		if ctx.Err() != nil {
 			break
 		}
@@ -340,7 +340,7 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				s.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -354,7 +354,7 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 			if !isClientErr(err) {
 				return nil, lastErr
 			}
-			s.discardClient()
+			cl.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -418,21 +418,18 @@ func NewResultStore(opts Options) (*ResultStore, error) {
 }
 
 // getClient возвращает клиента из пула или opts.Client для тестов.
-func (r *ResultStore) getClient(ctx context.Context) (client, error) {
+func (r *ResultStore) getClient(ctx context.Context) (*pooledClient, error) {
 	if r.pool != nil {
 		return r.pool.acquire(ctx)
 	}
 	if r.opts.Client != nil {
 		return &pooledClient{client: r.opts.Client}, nil
 	}
-	return r.opts.dial()
-}
-
-// discardClient сбрасывает соединение при ошибке.
-func (r *ResultStore) discardClient() {
-	if r.pool != nil {
-		r.pool.discard()
+	c, err := r.opts.dial()
+	if err != nil {
+		return nil, err
 	}
+	return &pooledClient{client: c}, nil
 }
 
 // Lookup возвращает метаданные результата. При ошибке соединения выполняется
@@ -458,7 +455,7 @@ func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 			return meta, remote.MapError("sftp stat", err)
 		}
 		lastErr = remote.MapError("sftp stat", err)
-		r.discardClient()
+		cl.discard()
 		if ctx.Err() != nil {
 			break
 		}
@@ -485,7 +482,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -499,7 +496,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 			if !isClientErr(err) {
 				return nil, lastErr
 			}
-			r.discardClient()
+			cl.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -562,7 +559,7 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -576,7 +573,7 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 			if !isClientErr(err) {
 				return nil, lastErr
 			}
-			r.discardClient()
+			cl.discard()
 			if ctx.Err() != nil {
 				return nil, lastErr
 			}
@@ -595,17 +592,17 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
 		needDiscard = false
 		// f закрывается через Stream.Close; соединение возвращается в пул
-		// после закрытия потока.
-		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, discard: r.discardClient}, meta), nil
+		// после закрытия потока (cl.discard вызывается в Close).
+		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, client: cl}, meta), nil
 	}
 	return nil, lastErr
 }
 
 // sftpStreamCloser закрывает поток и сбрасывает соединение пула.
 type sftpStreamCloser struct {
-	f       io.Closer
-	discard func()
-	once    bool
+	f      io.Closer
+	client *pooledClient
+	once   bool
 }
 
 func (c *sftpStreamCloser) Close() error {
@@ -614,7 +611,7 @@ func (c *sftpStreamCloser) Close() error {
 	}
 	c.once = true
 	err := c.f.Close()
-	c.discard()
+	c.client.discard()
 	return err
 }
 
@@ -637,7 +634,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -718,7 +715,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -732,7 +729,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 			if !isClientErr(err) {
 				return lastErr
 			}
-			r.discardClient()
+			cl.discard()
 			if ctx.Err() != nil {
 				return lastErr
 			}
@@ -759,7 +756,7 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 		needDiscard := true
 		defer func() {
 			if needDiscard {
-				r.discardClient()
+				cl.discard()
 			}
 		}()
 
@@ -774,7 +771,7 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 			if !isClientErr(err) {
 				return object.StoreStats{}, lastErr
 			}
-			r.discardClient()
+			cl.discard()
 			if ctx.Err() != nil {
 				return object.StoreStats{}, lastErr
 			}

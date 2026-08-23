@@ -28,6 +28,9 @@ type Health struct {
 	mu        sync.Mutex
 	lastCheck time.Time
 	lastOK    error
+	// checkInProgress — выполняется ли проверка зависимостей (В9: ограничение
+	// конкурентных проверок при частых healthcheck-запросах).
+	checkInProgress bool
 }
 
 // NewHealth создаёт Health поверх Runtime.
@@ -74,6 +77,12 @@ func (h *Health) ReadinessHandler() http.Handler {
 
 // dependenciesReady выполняет проверку зависимостей с кэшированием и
 // таймаутом. Возвращает nil, если зависимости готовы.
+//
+// В9: вместо time.After (аллокация таймера на каждый вызов) используем
+// time.NewTimer с defer timer.Stop() — таймер не утекает при раннем выходе.
+// Результат передаётся через канал (без гонки на общей переменной).
+// Конкурентные проверки ограничены флагом checkInFlight: при частых
+// healthcheck-запросах не плодим горутины.
 func (h *Health) dependenciesReady() error {
 	h.mu.Lock()
 	check := h.check
@@ -89,22 +98,31 @@ func (h *Health) dependenciesReady() error {
 		h.mu.Unlock()
 		return err
 	}
+	// Не запускаем параллельные проверки: если одна уже выполняется,
+	// возвращаем её результат (или nil, если ещё не завершилась).
+	if h.checkInProgress {
+		h.mu.Unlock()
+		return h.lastOK
+	}
+	h.checkInProgress = true
 	h.mu.Unlock()
 
 	// Выполняем проверку вне блокировки, с таймаутом.
-	var err error
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
-		err = check()
+		done <- check()
 	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var err error
 	select {
-	case <-done:
-	case <-time.After(timeout):
+	case err = <-done:
+	case <-timer.C:
 		err = errors.New("readiness check timeout")
 	}
 
 	h.mu.Lock()
+	h.checkInProgress = false
 	h.lastCheck = time.Now()
 	h.lastOK = err
 	h.mu.Unlock()

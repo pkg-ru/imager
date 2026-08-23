@@ -275,3 +275,36 @@ func TestDoPanicWaitersGetError(t *testing.T) {
 		t.Fatal("waiter did not return after panic")
 	}
 }
+
+// TestDoWaitTimeout проверяет, что ожидание завершения владельца ограничено
+// WaitTimeout: если владелец "завис" и не завершился, ожидающий получает
+// ErrWaitTimeout, а не блокируется навсегда.
+func TestDoWaitTimeout(t *testing.T) {
+	g := New(Options{WaitTimeout: 50 * time.Millisecond})
+	key := object.ObjectKey("k")
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = g.Do(context.Background(), key, func() (any, error) {
+			close(started)
+			<-release // владелец "завис" и не завершается
+			return "never", nil
+		})
+	}()
+	<-started
+
+	start := time.Now()
+	_, err := g.Do(context.Background(), key, func() (any, error) { return "x", nil })
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrWaitTimeout) {
+		t.Fatalf("err = %v, want ErrWaitTimeout", err)
+	}
+	// Ожидание должно завершиться примерно через WaitTimeout, а не ждать
+	// освобождения владельца.
+	if elapsed < 30*time.Millisecond || elapsed > 2*time.Second {
+		t.Fatalf("wait elapsed = %v, want ~50ms", elapsed)
+	}
+	close(release)
+}

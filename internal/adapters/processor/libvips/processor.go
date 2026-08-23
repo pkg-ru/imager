@@ -82,6 +82,11 @@ func IsLimitError(err error, kind LimitKind) bool {
 //  2. application-level ограничения: bounded writer (OutputBytes) на выход
 //     и context deadline (Timeout) на каждый запрос Process.
 type Limits struct {
+	// SourceBytes — application-level лимит размера ВХОДНЫХ данных в байтах.
+	// Вход читается с ограничением; при превышении возвращается
+	// LimitError{LimitOutput} (kind переиспользуется для единообразия
+	// маппинга). 0 = дефолт DefaultSourceBytes.
+	SourceBytes int64
 	// OutputBytes — application-level лимит размера выходных данных в байтах.
 	// При превышении запись в out прекращается и возвращается
 	// LimitError{LimitOutput}.
@@ -140,6 +145,12 @@ type Processor struct {
 }
 
 var _ processor.Processor = (*Processor)(nil)
+
+// DefaultSourceBytes — дефолтный лимит размера ВХОДНЫХ данных (10 MiB).
+// Применяется, если SourceBytes == 0. Защита от OOM при чтении
+// неограниченного входа (К3): для remote-источников размер может быть
+// неизвестен (Metadata.Size == 0), поэтому io.ReadAll без лимита недопустим.
+const DefaultSourceBytes int64 = 10 * 1024 * 1024
 
 // ErrNotCompiled — ошибка, которую возвращает stub-движок, если пакет
 // собран без тэка "libvips".
@@ -210,14 +221,28 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 	defer cancel()
 
-	// Чтение исходника в буфер (libvips работает с []byte).
-	data, err := io.ReadAll(in.Source)
+	// Чтение исходника в буфер с ограничением размера (К3): вход не должен
+	// материализоваться без границ даже для remote-источников с неизвестным
+	// размером. Лимит — SourceBytes или дефолт DefaultSourceBytes.
+	sourceLimit := p.limits.SourceBytes
+	if sourceLimit <= 0 {
+		sourceLimit = DefaultSourceBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(in.Source, sourceLimit))
 	if err != nil {
 		return nil, fmt.Errorf("libvips: read source: %w", err)
 	}
+	if int64(len(data)) >= sourceLimit {
+		return nil, &LimitError{Kind: LimitOutput, Limit: sourceLimit, Actual: int64(len(data))}
+	}
 
-	// Обработка (govips или заглушка).
-	output, err := p.backend.process(runCtx, data, in.Plan)
+	// Обработка (govips или заглушка). К2: watchdog-обёртка — зависшая
+	// cgo-операция не прерывается по ctx, но сервис не блокируется:
+	// по истечении контекста возвращается ошибка, а слот семафора
+	// освобождается (defer p.sem.release() выше).
+	output, err := runWatchdog(runCtx, func() ([]byte, error) {
+		return p.backend.process(runCtx, data, in.Plan)
+	})
 	if err != nil {
 		if runCtx.Err() != nil {
 			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
@@ -243,6 +268,35 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
 	}
 	return &processor.Result{Size: actual}, nil
+}
+
+// runWatchdog выполняет тяжёлую (cgo) операцию в отдельной горутине и
+// ожидает её завершения либо отмены ctx (К2). Сама cgo-операция не может
+// быть прервана libvips-биндингом, но сервис не блокируется: по ctx.Done()
+// возвращается ошибка контекста, запрос получает 504, а слот семафора
+// освобождается вызывающим (defer p.sem.release()).
+//
+// Важно: завершившаяся по таймауту горутина остаётся висеть в cgo до
+// фактического завершения операции libvips. Это допустимый компромисс:
+// сервис не блокирует пул воркеров и не теряет семафор.
+func runWatchdog(ctx context.Context, fn func() ([]byte, error)) ([]byte, error) {
+	done := make(chan result, 1)
+	go func() {
+		out, err := fn()
+		done <- result{out: out, err: err}
+	}()
+	select {
+	case r := <-done:
+		return r.out, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// result — результат watchdog-вызова.
+type result struct {
+	out []byte
+	err error
 }
 
 // semaphore — bounded очередь слотов конкурентности (аналогично

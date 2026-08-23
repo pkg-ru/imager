@@ -89,6 +89,9 @@ type RemoteStorageConfig struct {
 	// MaxIdleConns — максимальное число idle-соединений в пуле
 	// (SFTP/FTP/FTPS, HTTP, S3; 0 = не держать соединение).
 	MaxIdleConns int
+	// MaxConns — максимальное число одновременных соединений в пуле
+	// (SFTP/FTP/FTPS; 0 = 2).
+	MaxConns int
 	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
 	// (HTTP, S3).
 	MaxIdleConnsPerHost int
@@ -132,6 +135,7 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			ReadTimeout:        cfg.ReadTimeout,
 			MaxAttempts:        cfg.MaxAttempts,
 			MaxIdleConns:       cfg.MaxIdleConns,
+			MaxConns:           cfg.MaxConns,
 			IdleConnTimeout:    cfg.IdleConnTimeout,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
@@ -150,6 +154,7 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			ReadTimeout:     cfg.ReadTimeout,
 			MaxAttempts:     cfg.MaxAttempts,
 			MaxIdleConns:    cfg.MaxIdleConns,
+			MaxConns:        cfg.MaxConns,
 			IdleConnTimeout: cfg.IdleConnTimeout,
 		})
 	case StorageHTTP:
@@ -205,6 +210,7 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			ReadTimeout:        cfg.ReadTimeout,
 			MaxAttempts:        cfg.MaxAttempts,
 			MaxIdleConns:       cfg.MaxIdleConns,
+			MaxConns:           cfg.MaxConns,
 			IdleConnTimeout:    cfg.IdleConnTimeout,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
@@ -223,6 +229,7 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			ReadTimeout:     cfg.ReadTimeout,
 			MaxAttempts:     cfg.MaxAttempts,
 			MaxIdleConns:    cfg.MaxIdleConns,
+			MaxConns:        cfg.MaxConns,
 			IdleConnTimeout: cfg.IdleConnTimeout,
 		})
 	case StorageHTTP:

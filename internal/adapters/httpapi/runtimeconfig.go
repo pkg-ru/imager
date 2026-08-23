@@ -236,6 +236,9 @@ type StorageYAML struct {
 	// MaxIdleConns — максимальное число idle-соединений в пуле
 	// (S3, HTTP).
 	MaxIdleConns int `yaml:"max-idle-conns"`
+	// MaxConns — максимальное число одновременных соединений в пуле
+	// (SFTP/FTP/FTPS; 0 = 2).
+	MaxConns int `yaml:"max-conns"`
 	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
 	// (S3, HTTP).
 	MaxIdleConnsPerHost int `yaml:"max-idle-conns-per-host"`
@@ -373,6 +376,9 @@ type HTTPYAML struct {
 	GenerateTimeout string `yaml:"generate-timeout"`
 	// NotFound — not-found fallback.
 	NotFound NotFoundYAML `yaml:"not-found"`
+	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
+	// HTTP-запросов (0 = без ограничения).
+	MaxConcurrentRequests int `yaml:"max-concurrent-requests"`
 }
 
 // NotFoundYAML — YAML-представление NotFoundConfig.
@@ -419,13 +425,14 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 
 	// HTTP-адаптер.
 	httpCfg := Config{
-		AllowedOrigins:       raw.HTTP.AllowedOrigins,
-		AllowCredentials:     raw.HTTP.AllowCredentials,
-		CacheControl:         raw.HTTP.CacheControl,
-		NotFoundCacheControl: raw.HTTP.NotFoundCacheControl,
-		ReferrerPolicy:       raw.HTTP.ReferrerPolicy,
-		CSP:                  raw.HTTP.CSP,
-		MaxURLLen:            raw.HTTP.MaxURLLen,
+		AllowedOrigins:        raw.HTTP.AllowedOrigins,
+		AllowCredentials:      raw.HTTP.AllowCredentials,
+		CacheControl:          raw.HTTP.CacheControl,
+		NotFoundCacheControl:  raw.HTTP.NotFoundCacheControl,
+		ReferrerPolicy:        raw.HTTP.ReferrerPolicy,
+		CSP:                   raw.HTTP.CSP,
+		MaxURLLen:             raw.HTTP.MaxURLLen,
+		MaxConcurrentRequests: raw.HTTP.MaxConcurrentRequests,
 		NotFound: NotFoundConfig{
 			Pixel:    raw.HTTP.NotFound.Pixel,
 			Image:    raw.HTTP.NotFound.Image,
@@ -621,6 +628,10 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns)
 	}
 	cfg.MaxIdleConns = s.MaxIdleConns
+	if s.MaxConns < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-conns: negative value %d", s.MaxConns)
+	}
+	cfg.MaxConns = s.MaxConns
 	if s.MaxIdleConnsPerHost < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost)
 	}

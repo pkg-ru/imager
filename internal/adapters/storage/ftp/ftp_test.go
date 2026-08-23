@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jlaffaye/ftp"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -313,4 +315,76 @@ func TestFTPSourceLookupRetryExhausted(t *testing.T) {
 	if _, err := s.Lookup(context.Background(), "dir/file.bin"); err == nil {
 		t.Fatal("expected error after exhausting attempts")
 	}
+}
+
+// TestFTPPoolConcurrentDial проверяет, что пул выполняет dial вне блокировки:
+// параллельные acquire могут создавать несколько соединений одновременно,
+// а не сериализуются на одном мьютексе.
+func TestFTPPoolConcurrentDial(t *testing.T) {
+	var mu sync.Mutex
+	dials := 0
+	// dial блокируется на 50ms, имитируя медленную сеть.
+	dial := func(ctx context.Context, addr string, tls bool) (conn, error) {
+		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return newFakeConn(), nil
+	}
+	pool := newConnPool(Options{Addr: "localhost:21", User: "u", Dialer: dial, MaxConns: 4})
+
+	ctx := context.Background()
+	const n = 4
+	conns := make([]*pooledConn, n)
+	for i := 0; i < n; i++ {
+		c, err := pool.acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		conns[i] = c
+	}
+	mu.Lock()
+	got := dials
+	mu.Unlock()
+	if got != n {
+		t.Fatalf("dials = %d, want %d (dial должен выполняться параллельно)", got, n)
+	}
+	// Возвращаем все соединения в пул и закрываем.
+	for _, c := range conns {
+		c.release()
+	}
+	pool.close()
+}
+
+// TestFTPPoolReuseIdle проверяет, что после release соединение переиспользуется
+// без повторного dial.
+func TestFTPPoolReuseIdle(t *testing.T) {
+	var mu sync.Mutex
+	dials := 0
+	dial := func(ctx context.Context, addr string, tls bool) (conn, error) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return newFakeConn(), nil
+	}
+	pool := newConnPool(Options{Addr: "localhost:21", User: "u", Dialer: dial, MaxConns: 2})
+
+	ctx := context.Background()
+	c1, err := pool.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	c1.release()
+	c2, err := pool.acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	c2.release()
+	mu.Lock()
+	got := dials
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("dials = %d, want 1 (idle-соединение должно переиспользоваться)", got)
+	}
+	pool.close()
 }

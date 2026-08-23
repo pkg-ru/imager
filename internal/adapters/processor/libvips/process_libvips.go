@@ -89,8 +89,18 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 	}
 	defer img.Close()
 
+	// К2: проверка отмены контекста между стадиями.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	if err := b.applyOperation(ctx, img, plan); err != nil {
 		return nil, err
+	}
+
+	// К2: проверка отмены контекста перед экспортом.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	// Анимация: loop/delay применяются только для анимированных выходов.
