@@ -101,9 +101,16 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 
 	// Ватермарка (nil = не применяется): накладывается ПОСЛЕ операции
 	// (resize/crop/trim) — размер холста уже целевой, ДО экспорта.
+	// Для анимации ватермарка накладывается на КАЖДЫЙ кадр, результатом
+	// может быть новое изображение (см. applyWatermark).
 	if plan.Watermark != nil {
-		if err := b.applyWatermark(img, plan); err != nil {
+		wmImg, err := b.applyWatermark(img, plan)
+		if err != nil {
 			return nil, err
+		}
+		if wmImg != img {
+			img.Close()
+			img = wmImg
 		}
 	}
 
@@ -321,23 +328,22 @@ func loadWatermark(path string) ([]byte, error) {
 //     копий (см. WatermarkSpec.Layout); round дополнительно масштабирует
 //     копию до шага сетки (RoundStep), чтобы копии точно укладывались.
 //
-// Для анимированных выходов (GIF/WebP/APNG) ватермарка не поддерживается:
-// композит на многокадровое изображение применился бы только к первому
-// кадру, что дало бы неконсистентный результат — возвращается явная
-// ошибка обработки (fail loudly вместо молчаливой отдачи без водяного
-// знака).
-func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.ProcessingPlan) error {
+// Для анимированных выходов (GIF/WebP/HEIF; кадры хранятся libvips как один
+// вертикально сшитый холст с page-height) ватермарка накладывается на КАЖДЫЙ
+// кадр: изображение разбирается на кадры, композит применяется к каждому,
+// кадры собираются обратно через arrayjoin с восстановлением метаданных
+// анимации (page-height, delay, loop). Возвращает изображение-результат:
+// для одиночного кадра это тот же img, для анимации — новое (вызывающий
+// код обязан закрыть старое).
+func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	wm := plan.Watermark
-	if plan.OutputFormat.Animated() {
-		return fmt.Errorf("libvips: watermark %q is not supported for animated output %q", wm.Name, plan.OutputFormat)
-	}
 	data, err := loadWatermark(wm.Path)
 	if err != nil {
-		return fmt.Errorf("libvips: watermark %q: %w", wm.Name, err)
+		return nil, fmt.Errorf("libvips: watermark %q: %w", wm.Name, err)
 	}
 	wmImg, err := vips.NewImageFromBuffer(data)
 	if err != nil {
-		return fmt.Errorf("libvips: watermark %q: decode: %w", wm.Name, err)
+		return nil, fmt.Errorf("libvips: watermark %q: decode: %w", wm.Name, err)
 	}
 	defer wmImg.Close()
 
@@ -349,17 +355,118 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		tw, th = wm.RoundStep(W, H, tw, th)
 	}
 	if err := wmImg.ThumbnailWithSize(tw, th, vips.InterestingNone, vips.SizeForce); err != nil {
-		return fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
+		return nil, fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
 	}
 
 	pts := wm.Layout(W, H, tw, th)
 	if len(pts) > maxWatermarkTiles {
-		return fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, len(pts), maxWatermarkTiles)
+		return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, len(pts), maxWatermarkTiles)
 	}
+
+	// Анимация (кадры = вертикальный стек страниц): покадровый композит.
+	// Композит на весь сшитый холст попал бы только в область первого кадра.
+	if ph := img.PageHeight(); img.Pages() > 1 && ph > 0 && H > ph {
+		out, err := compositeWatermarkPerFrame(img, wmImg, pts, W, ph)
+		if err != nil {
+			return nil, fmt.Errorf("libvips: watermark %q: animated output %q: %w", wm.Name, plan.OutputFormat, err)
+		}
+		return out, nil
+	}
+
 	for _, pt := range pts {
 		if err := img.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
-			return fmt.Errorf("libvips: watermark %q: composite at (%d,%d): %w", wm.Name, pt.X, pt.Y, err)
+			return nil, fmt.Errorf("libvips: watermark %q: composite at (%d,%d): %w", wm.Name, pt.X, pt.Y, err)
 		}
 	}
-	return nil
+	return img, nil
+}
+
+// compositeWatermarkPerFrame накладывает ватермарку на каждый кадр
+// многокадрового изображения и собирает кадры обратно в вертикальный стек.
+//
+// Алгоритм:
+//  1. До разборки захватываются метаданные анимации (delay, loop) —
+//     arrayjoin их не переносит;
+//  2. каждый кадр вырезается из лёгкой копии (Copy + ExtractArea);
+//     перед ExtractArea высота страницы копии временно устанавливается
+//     равной высоте всего стека, чтобы govips выполнил ОБЫЧНЫЙ extract
+//     региона (иначе он сам делает мультистраничный extract по всем
+//     кадрам сразу);
+//  3. к каждому кадру применяется Composite во всех точках раскладки;
+//  4. кадры склеиваются ArrayJoin(..., across=1) и восстанавливаются
+//     page-height / delay / loop.
+func compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
+	n := img.Pages()
+	H := img.Height()
+
+	delay, _ := img.PageDelay()
+	loop := img.Loop()
+
+	frames := make([]*vips.ImageRef, 0, n)
+	closeFrames := func(keepFirst bool) {
+		for i, f := range frames {
+			if i == 0 && keepFirst {
+				continue
+			}
+			f.Close()
+		}
+	}
+	for i := 0; i < n; i++ {
+		f, err := img.Copy()
+		if err != nil {
+			closeFrames(false)
+			return nil, fmt.Errorf("copy frame %d/%d: %w", i+1, n, err)
+		}
+		// Высота страницы = высота всего стека: Height()==PageHeight()
+		// переключает ExtractArea на обычный (не мультистраничный) путь,
+		// позволяя вырезать ровно один кадр по смещению i*ph.
+		if err := f.SetPageHeight(H); err != nil {
+			f.Close()
+			closeFrames(false)
+			return nil, fmt.Errorf("set page height of frame %d/%d: %w", i+1, n, err)
+		}
+		if err := f.ExtractArea(0, i*ph, W, ph); err != nil {
+			f.Close()
+			closeFrames(false)
+			return nil, fmt.Errorf("extract frame %d/%d: %w", i+1, n, err)
+		}
+		for _, pt := range pts {
+			if err := f.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
+				f.Close()
+				closeFrames(false)
+				return nil, fmt.Errorf("composite frame %d/%d at (%d,%d): %w", i+1, n, pt.X, pt.Y, err)
+			}
+		}
+		frames = append(frames, f)
+	}
+
+	base := frames[0]
+	if len(frames) > 1 {
+		if err := base.ArrayJoin(frames[1:], 1); err != nil {
+			closeFrames(true)
+			return nil, fmt.Errorf("join %d frames: %w", len(frames), err)
+		}
+	}
+	// Метаданные анимации: page-height обязателен (иначе стек читается как
+	// один высокий кадр), delay/loop переносятся вручную.
+	if err := base.SetPageHeight(ph); err != nil {
+		base.Close()
+		closeFrames(false)
+		return nil, fmt.Errorf("restore page height: %w", err)
+	}
+	if len(delay) > 0 {
+		if err := base.SetPageDelay(delay); err != nil {
+			base.Close()
+			closeFrames(false)
+			return nil, fmt.Errorf("restore page delay: %w", err)
+		}
+	}
+	if err := base.SetLoop(loop); err != nil {
+		base.Close()
+		closeFrames(false)
+		return nil, fmt.Errorf("restore loop: %w", err)
+	}
+	// Промежуточные кадры больше не нужны (base держит свои ссылки).
+	closeFrames(true)
+	return base, nil
 }
