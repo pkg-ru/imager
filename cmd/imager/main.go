@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/internal/adapters/httpapi"
+	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
 	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
@@ -226,16 +227,30 @@ func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Proc
 		closers = append(closers, imProc)
 	}
 
+	// Детектор лиц/объектов (face-crop/object-crop). Создаётся всегда из
+	// секции detection.*; при пустых путях к моделям — неактивная заглушка,
+	// и libvips вернёт понятную ошибку при запросе fc/oc без моделей.
+	det := detection.NewDetector(detection.Options{
+		FaceModel:           rc.Detection.FaceModel,
+		ObjectModel:         rc.Detection.ObjectModel,
+		ConfidenceThreshold: rc.Detection.ConfidenceThreshold,
+		MaxObjects:          rc.Detection.MaxObjects,
+	})
+
 	// libvips доступен только если скомпилирован с тэком "libvips".
-	lvProc, lvErr := libvips.New(libvips.Options{Limits: libvips.Limits{
-		OutputBytes:   rc.Libvips.Limits.OutputBytes,
-		Timeout:       rc.Libvips.Limits.Timeout,
-		Concurrency:   rc.Libvips.Limits.Concurrency,
-		Threads:       rc.Libvips.Limits.Threads,
-		MaxCacheMem:   rc.Libvips.Limits.MaxCacheMem,
-		MaxCacheFiles: rc.Libvips.Limits.MaxCacheFiles,
-		MaxCacheSize:  rc.Libvips.Limits.MaxCacheSize,
-	}})
+	lvProc, lvErr := libvips.New(libvips.Options{
+		Limits: libvips.Limits{
+			OutputBytes:   rc.Libvips.Limits.OutputBytes,
+			Timeout:       rc.Libvips.Limits.Timeout,
+			Concurrency:   rc.Libvips.Limits.Concurrency,
+			Threads:       rc.Libvips.Limits.Threads,
+			MaxCacheMem:   rc.Libvips.Limits.MaxCacheMem,
+			MaxCacheFiles: rc.Libvips.Limits.MaxCacheFiles,
+			MaxCacheSize:  rc.Libvips.Limits.MaxCacheSize,
+		},
+		Detector:       det,
+		DetectorMargin: rc.Detection.Margin,
+	})
 
 	if libvips.Compiled() && lvErr == nil {
 		// Основной сценарий: libvips — primary, ImageMagick — fallback

@@ -167,3 +167,70 @@ func mustPresetReq(t *testing.T) *asset.Request {
 	}
 	return req
 }
+
+func TestCompileDefaultOrientation(t *testing.T) {
+	cfg := &Config{
+		Version:    SupportedVersion,
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{
+			DefaultQuality:    80,
+			DefaultAutoOrient: boolPtr(false),
+			DefaultRotate:     "90",
+			DefaultFlip:       "horizontal",
+		},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	or := compiled.DefaultOrientation
+	if or == nil {
+		t.Fatal("DefaultOrientation is nil")
+	}
+	if or.AutoOrient || or.Rotate != 90 || or.Flip != "horizontal" {
+		t.Errorf("unexpected default orientation: %+v", or)
+	}
+}
+
+func TestCompileDefaultOrientationDefaults(t *testing.T) {
+	cfg := &Config{
+		Version:    SupportedVersion,
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{DefaultQuality: 80},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	or := compiled.DefaultOrientation
+	if or == nil || !or.AutoOrient || or.Rotate != 0 || or.Flip != "" {
+		t.Errorf("expected default {AutoOrient:true}, got %+v", or)
+	}
+}
+
+func TestValidateDefaultOrientationErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*ProcessingConfig)
+	}{
+		{"invalid rotate", func(p *ProcessingConfig) { p.DefaultRotate = "45" }},
+		{"invalid flip", func(p *ProcessingConfig) { p.DefaultFlip = "diagonal" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Version:    SupportedVersion,
+				Policy:     policyConfigForTest(),
+				Processing: ProcessingConfig{DefaultQuality: 80},
+			}
+			tc.mutate(&cfg.Processing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

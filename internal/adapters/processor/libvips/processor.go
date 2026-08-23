@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
@@ -112,6 +113,17 @@ type Limits struct {
 type Options struct {
 	// Limits — resource limits обработчика.
 	Limits Limits
+	// Detector — детектор лиц/объектов для операций face-crop/object-crop.
+	// nil = детекция недоступна: запросы с fc/oc вернут понятную ошибку.
+	// Детектор создаётся в composition root (cmd/imager/main.go) из секции
+	// конфигурации detection.* и может быть nil при пустых путях к моделям.
+	// Для smart-crop НЕ требуется: он использует встроенное "attention"
+	// libvips (InterestingAttention).
+	Detector detection.Detector
+	// DetectorMargin — отступ к найденной детектором области face/object-crop
+	// как доля от её размера (интервал [0,1]); применяется на обе стороны
+	// по каждой оси. 0 = кроп строго по bounding box обнаруженного объекта.
+	DetectorMargin float64
 }
 
 // backend — реализация обработки изображения (build-tag specific):

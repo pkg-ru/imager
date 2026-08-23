@@ -11,9 +11,11 @@
 //	/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
 //
 // transform — один из кодов: "c" (crop), "t" (trim), "ct" (trim затем crop),
-// либо отсутствует (тогда применяется resize). dpr — множитель плотности
-// пикселей: отсутствие суффикса означает 1, явно допустимы только 2 или 3.
-// size "x" означает сохранение исходного размера изображения.
+// "sc" (smart-crop), "fc" (face-crop), "oc" (object-crop), а также их
+// trim-варианты "sct", "fct", "oct" (сначала trim, затем соответсвующий
+// crop), либо отсутствует (тогда применяется resize). dpr — множитель
+// плотности пикселей: отсутствие суффикса означает 1, явно допустимы только
+// 2 или 3. size "x" означает сохранение исходного размера изображения.
 //
 // Пакет гарантирует безопасную canonicalization: запрещены traversal-сегменты
 // ("..", "."), encoded-разделители ("%2f", "%2F"), control-символы, а также
@@ -78,13 +80,28 @@ const (
 	TransformTrim Transform = "t"
 	// TransformCropTrim — последовательное применение trim и crop (сначала trim).
 	TransformCropTrim Transform = "ct"
+	// TransformSmartCrop — «умная» обрезка по значимой области (attention).
+	TransformSmartCrop Transform = "sc"
+	// TransformFaceCrop — обрезка по обнаруженным лицам.
+	TransformFaceCrop Transform = "fc"
+	// TransformObjectCrop — обрезка по обнаруженным объектам.
+	TransformObjectCrop Transform = "oc"
+	// TransformSmartCropTrim — trim, затем smart-crop (сначала trim).
+	TransformSmartCropTrim Transform = "sct"
+	// TransformFaceCropTrim — trim, затем face-crop (сначала trim).
+	TransformFaceCropTrim Transform = "fct"
+	// TransformObjectCropTrim — trim, затем object-crop (сначала trim).
+	TransformObjectCropTrim Transform = "oct"
 )
 
 // ValidTransform проверяет, что transform является допустимым.
-// Разрешены ровно "c", "t" и "ct"; любые другие комбинации (включая "tc")
-// отклоняются. Пустой transform допустим (означает resize).
+// Разрешены ровно "c", "t", "ct", "sc", "fc", "oc", "sct", "fct" и "oct";
+// любые другие комбинации (включая "tc") отклоняются. Пустой transform
+// допустим (означает resize).
 func ValidTransform(t Transform) bool {
-	return t == TransformCrop || t == TransformTrim || t == TransformCropTrim
+	return t == TransformCrop || t == TransformTrim || t == TransformCropTrim ||
+		t == TransformSmartCrop || t == TransformFaceCrop || t == TransformObjectCrop ||
+		t == TransformSmartCropTrim || t == TransformFaceCropTrim || t == TransformObjectCropTrim
 }
 
 // SourceName — каноническое имя исходного файла.

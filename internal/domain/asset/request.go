@@ -35,6 +35,7 @@ type Request struct {
 	duration     int
 	loop         *bool
 	watermark    *processing.WatermarkSpec
+	orientation  *processing.OrientationSpec
 }
 
 // NewRequest создаёт канонический Request.
@@ -128,6 +129,11 @@ func (r *Request) Loop() *bool { return r.loop }
 // Заполняется при разрешении пресета; для канонических запросов
 // ватермарка определяется path-policy/дефолтом на уровне use case.
 func (r *Request) Watermark() *processing.WatermarkSpec { return r.watermark }
+
+// Orientation возвращает спецификацию ориентации (nil = не задана:
+// используется глобальный дефолт processing.default-* на уровне use case).
+// Заполняется при разрешении пресета.
+func (r *Request) Orientation() *processing.OrientationSpec { return r.orientation }
 
 // SourceName возвращает имя исходника.
 func (r *Request) SourceName() SourceName { return r.sourceName }
@@ -225,6 +231,19 @@ func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *boo
 	cp.duration = duration
 	cp.loop = loop
 	cp.watermark = watermark
+	return &cp
+}
+
+// WithOrientation возвращает копию запроса со спецификацией ориентации.
+// Используется при разрешении пресета: ориентация не является частью
+// URL-грамматики и не влияет на Build(). nil = не задана (используется
+// глобальный дефолт на уровне use case).
+func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	cp.orientation = o
 	return &cp
 }
 

@@ -271,13 +271,13 @@ func TestAuthorizePathDPRRange23(t *testing.T) {
 	}
 }
 
-// TestAuthorizePathCrop проверяет ограничение crop.
+// TestAuthorizePathCrop проверяет ограничение crop (историческая форма
+// crop=true → белый список {c, ct}).
 func TestAuthorizePathCrop(t *testing.T) {
-	cropTrue := true
 	p := &Policy{
 		Global: GlobalPolicy{Authorization: AuthUnsafe},
 		PathPolicies: []PathPolicy{
-			{Path: "/users", Crop: &cropTrue},
+			{Path: "/users", Crop: NewCropAllowList(asset.TransformCrop, asset.TransformCropTrim)},
 		},
 	}
 	// transform "c" — crop присутствует, разрешён.
@@ -308,13 +308,13 @@ func TestAuthorizePathCrop(t *testing.T) {
 	}
 }
 
-// TestAuthorizePathCropFalse проверяет запрет crop (crop=false).
+// TestAuthorizePathCropFalse проверяет запрет crop (crop=false → чёрный
+// список {c, ct}).
 func TestAuthorizePathCropFalse(t *testing.T) {
-	cropFalse := false
 	p := &Policy{
 		Global: GlobalPolicy{Authorization: AuthUnsafe},
 		PathPolicies: []PathPolicy{
-			{Path: "/", Crop: &cropFalse},
+			{Path: "/", Crop: NewCropDenyList(asset.TransformCrop, asset.TransformCropTrim)},
 		},
 	}
 	// transform "" — crop отсутствует, разрешён.
@@ -329,6 +329,179 @@ func TestAuthorizePathCropFalse(t *testing.T) {
 	}
 	if d.Reason != ReasonCropNotAllowed {
 		t.Errorf("Reason = %q, want %q", d.Reason, ReasonCropNotAllowed)
+	}
+}
+
+// TestAuthorizePathCropModes проверяет строковые crop-режимы path-policy:
+// разрешён только указанный режим (и его trim-вариант), остальные transform
+// отклоняются с ReasonCropNotAllowed.
+func TestAuthorizePathCropModes(t *testing.T) {
+	p := &Policy{
+		Global: GlobalPolicy{Authorization: AuthUnsafe},
+		PathPolicies: []PathPolicy{
+			{Path: "/users", Crop: NewCropAllowList(
+				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
+			)},
+		},
+	}
+	allowed := []string{
+		"/users/users-png/sc-280x280.webp",
+		"/users/users-png/sct-280x280.webp",
+	}
+	for _, u := range allowed {
+		d := p.Authorize(mustReq(t, u))
+		if !d.Allowed {
+			t.Errorf("expected allowed for %q, got %+v", u, d)
+		}
+	}
+	denied := []string{
+		"/users/users-png/c-280x280.webp",
+		"/users/users-png/ct-280x280.webp",
+		"/users/users-png/fc-280x280.webp",
+		"/users/users-png/oc-280x280.webp",
+		"/users/users-png/280x280.webp", // resize — crop отсутствует
+		"/users/users-png/t-280x280.webp",
+	}
+	for _, u := range denied {
+		d := p.Authorize(mustReq(t, u))
+		if d.Allowed {
+			t.Errorf("expected denied for %q", u)
+			continue
+		}
+		if d.Reason != ReasonCropNotAllowed {
+			t.Errorf("Reason = %q, want %q for %q", d.Reason, ReasonCropNotAllowed, u)
+		}
+	}
+}
+
+// TestAuthorizePathCropModeList проверяет список разрешённых режимов:
+// crop: [smart, face] пропускает sc/sct/fc/fct и отклоняет остальные.
+func TestAuthorizePathCropModeList(t *testing.T) {
+	p := &Policy{
+		Global: GlobalPolicy{Authorization: AuthUnsafe},
+		PathPolicies: []PathPolicy{
+			{Path: "/", Crop: NewCropAllowList(
+				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
+				asset.TransformFaceCrop, asset.TransformFaceCropTrim,
+			)},
+		},
+	}
+	allowed := []string{
+		"/products/users-png/sc-280x280.webp",
+		"/products/users-png/sct-280x280.webp",
+		"/products/users-png/fc-280x280.webp",
+		"/products/users-png/fct-280x280.webp",
+	}
+	for _, u := range allowed {
+		d := p.Authorize(mustReq(t, u))
+		if !d.Allowed {
+			t.Errorf("expected allowed for %q, got %+v", u, d)
+		}
+	}
+	denied := []string{
+		"/products/users-png/c-280x280.webp",
+		"/products/users-png/oc-280x280.webp",
+		"/products/users-png/280x280.webp",
+	}
+	for _, u := range denied {
+		d := p.Authorize(mustReq(t, u))
+		if d.Allowed {
+			t.Errorf("expected denied for %q", u)
+		}
+	}
+}
+
+// TestAuthorizePathCropNoneDeniesAllModes проверяет deny-форму "none":
+// запрещены все crop-режимы, но resize и trim-only разрешены.
+func TestAuthorizePathCropNoneDeniesAllModes(t *testing.T) {
+	p := &Policy{
+		Global: GlobalPolicy{Authorization: AuthUnsafe},
+		PathPolicies: []PathPolicy{
+			{Path: "/", Crop: NewCropDenyList(
+				asset.TransformCrop, asset.TransformCropTrim,
+				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
+				asset.TransformFaceCrop, asset.TransformFaceCropTrim,
+				asset.TransformObjectCrop, asset.TransformObjectCropTrim,
+			)},
+		},
+	}
+	allowed := []string{
+		"/products/users-png/280x280.webp",
+		"/products/users-png/t-280x280.webp",
+	}
+	for _, u := range allowed {
+		d := p.Authorize(mustReq(t, u))
+		if !d.Allowed {
+			t.Errorf("expected allowed for %q, got %+v", u, d)
+		}
+	}
+	denied := []string{
+		"/products/users-png/c-280x280.webp",
+		"/products/users-png/ct-280x280.webp",
+		"/products/users-png/sc-280x280.webp",
+		"/products/users-png/sct-280x280.webp",
+		"/products/users-png/fc-280x280.webp",
+		"/products/users-png/fct-280x280.webp",
+		"/products/users-png/oc-280x280.webp",
+		"/products/users-png/oct-280x280.webp",
+	}
+	for _, u := range denied {
+		d := p.Authorize(mustReq(t, u))
+		if d.Allowed {
+			t.Errorf("expected denied for %q", u)
+			continue
+		}
+		if d.Reason != ReasonCropNotAllowed {
+			t.Errorf("Reason = %q, want %q for %q", d.Reason, ReasonCropNotAllowed, u)
+		}
+	}
+}
+
+// TestAuthorizePathTrimWithSmartCropTrim проверяет, что trim-требование
+// учитывает все trim-варианты (включая sct/fct/oct), а не только t/ct.
+func TestAuthorizePathTrimWithSmartCropTrim(t *testing.T) {
+	trimTrue := true
+	p := &Policy{
+		Global: GlobalPolicy{Authorization: AuthUnsafe},
+		PathPolicies: []PathPolicy{
+			{Path: "/users/gift", Trim: &trimTrue},
+		},
+	}
+	// sct/fct/oct содержат trim — разрешены.
+	for _, u := range []string{
+		"/users/gift/users-png/sct-280x280.webp",
+		"/users/gift/users-png/fct-280x280.webp",
+		"/users/gift/users-png/oct-280x280.webp",
+	} {
+		d := p.Authorize(mustReq(t, u))
+		if !d.Allowed {
+			t.Errorf("expected allowed for %q (has trim), got %+v", u, d)
+		}
+	}
+}
+
+// TestCropRuleNilAllowsEverything проверяет, что nil-правило не ограничивает.
+func TestCropRuleNilAllowsEverything(t *testing.T) {
+	var r *CropRule
+	for _, tr := range []asset.Transform{"", "c", "t", "ct", "sc", "fc", "oc", "sct", "fct", "oct"} {
+		if !r.Allows(tr) {
+			t.Errorf("nil rule must allow %q", tr)
+		}
+	}
+}
+
+// TestCropRuleString проверяет человекочитаемое описание правил.
+func TestCropRuleString(t *testing.T) {
+	if got := (*CropRule)(nil).String(); got != "any transform" {
+		t.Errorf("nil String = %q", got)
+	}
+	allow := NewCropAllowList(asset.TransformCrop, asset.TransformCropTrim)
+	if s := allow.String(); s == "" {
+		t.Error("allow rule String must not be empty")
+	}
+	deny := NewCropDenyList(asset.TransformCrop)
+	if s := deny.String(); s == "" {
+		t.Error("deny rule String must not be empty")
 	}
 }
 

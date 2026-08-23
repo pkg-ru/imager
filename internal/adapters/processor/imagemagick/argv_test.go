@@ -377,6 +377,128 @@ func TestBuildArgv_DurationLimit(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_AutoOrientDisabled(t *testing.T) {
+	// AutoOrient=false → -auto-orient не добавляется.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
+		processing.Size{Width: 800, Height: 600}, 1, 85, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	plan.Orientation = &processing.OrientationSpec{AutoOrient: false}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "-auto-orient") {
+		t.Errorf("-auto-orient should be omitted when AutoOrient=false, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_RotateFlipOrder(t *testing.T) {
+	// rotate/flip вставляются ДО -trim/-thumbnail.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpCropTrim, processing.FormatJPEG, processing.FormatPNG,
+		processing.Size{Width: 400, Height: 300}, 1, 80, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	plan.Orientation = &processing.OrientationSpec{
+		AutoOrient: true,
+		Rotate:     processing.Rotation90,
+		Flip:       processing.FlipHorizontal,
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-rotate 90") {
+		t.Errorf("missing -rotate 90, got: %s", joined)
+	}
+	if !strings.Contains(joined, "-flop") {
+		t.Errorf("missing -flop, got: %s", joined)
+	}
+	// rotate/flip должны идти ДО -trim и -thumbnail.
+	if strings.Index(joined, "-rotate") > strings.Index(joined, "-trim") {
+		t.Errorf("-rotate must come before -trim, got: %s", joined)
+	}
+	if strings.Index(joined, "-flop") > strings.Index(joined, "-thumbnail") {
+		t.Errorf("-flop must come before -thumbnail, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_FlipVertical(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
+		processing.Size{Width: 800, Height: 600}, 1, 85, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	plan.Orientation = &processing.OrientationSpec{
+		AutoOrient: true,
+		Flip:       processing.FlipVertical,
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-flip") {
+		t.Errorf("missing -flip, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_JpegSizeSwap90(t *testing.T) {
+	// При повороте 90/270 стороны в jpeg:size свапаются.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
+		processing.Size{Width: 400, Height: 300}, 1, 85, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	plan.Orientation = &processing.OrientationSpec{
+		AutoOrient: true,
+		Rotate:     processing.Rotation90,
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "jpeg:size=300x400") {
+		t.Errorf("jpeg:size should swap to 300x400 for rotate 90, got: %s", joined)
+	}
+}
+
+func TestBuildArgv_JpegSizeNoSwap(t *testing.T) {
+	// Без поворота 90/270 стороны не свапаются.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatPNG,
+		processing.Size{Width: 400, Height: 300}, 1, 2, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	plan.Orientation = &processing.OrientationSpec{
+		AutoOrient: true,
+		Rotate:     processing.Rotation180,
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "jpeg:size=400x300") {
+		t.Errorf("jpeg:size should stay 400x300 for rotate 180, got: %s", joined)
+	}
+}
+
 func TestResizeString(t *testing.T) {
 	cases := []struct {
 		w, h int

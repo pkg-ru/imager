@@ -30,6 +30,7 @@ type Preset struct {
 	duration     int
 	loop         *bool
 	watermark    *processing.WatermarkSpec
+	orientation  *processing.OrientationSpec
 }
 
 // NewPreset создаёт Preset с валидацией.
@@ -93,6 +94,23 @@ func (p *Preset) Name() string { return p.name }
 
 // Watermark возвращает спецификацию ватермарки пресета (nil = не задана).
 func (p *Preset) Watermark() *processing.WatermarkSpec { return p.watermark }
+
+// Orientation возвращает спецификацию ориентации пресета (nil = не задана:
+// используется глобальный дефолт processing.default-*).
+func (p *Preset) Orientation() *processing.OrientationSpec { return p.orientation }
+
+// WithOrientation возвращает копию пресета с привязанной спецификацией
+// ориентации. Используется при компиляции конфигурации: значения
+// auto-orient/rotate/flip пресета мержатся с глобальным дефолтом и
+// подставляются готовой спецификацией.
+func (p *Preset) WithOrientation(o *processing.OrientationSpec) *Preset {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.orientation = o
+	return &cp
+}
 
 // WithWatermark возвращает копию пресета с привязанной спецификацией
 // ватермарки. Используется при компиляции конфигурации: имя ватермарки из
@@ -278,7 +296,11 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 			Reason:     err.Error(),
 		}
 	}
-	return resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark), nil
+	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark)
+	if p.orientation != nil {
+		resolved = resolved.WithOrientation(p.orientation)
+	}
+	return resolved, nil
 }
 
 // SplitPresetNameDPR отделяет фиксированный @dpr-суффикс от имени пресета.

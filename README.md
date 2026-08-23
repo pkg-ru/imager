@@ -1,3 +1,822 @@
+# Полный скрипт `pve-schedule.sh`
+
+Сохранить файл:
+
+`/usr/local/sbin/pve-schedule.sh`
+
+```bash
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE="/etc/pve/local/pve-schedule.conf"
+STATE_DIR="/var/lib/pve-schedule"
+LOCK_FILE="/run/pve-schedule.lock"
+
+LOG_TAG="pve-schedule"
+
+# Сколько секунд максимум ждём штатного выключения.
+SHUTDOWN_TIMEOUT=120
+
+# Интервал проверки состояния VM/CT во время ожидания.
+POLL_INTERVAL=2
+
+
+# -------------------------------------------------------------------
+# Инициализация
+# -------------------------------------------------------------------
+
+mkdir -p "$STATE_DIR"
+
+exec 9>"$LOCK_FILE"
+
+if ! flock -n 9; then
+    exit 0
+fi
+
+
+# -------------------------------------------------------------------
+# Логирование
+# -------------------------------------------------------------------
+
+log() {
+    logger -t "$LOG_TAG" -- "$*"
+    echo "$*"
+}
+
+error() {
+    logger -t "$LOG_TAG" -- "ERROR: $*"
+    echo "ERROR: $*" >&2
+}
+
+
+# -------------------------------------------------------------------
+# Справка
+# -------------------------------------------------------------------
+
+usage() {
+    cat <<EOF
+
+Использование:
+
+  $0 run
+      Выполнить проверку расписания.
+
+  $0 validate
+      Проверить конфигурационный файл.
+
+  $0 show
+      Показать конфигурацию.
+
+  $0 status
+      Показать состояние VM/CT и scheduler.
+
+  $0 start TYPE ID
+      Принудительно запустить VM/CT.
+
+  $0 stop TYPE ID
+      Принудительно остановить VM/CT.
+
+  $0 help
+      Показать эту справку.
+
+Примеры:
+
+  $0 validate
+  $0 status
+  $0 start vm 100
+  $0 stop ct 102
+
+EOF
+}
+
+
+# -------------------------------------------------------------------
+# Валидация времени
+# -------------------------------------------------------------------
+
+validate_time() {
+    local value="$1"
+
+    [[ "$value" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]
+}
+
+
+# -------------------------------------------------------------------
+# Файл состояния scheduler
+#
+# Файл существует только тогда, когда машину остановил
+# именно scheduler.
+# -------------------------------------------------------------------
+
+state_file() {
+    local type="$1"
+    local id="$2"
+
+    echo "$STATE_DIR/${type}-${id}.state"
+}
+
+
+# -------------------------------------------------------------------
+# Проверка существования гостя
+# -------------------------------------------------------------------
+
+guest_exists() {
+    local type="$1"
+    local id="$2"
+
+    case "$type" in
+        vm)
+            qm status "$id" >/dev/null 2>&1
+            ;;
+
+        ct)
+            pct status "$id" >/dev/null 2>&1
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+}
+
+
+# -------------------------------------------------------------------
+# Проверка состояния
+# -------------------------------------------------------------------
+
+is_running() {
+    local type="$1"
+    local id="$2"
+
+    case "$type" in
+        vm)
+            qm status "$id" 2>/dev/null | grep -q '^status: running$'
+            ;;
+
+        ct)
+            pct status "$id" 2>/dev/null | grep -q '^status: running$'
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+}
+
+
+is_stopped() {
+    ! is_running "$1" "$2"
+}
+
+
+# -------------------------------------------------------------------
+# Ожидание остановки
+#
+# Важный момент:
+# после qm/pct shutdown состояние может оставаться running
+# ещё несколько секунд.
+#
+# Поэтому не используем:
+#
+#   sleep 2
+#   is_running
+#
+# Вместо этого ждём фактического перехода в stopped
+# до SHUTDOWN_TIMEOUT секунд.
+# -------------------------------------------------------------------
+
+wait_for_stopped() {
+    local type="$1"
+    local id="$2"
+    local timeout="${3:-$SHUTDOWN_TIMEOUT}"
+
+    local elapsed=0
+
+    while (( elapsed < timeout )); do
+
+        if is_stopped "$type" "$id"; then
+            return 0
+        fi
+
+        sleep "$POLL_INTERVAL"
+
+        elapsed=$((elapsed + POLL_INTERVAL))
+    done
+
+    return 1
+}
+
+
+# -------------------------------------------------------------------
+# Ожидание запуска
+# -------------------------------------------------------------------
+
+wait_for_running() {
+    local type="$1"
+    local id="$2"
+    local timeout="${3:-60}"
+
+    local elapsed=0
+
+    while (( elapsed < timeout )); do
+
+        if is_running "$type" "$id"; then
+            return 0
+        fi
+
+        sleep "$POLL_INTERVAL"
+
+        elapsed=$((elapsed + POLL_INTERVAL))
+    done
+
+    return 1
+}
+
+
+# -------------------------------------------------------------------
+# Штатная остановка VM/CT
+# -------------------------------------------------------------------
+
+stop_guest() {
+    local type="$1"
+    local id="$2"
+
+    if ! guest_exists "$type" "$id"; then
+        error "$type $id: гостевая система не существует"
+        return 1
+    fi
+
+    # Уже остановлена.
+    if is_stopped "$type" "$id"; then
+        log "$type $id: уже остановлена"
+        return 0
+    fi
+
+    log "$type $id: выполняется штатное выключение"
+
+    case "$type" in
+
+        vm)
+            if ! qm shutdown "$id" --timeout "$SHUTDOWN_TIMEOUT"; then
+                log "$type $id: qm shutdown завершился с ошибкой"
+
+                # Не спешим сразу делать stop.
+                # Сначала самостоятельно ждём фактической остановки.
+                if wait_for_stopped "$type" "$id" "$SHUTDOWN_TIMEOUT"; then
+                    log "$type $id: остановлена после qm shutdown"
+                else
+                    log "$type $id: выполняется принудительная остановка"
+                    qm stop "$id"
+                fi
+            fi
+            ;;
+
+        ct)
+            if ! pct shutdown "$id" --timeout "$SHUTDOWN_TIMEOUT"; then
+                log "$type $id: pct shutdown завершился с ошибкой"
+
+                if wait_for_stopped "$type" "$id" "$SHUTDOWN_TIMEOUT"; then
+                    log "$type $id: остановлен после pct shutdown"
+                else
+                    log "$type $id: выполняется принудительная остановка"
+                    pct stop "$id"
+                fi
+            fi
+            ;;
+
+        *)
+            error "$type $id: неизвестный тип"
+            return 1
+            ;;
+    esac
+
+    # После команды обязательно ждём фактической остановки.
+    if wait_for_stopped "$type" "$id" "$SHUTDOWN_TIMEOUT"; then
+
+        # Только теперь фиксируем:
+        # "эту машину выключил scheduler".
+        date +%s > "$(state_file "$type" "$id")"
+
+        log "$type $id: успешно остановлена scheduler'ом"
+
+        return 0
+    fi
+
+    error "$type $id: не удалось остановить за ${SHUTDOWN_TIMEOUT} сек."
+
+    return 1
+}
+
+
+# -------------------------------------------------------------------
+# Запуск VM/CT
+# -------------------------------------------------------------------
+
+start_guest() {
+    local type="$1"
+    local id="$2"
+
+    if ! guest_exists "$type" "$id"; then
+        error "$type $id: гостевая система не существует"
+        return 1
+    fi
+
+    # Уже работает.
+    if is_running "$type" "$id"; then
+
+        log "$type $id: уже работает"
+
+        # Если существовал marker, значит scheduler ранее
+        # выключил машину, а теперь она снова работает.
+        #
+        # Это означает ручной запуск:
+        # Web UI / qm / pct / API / любой другой способ.
+        rm -f "$(state_file "$type" "$id")"
+
+        log "$type $id: обнаружен ручной запуск, scheduler больше не считает её остановленной"
+
+        return 0
+    fi
+
+    log "$type $id: запускается"
+
+    case "$type" in
+        vm)
+            qm start "$id"
+            ;;
+
+        ct)
+            pct start "$id"
+            ;;
+
+        *)
+            error "$type $id: неизвестный тип"
+            return 1
+            ;;
+    esac
+
+    # Ждём фактического запуска.
+    if wait_for_running "$type" "$id" 60; then
+
+        # Marker больше не нужен.
+        rm -f "$(state_file "$type" "$id")"
+
+        log "$type $id: успешно запущена"
+
+        return 0
+    fi
+
+    error "$type $id: запуск не подтверждён в течение 60 сек."
+
+    return 1
+}
+
+
+# -------------------------------------------------------------------
+# Проверка конфигурации
+# -------------------------------------------------------------------
+
+validate_config() {
+    local line_no=0
+    local errors=0
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Конфигурационный файл не существует: $CONFIG_FILE"
+        return 1
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+
+        line_no=$((line_no + 1))
+
+        # Убираем комментарий.
+        line="${line%%#*}"
+
+        # Пропускаем пустые строки.
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+
+        read -r type id start stop enabled extra <<< "$line"
+
+        # Проверяем число полей.
+        if [[ -n "${extra:-}" ]]; then
+            error "Строка $line_no: слишком много параметров"
+            errors=$((errors + 1))
+            continue
+        fi
+
+        # TYPE.
+        if [[ "$type" != "vm" && "$type" != "ct" ]]; then
+            error "Строка $line_no: тип должен быть vm или ct"
+            errors=$((errors + 1))
+            continue
+        fi
+
+        # ID.
+        if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+            error "Строка $line_no: некорректный ID: $id"
+            errors=$((errors + 1))
+        fi
+
+        # START.
+        if ! validate_time "$start"; then
+            error "Строка $line_no: некорректное время старта: $start"
+            errors=$((errors + 1))
+        fi
+
+        # STOP.
+        if ! validate_time "$stop"; then
+            error "Строка $line_no: некорректное время остановки: $stop"
+            errors=$((errors + 1))
+        fi
+
+        # ENABLED.
+        if [[ "$enabled" != "0" && "$enabled" != "1" ]]; then
+            error "Строка $line_no: enabled должен быть 0 или 1"
+            errors=$((errors + 1))
+        fi
+
+        # START == STOP.
+        if [[ "$start" == "$stop" ]]; then
+            error "Строка $line_no: start и stop не должны совпадать"
+            errors=$((errors + 1))
+        fi
+
+        # Проверяем существование только активных гостей.
+        if [[ "$enabled" == "1" ]] &&
+           [[ "$id" =~ ^[0-9]+$ ]] &&
+           ! guest_exists "$type" "$id"; then
+
+            error "Строка $line_no: $type $id не существует"
+            errors=$((errors + 1))
+        fi
+
+    done < "$CONFIG_FILE"
+
+    if (( errors > 0 )); then
+        error "Конфигурация содержит $errors ошибок"
+        return 1
+    fi
+
+    log "Конфигурация корректна"
+
+    return 0
+}
+
+
+# -------------------------------------------------------------------
+# Показать конфигурацию
+# -------------------------------------------------------------------
+
+show_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Конфигурационный файл не существует: $CONFIG_FILE"
+        return 1
+    fi
+
+    echo
+    echo "Конфигурация:"
+    echo "------------------------------------------------------------"
+
+    printf "%-5s %-6s %-8s %-8s %-8s\n" \
+        "TYPE" "ID" "START" "STOP" "ENABLED"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+
+        line="${line%%#*}"
+
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+
+        read -r type id start stop enabled <<< "$line"
+
+        printf "%-5s %-6s %-8s %-8s %-8s\n" \
+            "$type" \
+            "$id" \
+            "$start" \
+            "$stop" \
+            "$enabled"
+
+    done < "$CONFIG_FILE"
+
+    echo "------------------------------------------------------------"
+    echo
+}
+
+
+# -------------------------------------------------------------------
+# Показать состояние
+# -------------------------------------------------------------------
+
+show_status() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Конфигурационный файл не существует: $CONFIG_FILE"
+        return 1
+    fi
+
+    echo
+    echo "Состояние scheduler:"
+    echo "---------------------------------------------------------------------"
+
+    printf "%-5s %-6s %-8s %-8s %-12s %-18s\n" \
+        "TYPE" \
+        "ID" \
+        "START" \
+        "STOP" \
+        "RUNNING" \
+        "SCHEDULER"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+
+        line="${line%%#*}"
+
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+
+        read -r type id start stop enabled <<< "$line"
+
+        [[ "$enabled" == "1" ]] || continue
+
+        local_running="no"
+        local_scheduler="-"
+
+        if is_running "$type" "$id"; then
+            local_running="yes"
+        fi
+
+        if [[ -f "$(state_file "$type" "$id")" ]]; then
+            local_scheduler="stopped-by-scheduler"
+        fi
+
+        printf "%-5s %-6s %-8s %-8s %-12s %-18s\n" \
+            "$type" \
+            "$id" \
+            "$start" \
+            "$stop" \
+            "$local_running" \
+            "$local_scheduler"
+
+    done < "$CONFIG_FILE"
+
+    echo "---------------------------------------------------------------------"
+    echo
+}
+
+
+# -------------------------------------------------------------------
+# Основной scheduler
+# -------------------------------------------------------------------
+
+run_scheduler() {
+
+    if ! validate_config >/dev/null; then
+        error "Расписание не обработано из-за ошибки конфигурации"
+        return 1
+    fi
+
+    local now
+    now="$(date '+%H:%M')"
+
+    log "Проверка расписания: $now"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+
+        line="${line%%#*}"
+
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+
+        read -r type id start stop enabled <<< "$line"
+
+        [[ "$enabled" == "1" ]] || continue
+
+        local_state="$(state_file "$type" "$id")"
+
+        # ----------------------------------------------------------
+        # Плановая остановка
+        # ----------------------------------------------------------
+
+        if [[ "$now" == "$stop" ]]; then
+
+            if is_running "$type" "$id"; then
+
+                log "$type $id: наступило время остановки ($stop)"
+
+                if ! stop_guest "$type" "$id"; then
+                    error "$type $id: плановая остановка завершилась ошибкой"
+                fi
+
+            else
+
+                # Если машина уже выключена вручную,
+                # scheduler ничего не делает.
+                log "$type $id: наступило время остановки ($stop), но машина уже выключена"
+
+            fi
+
+            continue
+        fi
+
+
+        # ----------------------------------------------------------
+        # Плановый запуск
+        # ----------------------------------------------------------
+        #
+        # Запускаем машину только в случае, если её ранее
+        # выключил scheduler.
+        #
+        # Если пользователь выключил машину вручную —
+        # marker отсутствует и машина не запускается.
+        # ----------------------------------------------------------
+
+        if [[ "$now" == "$start" ]]; then
+
+            if [[ -f "$local_state" ]]; then
+
+                if is_running "$type" "$id"; then
+
+                    # Машина была запущена вручную после
+                    # планового выключения.
+                    log "$type $id: уже работает к плановому старту, считаем запуск ручным"
+
+                    rm -f "$local_state"
+
+                else
+
+                    log "$type $id: наступило время запуска ($start)"
+
+                    if ! start_guest "$type" "$id"; then
+                        error "$type $id: плановый запуск завершился ошибкой"
+                    fi
+
+                fi
+
+            else
+
+                log "$type $id: время запуска ($start), но scheduler ранее её не выключал — запуск пропущен"
+
+            fi
+
+            continue
+        fi
+
+
+        # ----------------------------------------------------------
+        # Обнаружение ручного запуска
+        #
+        # Если scheduler ранее выключил машину и она появилась
+        # running до планового времени старта, считаем это
+        # ручным запуском и удаляем marker.
+        # ----------------------------------------------------------
+
+        if [[ -f "$local_state" ]] &&
+           is_running "$type" "$id"; then
+
+            log "$type $id: обнаружен ручной запуск после планового выключения"
+
+            rm -f "$local_state"
+
+        fi
+
+    done < "$CONFIG_FILE"
+}
+
+
+# -------------------------------------------------------------------
+# Ручная остановка
+# -------------------------------------------------------------------
+
+manual_stop() {
+    local type="$1"
+    local id="$2"
+
+    stop_guest "$type" "$id"
+}
+
+
+# -------------------------------------------------------------------
+# Ручной запуск
+# -------------------------------------------------------------------
+
+manual_start() {
+    local type="$1"
+    local id="$2"
+
+    start_guest "$type" "$id"
+}
+
+
+# -------------------------------------------------------------------
+# CLI
+# -------------------------------------------------------------------
+
+case "${1:-}" in
+
+    run)
+        run_scheduler
+        ;;
+
+    validate)
+        validate_config
+        ;;
+
+    show)
+        show_config
+        ;;
+
+    status)
+        show_status
+        ;;
+
+    start)
+        if [[ $# -ne 3 ]]; then
+            error "Использование: $0 start vm 100"
+            exit 1
+        fi
+
+        manual_start "$2" "$3"
+        ;;
+
+    stop)
+        if [[ $# -ne 3 ]]; then
+            error "Использование: $0 stop vm 100"
+            exit 1
+        fi
+
+        manual_stop "$2" "$3"
+        ;;
+
+    help|--help|-h)
+        usage
+        ;;
+
+    *)
+        usage
+        exit 1
+        ;;
+
+esac
+```
+
+После сохранения:
+
+```bash
+chmod +x /usr/local/sbin/pve-schedule.sh
+```
+
+Проверка:
+
+```bash
+/usr/local/sbin/pve-schedule.sh validate
+```
+
+Проверка состояния:
+
+```bash
+/usr/local/sbin/pve-schedule.sh status
+```
+
+Тест ручной остановки:
+
+```bash
+/usr/local/sbin/pve-schedule.sh stop ct 102
+```
+
+Лог:
+
+```bash
+journalctl -t pve-schedule -f
+```
+
+Для твоего случая теперь ожидаемый результат такой:
+
+```text
+01:20:03 ct 102: выполняется штатное выключение
+01:20:18 ct 102: успешно остановлен scheduler'ом
+```
+
+а **ложной ошибки через 2 секунды больше не будет**: скрипт ждёт реального перехода CT в остановленное состояние до 120 секунд.
+
+Конфигурационный файл остаётся таким:
+
+```text
+/etc/pve/local/pve-schedule.conf
+```
+
+а состояние scheduler:
+
+```text
+/var/lib/pve-schedule/
+```
+
+Systemd timer при этом менять не нужно — он по-прежнему запускает `pve-schedule.sh run` раз в минуту.
+
+
+
+
+
+
+
+
+
+
 # Imager <sup><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sup>
 
 **Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + libvips, ImageMagick — опциональный fallback).
@@ -43,8 +862,18 @@
   - `c` — crop (обрезка по центру);
   - `t` — trim (обрезка краёв);
   - `ct` — trim, затем crop (последовательно);
+  - `sc` — smart-crop (умная обрезка по значимой области, attention libvips);
+  - `fc` — face-crop (обрезка по обнаруженным лицам, ONNX YuNet);
+  - `oc` — object-crop (обрезка по обнаруженным объектам, ONNX SSD/YOLO);
+  - `sct` — trim, затем smart-crop (сначала trim, потом attention);
+  - `fct` — trim, затем face-crop (сначала trim, потом детекция лиц);
+  - `oct` — trim, затем object-crop (сначала trim, потом детекция объектов);
   - отсутствует — resize (масштабирование).
-  Любые другие коды (включая `tc`) недопустимы.
+  `sc`/`fc`/`oc` и их trim-варианты `sct`/`fct`/`oct` требуют сборки с
+  `-tags libvips`; `fc`/`oc`/`fct`/`oct` дополнительно требуют моделей ONNX
+  и сборки с `-tags onnx` (см. ниже, секция detection). Trim-варианты
+  выполняют trim ДО кропа: детекция/attention применяются к уже подрезанному
+  изображению. Любые другие коды (включая `tc`) недопустимы.
 - `size` — размер миниатюры: `120x80`, `x50`, `180x`, `x` (сохранить исходный размер).
 - `dpr` — целочисленный множитель (device pixel ratio): отсутствие суффикса = `1`, явно допустимы только `2` или `3`.
 - `output_format` — выходной формат: `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl` (JPEG XL).
@@ -172,7 +1001,8 @@ http:                 # HTTP-адаптер: CORS, cache-control, not-found и �
 watermarks:           # именованные декларации ватермарок (применяются по имени)
 policy:               # политика авторизации запросов (deny-by-default)
 processing:           # умолчания обработки (default-quality, default-loop,
-                      # default-watermark)
+                      # default-watermark, default-auto-orient,
+                      # default-rotate, default-flip)
 source:               # source-хранилище (storage, path, параметры backend)
 result:               # result-хранилище (storage, path, параметры backend)
 imagemagick:          # binary, policy.xml, resource limits
@@ -249,8 +1079,8 @@ observability:        # log-level
 |------|-----|----------|
 | `path` | string | Префикс пути. `"basket/products"` нормализуется в `"/basket/products"`. |
 | `dpr` | string | Диапазон допустимых DPR (`"0-1"`, `"2-3"`; пусто = без ограничения). |
-| `crop` | bool/nil | `nil` = неважно; `true` = crop обязан быть в URL; `false` = crop запрещён. |
-| `trim` | bool/nil | Аналогично для trim. |
+| `crop` | bool / string / list[string] / nil | Правило допустимых crop-режимов: `nil` = неважно; `true` = crop обязателен (c/ct); `false` = crop запрещён (c и ct); строка-режим — разрешён только он (`center` → c/ct, `smart` → sc/sct, `face` → fc/fct, `object` → oc/oct, `none` = любой crop запрещён); список (`[smart, face]`) — разрешены только перечисленные режимы. Trim-варианты покрыты автоматически. Неизвестное значение — ошибка старта. |
+| `trim` | bool/nil | `nil` = неважно; `true` = trim обязан быть в URL (t/ct/sct/fct/oct); `false` = trim запрещён. |
 | `watermark` | string | Имя ватермарки из секции `watermarks`: накладывается на канонические запросы префикса пути. Приоритет ниже пресета, выше `processing.default-watermark`. Пусто = не задана. |
 
 #### `policy.presets[]`
@@ -270,6 +1100,9 @@ observability:        # log-level
 | `duration` | int | Макс. длительность анимации в мс (`0` = без ограничения). |
 | `loop` | bool/nil | `nil` = `default-loop` из `processing`; `true` = бесконечный loop; `false` = однопроходная анимация. |
 | `watermark` | string | Имя ватермарки из секции `watermarks`. Приоритет выше path-policy и `processing.default-watermark`. Пусто = не задана. |
+| `auto-orient` | bool/nil | `nil` = `default-auto-orient` из `processing`; `true`/`false` — явно включить/выключить автоматический поворот по EXIF Orientation. |
+| `rotate` | string | Фиксированный поворот по часовой стрелке: `""` = `default-rotate` из `processing`; `"none"` = явно отключить (перекрыть глобальный); `"90"` \| `"180"` \| `"270"`. |
+| `flip` | string | Отражение: `""` = `default-flip` из `processing`; `"none"` = явно отключить (перекрыть глобальный); `"horizontal"` \| `"vertical"`. |
 
 Комбинации `crop`/`trim` формируют трансформацию:
 
@@ -287,6 +1120,9 @@ observability:        # log-level
 | `default-quality` | int | `85` | Качество сжатия по умолчанию (`0`–`100`; вне диапазона — ошибка валидации). Применяется к lossy-форматам (jpeg/webp). На PNG влияет `png-compression-level`. |
 | `default-loop` | bool/nil | `true` | Зацикливание анимаций по умолчанию (GIF/WebP/APNG/HEIF), если в пресете не задан `loop`. |
 | `default-watermark` | string | пусто | Ватермарка по умолчанию (имя из `watermarks`). Применяется к запросам без ватермарки в пресете и path-policy. Неизвестное имя — ошибка старта. |
+| `default-auto-orient` | bool/nil | `true` | Автоматический поворот по EXIF Orientation по умолчанию. `true` = при загрузке изображение поворачивается согласно тегу EXIF Orientation; `false` = тег игнорируется. Пресеты перекрывают полем `auto-orient`. |
+| `default-rotate` | string | `""` | Фиксированный поворот по умолчанию (по часовой стрелке): `""`/`"none"` = без поворота; `"90"` \| `"180"` \| `"270"`. Применяется после auto-orient и до resize/crop/trim. Пресеты перекрывают полем `rotate`. |
+| `default-flip` | string | `""` | Отражение по умолчанию: `""`/`"none"` = без отражения; `"horizontal"` \| `"vertical"`. Применяется после rotate и до resize/crop/trim. Пресеты перекрывают полем `flip`. |
 
 ### `watermarks` — декларации ватермарок
 
@@ -432,6 +1268,20 @@ URL:      https://addr.site/path_to_image/foo/bar.jpg
 - Размер ограничивается `spool-max-bytes` (превышение → `ErrQuota`); при наличии `Content-Length` объект отклоняется до скачивания.
 - Метаданные — из `Content-Length`, `Last-Modified`, `Content-Type`, `ETag`.
 - Таймаут запроса — `dial-timeout` (по умолчанию `30s`).
+
+### `detection` — детектор лиц/объектов
+
+Секция настраивает операции `fc` (face-crop) и `oc` (object-crop) на libvips. Детекция исполняет ONNX-модели (YuNet для лиц, SSD/YOLO-подобную для объектов) внутри процесса; для этого бинарь должен быть собран с тэком `-tags onnx` и иметь C-библиотеку ONNX Runtime (`libonnxruntime`) в системе.
+
+| Ключ | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `face-model` | string | пусто | Путь к ONNX-модели YuNet для `fc`. Пусто = face-crop отключён. |
+| `object-model` | string | пусто | Путь к ONNX-модели (SSD/YOLO) для `oc`. Пусто = object-crop отключён. |
+| `confidence-threshold` | float | `0.5` | Порог уверенности в `[0,1]`. Боксы ниже отбрасываются до NMS. |
+| `max-objects` | int | `5` | Максимальное число объектов после NMS (первый N самых уверенных). Должно быть `> 0`. |
+| `margin` | float | `0.1` | Отступ к найденной области как доля её размера в `[0,1]` (по половине с каждой стороны). |
+
+Секция не имеет флага `enabled` — включение задаётся непустыми путями к моделям. Модели загружаются лениво (при первом запросе `fc`/`oc`) и кэшируются на время жизни процесса; отсутствующий файл модели — ошибка при первом обращении (не при старте). Без тэка `onnx` любые `fc`/`oc` возвращают понятную ошибку.
 
 ### `imagemagick` — процессор ImageMagick
 
@@ -589,9 +1439,15 @@ policy:
       output-format: webp
       quality: 85
       dpr: 1
+      auto-orient: true
+      rotate: "90"
+      flip: horizontal
 
 processing:
   default-quality: 85
+  default-auto-orient: true
+  default-rotate: ""
+  default-flip: ""
 
 source:
   storage: fs

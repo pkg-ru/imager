@@ -216,10 +216,14 @@ func parseURLDPR(s string) (DPR, error) {
 	return DPR(v), nil
 }
 
-// matchTransformPrefix проверяет, начинается ли s с "c-", "t-" или "ct-",
-// и возвращает transform и оставшийся size.
+// matchTransformPrefix проверяет, начинается ли s с одного из transform-кодов
+// ("sct-", "fct-", "oct-", "ct-", "sc-", "fc-", "oc-", "c-", "t-"), и
+// возвращает transform и оставшийся size. Порядок важен: сначала более
+// длинные префиксы ("sct"/"fct"/"oct" перед "sc"/"fc"/"oc", "ct" перед "c"),
+// чтобы "sct-120x80" не разобрался как "sc" + "t-120x80", а
+// "ct-120x80" — как "c" + "t-120x80".
 func matchTransformPrefix(s string) (transform, size string, ok bool) {
-	for _, code := range []string{"ct", "c", "t"} {
+	for _, code := range []string{"sct", "fct", "oct", "ct", "sc", "fc", "oc", "c", "t"} {
 		marker := code + "-"
 		if strings.HasPrefix(s, marker) {
 			return code, s[len(marker):], true

@@ -66,6 +66,72 @@ func (r *SizeRule) Matches(s asset.Size) bool {
 	return true
 }
 
+// CropRule — правило допустимости crop-операций в transform канонического
+// URL.
+//
+// Правило — это набор transform-кодов плюс режим:
+//   - allow-режим (белый список): разрешены ТОЛЬКО коды из набора;
+//   - deny-режим (чёрный список): коды из набора ЗАПРЕЩЕНЫ, остальные
+//     разрешены.
+//
+// Экземпляры создаются конструкторами NewCropAllowList/NewCropDenyList и
+// неизменяемы после создания. nil *CropRule означает «не ограничено»
+// (любой transform разрешён).
+type CropRule struct {
+	allow bool
+	codes map[asset.Transform]bool
+}
+
+// NewCropAllowList создаёт правило-белый список: transform канонического URL
+// должен совпадать с одним из перечисленных кодов.
+func NewCropAllowList(codes ...asset.Transform) *CropRule {
+	return &CropRule{allow: true, codes: cropCodeSet(codes)}
+}
+
+// NewCropDenyList создаёт правило-чёрный список: перечисленные коды
+// запрещены, любой другой transform разрешён.
+func NewCropDenyList(codes ...asset.Transform) *CropRule {
+	return &CropRule{allow: false, codes: cropCodeSet(codes)}
+}
+
+// cropCodeSet собирает множество кодов из списка (дубликаты схлопываются).
+func cropCodeSet(codes []asset.Transform) map[asset.Transform]bool {
+	set := make(map[asset.Transform]bool, len(codes))
+	for _, c := range codes {
+		set[c] = true
+	}
+	return set
+}
+
+// Allows сообщает, удовлетворяет ли transform правилу. nil-правило разрешает
+// любой transform.
+func (r *CropRule) Allows(t asset.Transform) bool {
+	if r == nil {
+		return true
+	}
+	if r.allow {
+		return r.codes[t]
+	}
+	return !r.codes[t]
+}
+
+// String возвращает человекочитаемое описание правила (используется в Detail
+// решений авторизации).
+func (r *CropRule) String() string {
+	if r == nil {
+		return "any transform"
+	}
+	codes := make([]string, 0, len(r.codes))
+	for c := range r.codes {
+		codes = append(codes, string(c))
+	}
+	sort.Strings(codes)
+	if r.allow {
+		return "transform must be one of: " + strings.Join(codes, ", ")
+	}
+	return "transform must not be one of: " + strings.Join(codes, ", ")
+}
+
 // PathPolicy — скомпилированная path-policy для конкретного префикса пути.
 //
 // Path — нормализованный префикс пути (см. normalizePath). Политика
@@ -80,9 +146,11 @@ type PathPolicy struct {
 	// DPR — допустимый диапазон DPR (nil = без ограничения). Например
 	// "0-1" разрешает только dpr=1, "2-3" — dpr 2 или 3.
 	DPR *Range
-	// Crop — требование к crop (nil = не задано/неважно). true = crop
-	// обязан присутствовать в transform, false = crop запрещён.
-	Crop *bool
+	// Crop — правило допустимых crop-режимов (nil = не задано/неважно).
+	// Белый список разрешает только перечисленные transform-коды, чёрный —
+	// запрещает их. Булевы формы конфига компилируются так: true → белый
+	// список {c, ct}, false → чёрный список {c, ct} (прежняя семантика).
+	Crop *CropRule
 	// Trim — требование к trim (nil = не задано/неважно). true = trim
 	// обязан присутствовать в transform, false = trim запрещён.
 	Trim *bool
@@ -292,18 +360,17 @@ func (p *Policy) authorizePath(req *asset.Request) Decision {
 			}
 		}
 	}
-	if pp.Crop != nil {
-		hasCrop := req.Transform() == asset.TransformCrop || req.Transform() == asset.TransformCropTrim
-		if hasCrop != *pp.Crop {
-			return Decision{
-				Allowed: false,
-				Reason:  ReasonCropNotAllowed,
-				Detail:  fmt.Sprintf("crop=%v is not allowed for path %q (required %v)", hasCrop, pp.Path, *pp.Crop),
-			}
+	tr := req.Transform()
+	if !pp.Crop.Allows(tr) {
+		return Decision{
+			Allowed: false,
+			Reason:  ReasonCropNotAllowed,
+			Detail: fmt.Sprintf("transform %q is not allowed for path %q (%s)",
+				string(tr), pp.Path, pp.Crop.String()),
 		}
 	}
 	if pp.Trim != nil {
-		hasTrim := req.Transform() == asset.TransformTrim || req.Transform() == asset.TransformCropTrim
+		hasTrim := transformHasTrim(tr)
 		if hasTrim != *pp.Trim {
 			return Decision{
 				Allowed: false,
@@ -313,6 +380,18 @@ func (p *Policy) authorizePath(req *asset.Request) Decision {
 		}
 	}
 	return Decision{Allowed: true, Reason: ReasonAllowed}
+}
+
+// transformHasTrim сообщает, содержит ли transform операцию trim (t/ct/sct/
+// fct/oct — во всех trim-вариантах trim применяется первым).
+func transformHasTrim(t asset.Transform) bool {
+	switch t {
+	case asset.TransformTrim, asset.TransformCropTrim,
+		asset.TransformSmartCropTrim, asset.TransformFaceCropTrim,
+		asset.TransformObjectCropTrim:
+		return true
+	}
+	return false
 }
 
 // CheckLimits проверяет фактические значения против лимитов политики.

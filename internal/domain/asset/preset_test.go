@@ -1,6 +1,10 @@
 package asset
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/pkg-ru/imager/internal/domain/processing"
+)
 
 // TestPresetResolveDifferentSourceFormats проверяет, что один пресет работает
 // с разными source formats из URL (source format не хранится в пресете).
@@ -285,4 +289,69 @@ func mustFormat(t *testing.T, outFmt string) Format {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
 	return f
+}
+
+// TestPresetWithOrientation проверяет, что WithOrientation сохраняет
+// спецификацию ориентации в пресете.
+func TestPresetWithOrientation(t *testing.T) {
+	p := mustNewPreset(t, "thumb", TransformCrop, "120x80", "webp")
+	if p.Orientation() != nil {
+		t.Fatalf("Orientation() = %v, want nil", p.Orientation())
+	}
+	or := &processing.OrientationSpec{AutoOrient: false, Rotate: processing.Rotation90, Flip: processing.FlipVertical}
+	p2 := p.WithOrientation(or)
+	if p2 == p {
+		t.Fatal("WithOrientation must return a new preset")
+	}
+	if p2.Orientation() != or {
+		t.Errorf("Orientation() = %v, want %v", p2.Orientation(), or)
+	}
+	// Исходный пресет не изменён.
+	if p.Orientation() != nil {
+		t.Errorf("original preset Orientation() = %v, want nil", p.Orientation())
+	}
+}
+
+// TestPresetResolveOrientation проверяет, что ориентация пресета переносится
+// в канонический запрос через Resolve.
+func TestPresetResolveOrientation(t *testing.T) {
+	or := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation180, Flip: processing.FlipHorizontal}
+	p := mustNewPreset(t, "thumb", TransformCrop, "120x80", "webp").WithOrientation(or)
+	set, err := NewPresetSet([]*Preset{p})
+	if err != nil {
+		t.Fatalf("NewPresetSet: %v", err)
+	}
+	req, err := Parse("/photos/photo-1-jpg/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := set.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := resolved.Orientation(); got != or {
+		t.Errorf("resolved Orientation() = %v, want %v", got, or)
+	}
+}
+
+// TestPresetResolveNoOrientation проверяет, что пресет без ориентации не
+// проставляет её в запрос (nil).
+func TestPresetResolveNoOrientation(t *testing.T) {
+	set, err := NewPresetSet([]*Preset{
+		mustNewPreset(t, "thumb", TransformCrop, "120x80", "webp"),
+	})
+	if err != nil {
+		t.Fatalf("NewPresetSet: %v", err)
+	}
+	req, err := Parse("/photos/photo-1-jpg/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := set.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := resolved.Orientation(); got != nil {
+		t.Errorf("resolved Orientation() = %v, want nil", got)
+	}
 }

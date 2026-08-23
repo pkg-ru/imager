@@ -22,18 +22,35 @@ type Operation string
 const (
 	// OpResize — изменение размера с сохранением пропорций.
 	OpResize Operation = "resize"
-	// OpCrop — обрезка (centre-crop) до целевого размера.
+	// OpCrop — изменение размера (centre-crop) до целевого размера.
 	OpCrop Operation = "crop"
 	// OpTrim — обрезка по краям (trim).
 	OpTrim Operation = "trim"
 	// OpCropTrim — последовательное применение trim и crop (сначала trim).
 	OpCropTrim Operation = "crop-trim"
+	// OpSmartCrop — «умная» обрезка по значимой области (attention libvips).
+	OpSmartCrop Operation = "smart-crop"
+	// OpFaceCrop — обрезка по обнаруженным лицам (ONNX YuNet).
+	OpFaceCrop Operation = "face-crop"
+	// OpObjectCrop — обрезка по обнаруженным объектам (ONNX SSD/YOLO).
+	OpObjectCrop Operation = "object-crop"
+	// OpSmartCropTrim — последовательное применение trim и smart-crop
+	// (сначала trim).
+	OpSmartCropTrim Operation = "smart-crop-trim"
+	// OpFaceCropTrim — последовательное применение trim и face-crop
+	// (сначала trim).
+	OpFaceCropTrim Operation = "face-crop-trim"
+	// OpObjectCropTrim — последовательное применение trim и object-crop
+	// (сначала trim).
+	OpObjectCropTrim Operation = "object-crop-trim"
 )
 
 // ValidOperation проверяет, что op является допустимой операцией.
 func ValidOperation(op Operation) bool {
 	switch op {
-	case OpResize, OpCrop, OpTrim, OpCropTrim:
+	case OpResize, OpCrop, OpTrim, OpCropTrim,
+		OpSmartCrop, OpFaceCrop, OpObjectCrop,
+		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim:
 		return true
 	default:
 		return false
@@ -42,7 +59,11 @@ func ValidOperation(op Operation) bool {
 
 // Operations возвращает все допустимые операции.
 func Operations() []Operation {
-	return []Operation{OpResize, OpCrop, OpTrim, OpCropTrim}
+	return []Operation{
+		OpResize, OpCrop, OpTrim, OpCropTrim,
+		OpSmartCrop, OpFaceCrop, OpObjectCrop,
+		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim,
+	}
 }
 
 // Format — закрытый enum форматов файлов.
@@ -167,6 +188,12 @@ type ProcessingPlan struct {
 	// НЕ является частью URL-грамматики. Спецификация приходит из
 	// доверенного конфига и маппится процессорами через allowlists.
 	Watermark *WatermarkSpec
+	// Orientation — спецификация ориентационных операций (EXIF auto-orient,
+	// ручной поворот 90/180/270, отражение horizontal/vertical). nil =
+	// поведение по умолчанию (только EXIF auto-orient включён). Заполняется
+	// из конфигурации (пресет → processing.default-*); НЕ является частью
+	// URL-грамматики. Применяется процессорами СТРОГО до resize/crop/trim.
+	Orientation *OrientationSpec
 }
 
 // NewProcessingPlan создаёт ProcessingPlan с валидацией.
@@ -248,6 +275,9 @@ func (p *ProcessingPlan) Validate() error {
 		if !ValidWatermarkRepeat(wm.Repeat) {
 			return fmt.Errorf("processing plan: invalid watermark repeat %q", wm.Repeat)
 		}
+	}
+	if err := p.Orientation.Validate(); err != nil {
+		return fmt.Errorf("processing plan: %w", err)
 	}
 	return nil
 }

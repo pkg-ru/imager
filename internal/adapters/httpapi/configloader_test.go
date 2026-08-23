@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // TestLoadConfigDirBaseOnly проверяет, что загрузка одного обязательного
@@ -395,7 +399,7 @@ policy:
       output-bytes: 10485760
   presets:
     - name: thumb
-      crop: true
+      crop: center
       size: 120x80
       output-format: webp
   path-policies:
@@ -438,6 +442,145 @@ policy:
 		if names[i] != want[i] {
 			t.Errorf("PathNames[%d] = %q, want %q", i, names[i], want[i])
 		}
+	}
+}
+
+// TestParseRuntimeConfigPathPolicyCropModes проверяет декодирование новых
+// форм поля crop в path-policies: булево, строка-режим, список режимов,
+// "none" — и их компиляцию в доменные правила.
+func TestParseRuntimeConfigPathPolicyCropModes(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+  path-policies:
+    - path: "/bool"
+      crop: true
+    - path: "/deny"
+      crop: false
+    - path: "/smart"
+      crop: smart
+    - path: "/list"
+      crop: [center, face]
+    - path: "/none"
+      crop: none
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	compiled, err := rc.Pipeline.Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	byPath := map[string]*policy.PathPolicy{}
+	for i := range compiled.Policy.PathPolicies {
+		pp := &compiled.Policy.PathPolicies[i]
+		byPath[pp.Path] = pp
+	}
+	cases := []struct {
+		path      string
+		transform asset.Transform
+		allowed   bool
+	}{
+		// crop: true → разрешены только c/ct.
+		{"/bool", asset.TransformCrop, true},
+		{"/bool", asset.TransformCropTrim, true},
+		{"/bool", asset.TransformSmartCrop, false},
+		// crop: false → c/ct запрещены, остальное разрешено.
+		{"/deny", asset.TransformCrop, false},
+		{"/deny", asset.TransformCropTrim, false},
+		{"/deny", asset.TransformSmartCrop, true},
+		{"/deny", "", true},
+		// crop: smart → sc/sct.
+		{"/smart", asset.TransformSmartCrop, true},
+		{"/smart", asset.TransformSmartCropTrim, true},
+		{"/smart", asset.TransformCrop, false},
+		// crop: [center, face] → c/ct/fc/fct.
+		{"/list", asset.TransformCrop, true},
+		{"/list", asset.TransformFaceCropTrim, true},
+		{"/list", asset.TransformObjectCrop, false},
+		// crop: none → все crop-режимы запрещены.
+		{"/none", asset.TransformCrop, false},
+		{"/none", asset.TransformObjectCropTrim, false},
+		{"/none", "", true},
+	}
+	for _, tc := range cases {
+		pp := byPath[tc.path]
+		if pp == nil {
+			t.Fatalf("path policy %q not found", tc.path)
+		}
+		if got := pp.Crop.Allows(tc.transform); got != tc.allowed {
+			t.Errorf("%s: Allows(%q) = %v, want %v", tc.path, tc.transform, got, tc.allowed)
+		}
+	}
+}
+
+// TestParseRuntimeConfigPathPolicyCropInvalid проверяет, что неизвестный
+// crop-режим в path-policy отклоняется при загрузке конфигурации.
+func TestParseRuntimeConfigPathPolicyCropInvalid(t *testing.T) {
+	_, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+  path-policies:
+    - path: "/"
+      crop: bogus
+`))
+	if err == nil {
+		t.Fatal("expected error for invalid crop mode")
+	}
+}
+
+// TestParseRuntimeConfigOrientationKeys проверяет, что новые ключи
+// ориентации (processing.default-* и preset auto-orient/rotate/flip)
+// принимаются строгим YAML-парсером и попадают в скомпилированную политику.
+func TestParseRuntimeConfigOrientationKeys(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+  presets:
+    - name: thumb
+      crop: center
+      size: 120x80
+      output-format: webp
+      auto-orient: false
+      rotate: "90"
+      flip: horizontal
+processing:
+  default-auto-orient: true
+  default-rotate: "270"
+  default-flip: vertical
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	compiled, err := rc.Pipeline.Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	// Глобальный дефолт.
+	def := compiled.DefaultOrientation
+	if def == nil {
+		t.Fatal("expected DefaultOrientation")
+	}
+	if !def.AutoOrient || def.Rotate != processing.Rotation270 || def.Flip != processing.FlipVertical {
+		t.Errorf("DefaultOrientation = %v, want auto-orient + rotate 270 + flip vertical", def)
+	}
+	// Пресет перекрывает глобальный дефолт.
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	or := p.Orientation()
+	if or == nil {
+		t.Fatal("expected preset orientation")
+	}
+	if or.AutoOrient || or.Rotate != processing.Rotation90 || or.Flip != processing.FlipHorizontal {
+		t.Errorf("preset orientation = %v, want auto-orient off, rotate 90, flip horizontal", or)
 	}
 }
 

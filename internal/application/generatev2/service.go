@@ -78,6 +78,11 @@ type Deps struct {
 	// Используется для запросов без ватермарки в пресете и без совпавшей
 	// path-policy с watermark. Приоритет: пресет → path-policy → default.
 	DefaultWatermark *processing.WatermarkSpec
+	// DefaultOrientation — ориентация по умолчанию (EXIF auto-orient +
+	// ручной rotate/flip из processing.default-*). Используется для запросов
+	// без ориентации в пресете. Приоритет: пресет → default. nil =
+	// {AutoOrient: true} (историческое поведение движков).
+	DefaultOrientation *processing.OrientationSpec
 	// Logger — опциональный логгер.
 	Logger Logger
 	// Metrics — опциональные метрики (request/cache/processor/storage).
@@ -374,12 +379,30 @@ func (s *Service) resolveWatermark(req *asset.Request) *processing.WatermarkSpec
 	return s.deps.DefaultWatermark
 }
 
+// resolveOrientation определяет ориентацию запроса по приоритету:
+//  1. ориентация пресета (заполняется при разрешении preset URL, уже
+//     смержена с глобальным дефолтом на этапе компиляции);
+//  2. глобальный дефолт Deps.DefaultOrientation (processing.default-*).
+//
+// Результат никогда не nil: при отсутствии настроек возвращается
+// {AutoOrient: true} (историческое поведение движков).
+func (s *Service) resolveOrientation(req *asset.Request) *processing.OrientationSpec {
+	if o := req.Orientation(); o != nil {
+		return o
+	}
+	if o := s.deps.DefaultOrientation; o != nil {
+		return o
+	}
+	return processing.DefaultOrientation()
+}
+
 // buildPlan преобразует канонический запрос в валидированный план обработки.
 //
 // Quality/frames/duration/loop берутся из запроса (заполняются при
 // разрешении пресета); если не заданы (0/nil), используются значения по
 // умолчанию из Deps (Quality) или остаются без ограничения.
 // Ватермарка: пресет → path-policy → default (см. resolveWatermark).
+// Ориентация: пресет → default (см. resolveOrientation).
 func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, error) {
 	var op processing.Operation
 	switch req.Transform() {
@@ -389,6 +412,18 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 		op = processing.OpTrim
 	case asset.TransformCropTrim:
 		op = processing.OpCropTrim
+	case asset.TransformSmartCrop:
+		op = processing.OpSmartCrop
+	case asset.TransformFaceCrop:
+		op = processing.OpFaceCrop
+	case asset.TransformObjectCrop:
+		op = processing.OpObjectCrop
+	case asset.TransformSmartCropTrim:
+		op = processing.OpSmartCropTrim
+	case asset.TransformFaceCropTrim:
+		op = processing.OpFaceCropTrim
+	case asset.TransformObjectCropTrim:
+		op = processing.OpObjectCropTrim
 	default:
 		op = processing.OpResize
 	}
@@ -415,6 +450,7 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	frames := req.Frames()
 	duration := req.Duration()
 	wm := s.resolveWatermark(req)
+	or := s.resolveOrientation(req)
 	var w, h int
 	if req.Size().IsOriginal() {
 		// size=x: сохранить исходный размер изображения.
@@ -427,6 +463,7 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 			return nil, err
 		}
 		plan.Watermark = wm
+		plan.Orientation = or
 		return plan, nil
 	}
 	if dw := req.Size().Width(); dw != nil {
@@ -444,6 +481,7 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 		return nil, err
 	}
 	plan.Watermark = wm
+	plan.Orientation = or
 	return plan, nil
 }
 

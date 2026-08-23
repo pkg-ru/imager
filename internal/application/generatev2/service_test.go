@@ -13,6 +13,7 @@ import (
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/object"
 	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 // testEnv — окружение для тестов.
@@ -490,5 +491,133 @@ func TestGenerateNilRequest(t *testing.T) {
 	}
 	if !IsOutcome(err, OutcomeInvalid) {
 		t.Fatalf("kind = %v, want invalid", err)
+	}
+}
+
+// TestBuildPlanDetectionTransforms проверяет маппинг новых transform-кодов
+// (sc/fc/oc) в операции обработки внутри buildPlan.
+func TestBuildPlanDetectionTransforms(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		tr   asset.Transform
+		want processing.Operation
+	}{
+		{asset.TransformSmartCrop, processing.OpSmartCrop},
+		{asset.TransformFaceCrop, processing.OpFaceCrop},
+		{asset.TransformObjectCrop, processing.OpObjectCrop},
+	}
+	for _, c := range cases {
+		t.Run(string(c.tr), func(t *testing.T) {
+			req := mustReq(t, "", "photo", "png", c.tr, "100x100", 1, "webp")
+			plan, err := env.svc.buildPlan(req)
+			if err != nil {
+				t.Fatalf("buildPlan(%q) error: %v", c.tr, err)
+			}
+			if plan.Operation != c.want {
+				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.tr, plan.Operation, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildPlanOrientationDefault проверяет, что buildPlan проставляет
+// глобальный дефолт ориентации, когда запрос не имеет своей.
+func TestBuildPlanOrientationDefault(t *testing.T) {
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	env := newTestEnv(t, func(d *Deps) {
+		d.DefaultOrientation = def
+	})
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if plan.Orientation != def {
+		t.Errorf("plan.Orientation = %v, want %v", plan.Orientation, def)
+	}
+}
+
+// TestBuildPlanOrientationPresetPriority проверяет, что ориентация пресета
+// имеет приоритет над глобальным дефолтом.
+func TestBuildPlanOrientationPresetPriority(t *testing.T) {
+	presetOr := &processing.OrientationSpec{AutoOrient: false, Rotate: processing.Rotation270, Flip: processing.FlipVertical}
+	presets, err := asset.NewPresetSet([]*asset.Preset{
+		mustPreset(t, "thumb", asset.TransformCrop, "100x100", "webp").WithOrientation(presetOr),
+	})
+	if err != nil {
+		t.Fatalf("presets: %v", err)
+	}
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	env := newTestEnv(t, func(d *Deps) {
+		d.Presets = presets
+		d.DefaultOrientation = def
+	})
+	// Разрешаем preset URL в канонический запрос (ориентация пресета
+	// переносится в запрос через Resolve).
+	req, err := asset.Parse("/photos/photo-1-jpg/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := presets.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	plan, err := env.svc.buildPlan(resolved)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if plan.Orientation != presetOr {
+		t.Errorf("plan.Orientation = %v, want preset orientation %v", plan.Orientation, presetOr)
+	}
+}
+
+// TestBuildPlanOrientationFallbackDefault проверяет, что при отсутствии
+// настроек buildPlan использует {AutoOrient: true}.
+func TestBuildPlanOrientationFallbackDefault(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if !plan.Orientation.AutoOrient || plan.Orientation.Rotate != processing.RotationNone || plan.Orientation.Flip != processing.FlipNone {
+		t.Errorf("plan.Orientation = %v, want auto-orient on, no rotate, no flip", plan.Orientation)
+	}
+}
+
+// TestBuildPlanTrimDetectionTransforms проверяет маппинг trim-вариантов
+// transform-кодов (sct/fct/oct) в операции (сначала trim, затем crop).
+func TestBuildPlanTrimDetectionTransforms(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		tr   asset.Transform
+		want processing.Operation
+	}{
+		{asset.TransformSmartCropTrim, processing.OpSmartCropTrim},
+		{asset.TransformFaceCropTrim, processing.OpFaceCropTrim},
+		{asset.TransformObjectCropTrim, processing.OpObjectCropTrim},
+	}
+	for _, c := range cases {
+		t.Run(string(c.tr), func(t *testing.T) {
+			req := mustReq(t, "", "photo", "png", c.tr, "100x100", 1, "webp")
+			plan, err := env.svc.buildPlan(req)
+			if err != nil {
+				t.Fatalf("buildPlan(%q) error: %v", c.tr, err)
+			}
+			if plan.Operation != c.want {
+				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.tr, plan.Operation, c.want)
+			}
+		})
 	}
 }

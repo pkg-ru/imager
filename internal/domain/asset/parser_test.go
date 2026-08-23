@@ -27,6 +27,36 @@ func TestParseCanonical(t *testing.T) {
 			want: "img-jpg/ct-180x@2.avif",
 		},
 		{
+			name: "smart crop",
+			url:  "/photos/photo-1-jpg/sc-120x80@2.webp",
+			want: "photos/photo-1-jpg/sc-120x80@2.webp",
+		},
+		{
+			name: "face crop",
+			url:  "/photos/photo-1-jpg/fc-120x80@2.webp",
+			want: "photos/photo-1-jpg/fc-120x80@2.webp",
+		},
+		{
+			name: "object crop",
+			url:  "/photos/photo-1-jpg/oc-120x80@2.webp",
+			want: "photos/photo-1-jpg/oc-120x80@2.webp",
+		},
+		{
+			name: "smart crop trim",
+			url:  "/photos/photo-1-jpg/sct-120x80@2.webp",
+			want: "photos/photo-1-jpg/sct-120x80@2.webp",
+		},
+		{
+			name: "face crop trim",
+			url:  "/photos/photo-1-jpg/fct-120x80@2.webp",
+			want: "photos/photo-1-jpg/fct-120x80@2.webp",
+		},
+		{
+			name: "object crop trim",
+			url:  "/photos/photo-1-jpg/oct-120x80@2.webp",
+			want: "photos/photo-1-jpg/oct-120x80@2.webp",
+		},
+		{
 			name: "nested path with dashes in source name",
 			url:  "/a/b/c/my-photo-2-png/c-10x10@3.gif",
 			want: "a/b/c/my-photo-2-png/c-10x10@3.gif",

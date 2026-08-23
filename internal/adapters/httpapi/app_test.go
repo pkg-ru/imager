@@ -17,7 +17,7 @@ policy:
     authorization: unsafe
   presets:
     - name: thumb
-      crop: true
+      crop: center
       size: 120x80
       output-format: webp
 processing:

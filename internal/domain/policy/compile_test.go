@@ -2,13 +2,21 @@ package policy
 
 import (
 	"testing"
+
+	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 func TestValidateConfig(t *testing.T) {
 	valid := &Config{
 		Global: GlobalConfig{Authorization: "safe", SizeRules: []string{"120x80"}},
 		Presets: []PresetConfig{
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
+			{Name: "smart", Crop: "smart", Size: "120x80", OutputFormat: "webp"},
+			{Name: "face", Crop: "face", Size: "120x80", OutputFormat: "webp"},
+			{Name: "object", Crop: "object", Size: "120x80", OutputFormat: "webp"},
+			// Пустой crop — валиден (кроп не используется).
+			{Name: "resize", Size: "120x80", OutputFormat: "webp"},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
@@ -30,18 +38,22 @@ func TestValidateConfigInvalid(t *testing.T) {
 		{PathPolicies: []PathPolicyConfig{{Path: "/", DPR: "3-1"}}},
 		{PathPolicies: []PathPolicyConfig{{Path: "/", DPR: "-1-2"}}},
 		{PathPolicies: []PathPolicyConfig{{Path: "/", DPR: "0-4"}}},
-		{Presets: []PresetConfig{{Name: "", Crop: true, Size: "120x80", OutputFormat: "webp"}}},
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "bogus", OutputFormat: "webp"}}},
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: ""}}},
+		{Presets: []PresetConfig{{Name: "", Crop: "center", Size: "120x80", OutputFormat: "webp"}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "bogus", OutputFormat: "webp"}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: ""}}},
+		// Недопустимые значения crop (пусто = валидно).
+		{Presets: []PresetConfig{{Name: "a", Crop: "bogus", Size: "120x80", OutputFormat: "webp"}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "true", Size: "120x80", OutputFormat: "webp"}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "Center", Size: "120x80", OutputFormat: "webp"}}},
 		// dpr вне [1,3] (0 = не задан, валиден).
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", DPR: 4}}},
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", DPR: -1}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", DPR: 4}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", DPR: -1}}},
 		// quality вне [0,100].
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", Quality: -1}}},
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", Quality: 101}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Quality: -1}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Quality: 101}}},
 		// frames/duration отрицательные.
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", Frames: -1}}},
-		{Presets: []PresetConfig{{Name: "a", Crop: true, Size: "120x80", OutputFormat: "webp", Duration: -1}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Frames: -1}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Duration: -1}}},
 	}
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {
@@ -54,9 +66,9 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 	loop := true
 	valid := &Config{
 		Presets: []PresetConfig{
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp", DPR: 2, Quality: 80, Frames: 10, Duration: 5000, Loop: &loop},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp", DPR: 2, Quality: 80, Frames: 10, Duration: 5000, Loop: &loop},
 			{Name: "trim", Trim: true, Size: "x50", OutputFormat: "png"},
-			{Name: "both", Crop: true, Trim: true, Size: "800x200", OutputFormat: "webp"},
+			{Name: "both", Crop: "center", Trim: true, Size: "800x200", OutputFormat: "webp"},
 			{Name: "resize", Size: "120x80", OutputFormat: "webp"},
 		},
 	}
@@ -70,17 +82,219 @@ func TestValidateConfigValidPathPolicies(t *testing.T) {
 	trimFalse := false
 	valid := &Config{
 		PathPolicies: []PathPolicyConfig{
-			{Path: "/", DPR: "0-1", Crop: &cropFalse},
-			{Path: "/users", DPR: "2-3", Crop: &cropFalse, Trim: &trimFalse},
+			{Path: "/", DPR: "0-1", Crop: boolCropRule(cropFalse)},
+			{Path: "/users", DPR: "2-3", Crop: strCropRule("smart"), Trim: &trimFalse},
 			{Path: "/users/gift", DPR: "0-1"},
 			{Path: "/basket/users", DPR: "2-3"},
 			// Без ведущего "/" и с завершающим "/" — нормализуются.
-			{Path: "basket/products", DPR: "0-1", Crop: &cropFalse, Trim: &trimFalse},
+			{Path: "basket/products", DPR: "0-1", Crop: listCropRule("center", "face"), Trim: &trimFalse},
 			{Path: "/basket/users/extra/", DPR: "2-3"},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
 		t.Errorf("expected valid config with path-policies, got %v", err)
+	}
+}
+
+func TestValidateConfigInvalidPathPolicyCrop(t *testing.T) {
+	invalid := []*Config{
+		// Неизвестный режим в строковой форме.
+		{PathPolicies: []PathPolicyConfig{{Path: "/", Crop: strCropRule("bogus")}}},
+		{PathPolicies: []PathPolicyConfig{{Path: "/", Crop: strCropRule("Center")}}},
+		{PathPolicies: []PathPolicyConfig{{Path: "/", Crop: strCropRule("true")}}},
+		// Неизвестный режим в списке.
+		{PathPolicies: []PathPolicyConfig{{Path: "/", Crop: listCropRule("smart", "bogus")}}},
+		// Пустой список.
+		{PathPolicies: []PathPolicyConfig{{Path: "/", Crop: listCropRule()}}},
+	}
+	for _, c := range invalid {
+		if err := ValidateConfig(c); err == nil {
+			t.Errorf("ValidateConfig(%+v) expected error", c)
+		}
+	}
+}
+
+// boolCropRule / strCropRule / listCropRule — хелперы построения
+// CropRuleConfig для тестов (имитируют результат UnmarshalYAML).
+func boolCropRule(b bool) *CropRuleConfig {
+	c := new(CropRuleConfig)
+	if b {
+		*c = []string{"center"}
+	} else {
+		*c = []string{denyMarker}
+	}
+	return c
+}
+
+func strCropRule(s string) *CropRuleConfig {
+	c := CropRuleConfig{s}
+	return &c
+}
+
+func listCropRule(modes ...string) *CropRuleConfig {
+	// Явно ненулевой слайс: пустой список должен считаться заданным
+	// (и невалидным), а не «поле отсутствует».
+	c := CropRuleConfig{}
+	c = append(c, modes...)
+	return &c
+}
+
+func TestCompileCropRule(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     CropRuleConfig
+		check   func(*testing.T, *CropRule)
+		wantErr bool
+	}{
+		{
+			name: "nil = no restriction",
+			cfg:  nil,
+			check: func(t *testing.T, r *CropRule) {
+				if r != nil {
+					t.Errorf("rule = %+v, want nil", r)
+				}
+			},
+		},
+		{
+			name: "bool true = allow c/ct",
+			cfg:  []string{"center"},
+			check: func(t *testing.T, r *CropRule) {
+				if !r.Allows(asset.TransformCrop) || !r.Allows(asset.TransformCropTrim) {
+					t.Error("c/ct must be allowed")
+				}
+				if r.Allows("") || r.Allows(asset.TransformSmartCrop) || r.Allows(asset.TransformTrim) {
+					t.Error("non-crop transforms must be denied")
+				}
+			},
+		},
+		{
+			name: "bool false = deny c/ct only",
+			cfg:  []string{denyMarker},
+			check: func(t *testing.T, r *CropRule) {
+				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformCropTrim) {
+					t.Error("c/ct must be denied")
+				}
+				if !r.Allows("") || !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformTrim) {
+					t.Error("other transforms must stay allowed")
+				}
+			},
+		},
+		{
+			name: "none denies all crop modes",
+			cfg:  []string{"none"},
+			check: func(t *testing.T, r *CropRule) {
+				for _, tr := range []asset.Transform{
+					asset.TransformCrop, asset.TransformCropTrim,
+					asset.TransformSmartCrop, asset.TransformSmartCropTrim,
+					asset.TransformFaceCrop, asset.TransformFaceCropTrim,
+					asset.TransformObjectCrop, asset.TransformObjectCropTrim,
+				} {
+					if r.Allows(tr) {
+						t.Errorf("transform %q must be denied", tr)
+					}
+				}
+				if !r.Allows("") || !r.Allows(asset.TransformTrim) {
+					t.Error("resize and trim-only must stay allowed")
+				}
+			},
+		},
+		{
+			name: "smart allows sc/sct",
+			cfg:  []string{"smart"},
+			check: func(t *testing.T, r *CropRule) {
+				if !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformSmartCropTrim) {
+					t.Error("sc/sct must be allowed")
+				}
+				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformFaceCrop) {
+					t.Error("c/fc must be denied")
+				}
+			},
+		},
+		{
+			name: "list [smart, face]",
+			cfg:  []string{"smart", "face"},
+			check: func(t *testing.T, r *CropRule) {
+				if !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformSmartCropTrim) ||
+					!r.Allows(asset.TransformFaceCrop) || !r.Allows(asset.TransformFaceCropTrim) {
+					t.Error("sc/sct/fc/fct must be allowed")
+				}
+				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformObjectCrop) {
+					t.Error("c/oc must be denied")
+				}
+			},
+		},
+		{
+			name:    "unknown mode",
+			cfg:     []string{"bogus"},
+			wantErr: true,
+		},
+		{
+			name:    "empty list",
+			cfg:     []string{},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, err := compileCropRule(tt.cfg)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("compileCropRule(%v) expected error", tt.cfg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("compileCropRule(%v) error: %v", tt.cfg, err)
+			}
+			tt.check(t, rule)
+		})
+	}
+}
+
+func TestCompilePathPolicyCropModes(t *testing.T) {
+	cfg := &Config{
+		PathPolicies: []PathPolicyConfig{
+			{Path: "/avatars", Crop: strCropRule("center")},
+			{Path: "/news", Crop: strCropRule("smart")},
+			{Path: "/portraits", Crop: strCropRule("face"), Trim: nil},
+			{Path: "/catalog", Crop: listCropRule("object")},
+		},
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	byPath := map[string]*PathPolicy{}
+	for i := range compiled.Policy.PathPolicies {
+		pp := &compiled.Policy.PathPolicies[i]
+		byPath[pp.Path] = pp
+	}
+	cases := []struct {
+		path      string
+		transform asset.Transform
+		allowed   bool
+	}{
+		{"/avatars", asset.TransformCrop, true},
+		{"/avatars", asset.TransformCropTrim, true},
+		{"/avatars", asset.TransformSmartCrop, false},
+		{"/news", asset.TransformSmartCrop, true},
+		{"/news", asset.TransformSmartCropTrim, true},
+		{"/news", asset.TransformCrop, false},
+		{"/portraits", asset.TransformFaceCrop, true},
+		{"/portraits", asset.TransformFaceCropTrim, true},
+		{"/portraits", asset.TransformObjectCrop, false},
+		{"/catalog", asset.TransformObjectCrop, true},
+		{"/catalog", asset.TransformObjectCropTrim, true},
+		{"/catalog", asset.TransformCrop, false},
+	}
+	for _, tc := range cases {
+		pp := byPath[tc.path]
+		if pp == nil {
+			t.Fatalf("path policy %q not found", tc.path)
+		}
+		if got := pp.Crop.Allows(tc.transform); got != tc.allowed {
+			t.Errorf("%s: Allows(%q) = %v, want %v", tc.path, tc.transform, got, tc.allowed)
+		}
 	}
 }
 
@@ -170,10 +384,10 @@ func TestCompile(t *testing.T) {
 			{Path: "/private", DPR: "0-1"},
 		},
 		Presets: []PresetConfig{
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	compiled, err := Compile(cfg, nil)
+	compiled, err := Compile(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -195,15 +409,14 @@ func TestCompile(t *testing.T) {
 }
 
 func TestCompilePathPolicyNormalization(t *testing.T) {
-	cropFalse := false
 	cfg := &Config{
 		PathPolicies: []PathPolicyConfig{
-			{Path: "/", DPR: "0-1", Crop: &cropFalse},
+			{Path: "/", DPR: "0-1", Crop: boolCropRule(false)},
 			{Path: "basket/products", DPR: "2-3"},
 			{Path: "/basket/users/", DPR: "0-1"},
 		},
 	}
-	compiled, err := Compile(cfg, nil)
+	compiled, err := Compile(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -224,8 +437,11 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 			if pp.DPR == nil || *pp.DPR != (Range{Min: 0, Max: 1}) {
 				t.Errorf("path / dpr = %+v, want 0-1", pp.DPR)
 			}
-			if pp.Crop == nil || *pp.Crop != false {
-				t.Errorf("path / crop = %v, want false", pp.Crop)
+			if pp.Crop == nil || pp.Crop.Allows(asset.TransformCrop) {
+				t.Errorf("path / crop must deny TransformCrop")
+			}
+			if !pp.Crop.Allows("") {
+				t.Errorf("path / crop must allow resize")
 			}
 		case "/basket/products":
 			if pp.DPR == nil || *pp.DPR != (Range{Min: 2, Max: 3}) {
@@ -242,13 +458,19 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 func TestCompileCropTrimMapping(t *testing.T) {
 	cfg := &Config{
 		Presets: []PresetConfig{
-			{Name: "crop", Crop: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "crop", Crop: "center", Size: "120x80", OutputFormat: "webp"},
 			{Name: "trim", Trim: true, Size: "120x80", OutputFormat: "webp"},
-			{Name: "both", Crop: true, Trim: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "both", Crop: "center", Trim: true, Size: "120x80", OutputFormat: "webp"},
 			{Name: "resize", Size: "120x80", OutputFormat: "webp"},
+			{Name: "smart", Crop: "smart", Size: "120x80", OutputFormat: "webp"},
+			{Name: "face", Crop: "face", Size: "120x80", OutputFormat: "webp"},
+			{Name: "object", Crop: "object", Size: "120x80", OutputFormat: "webp"},
+			{Name: "smart-trim", Crop: "smart", Trim: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "face-trim", Crop: "face", Trim: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "object-trim", Crop: "object", Trim: true, Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	compiled, err := Compile(cfg, nil)
+	compiled, err := Compile(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -260,6 +482,12 @@ func TestCompileCropTrimMapping(t *testing.T) {
 		{"trim", "t"},
 		{"both", "ct"},
 		{"resize", ""},
+		{"smart", "sc"},
+		{"face", "fc"},
+		{"object", "oc"},
+		{"smart-trim", "sct"},
+		{"face-trim", "fct"},
+		{"object-trim", "oct"},
 	}
 	for _, tt := range tests {
 		p, ok := compiled.Presets.Get(tt.name)
@@ -272,14 +500,39 @@ func TestCompileCropTrimMapping(t *testing.T) {
 	}
 }
 
+func TestTransformFromCropTrim(t *testing.T) {
+	tests := []struct {
+		crop string
+		trim bool
+		want string
+	}{
+		{"", false, ""},
+		{"", true, "t"},
+		{"center", false, "c"},
+		{"center", true, "ct"},
+		{"smart", false, "sc"},
+		{"smart", true, "sct"},
+		{"face", false, "fc"},
+		{"face", true, "fct"},
+		{"object", false, "oc"},
+		{"object", true, "oct"},
+	}
+	for _, tt := range tests {
+		got := string(transformFromCropTrim(tt.crop, tt.trim))
+		if got != tt.want {
+			t.Errorf("transformFromCropTrim(%q, %v) = %q, want %q", tt.crop, tt.trim, got, tt.want)
+		}
+	}
+}
+
 func TestCompilePresetOptions(t *testing.T) {
 	loop := true
 	cfg := &Config{
 		Presets: []PresetConfig{
-			{Name: "thumb@2", Crop: true, Size: "240x160", OutputFormat: "webp", DPR: 2, Quality: 80, Frames: 10, Duration: 5000, Loop: &loop},
+			{Name: "thumb@2", Crop: "center", Size: "240x160", OutputFormat: "webp", DPR: 2, Quality: 80, Frames: 10, Duration: 5000, Loop: &loop},
 		},
 	}
-	compiled, err := Compile(cfg, nil)
+	compiled, err := Compile(cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("Compile error: %v", err)
 	}
@@ -307,11 +560,11 @@ func TestCompilePresetOptions(t *testing.T) {
 func TestCompileDuplicatePreset(t *testing.T) {
 	cfg := &Config{
 		Presets: []PresetConfig{
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
 		},
 	}
-	if _, err := Compile(cfg, nil); err == nil {
+	if _, err := Compile(cfg, nil, nil); err == nil {
 		t.Error("expected duplicate preset error")
 	}
 }
@@ -320,11 +573,11 @@ func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 	// "thumb" и "thumb@2" — разные имена (не дубликаты).
 	cfg := &Config{
 		Presets: []PresetConfig{
-			{Name: "thumb", Crop: true, Size: "120x80", OutputFormat: "webp"},
-			{Name: "thumb@2", Crop: true, Size: "240x160", OutputFormat: "webp"},
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
+			{Name: "thumb@2", Crop: "center", Size: "240x160", OutputFormat: "webp"},
 		},
 	}
-	if _, err := Compile(cfg, nil); err != nil {
+	if _, err := Compile(cfg, nil, nil); err != nil {
 		t.Errorf("expected valid config with distinct names, got %v", err)
 	}
 }
@@ -359,4 +612,120 @@ func TestParseSizeRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompilePresetOrientationInheritsGlobal(t *testing.T) {
+	// Пресет без явных ориентационных полей наследует глобальный дефолт.
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	cfg := &Config{
+		Presets: []PresetConfig{
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
+		},
+	}
+	compiled, err := Compile(cfg, nil, def)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	or := p.Orientation()
+	if or == nil {
+		t.Fatal("expected orientation spec")
+	}
+	if !or.AutoOrient || or.Rotate != processing.Rotation90 || or.Flip != processing.FlipHorizontal {
+		t.Errorf("orientation = %s, want auto-orient + rotate 90 + flip horizontal", or.String())
+	}
+}
+
+func TestCompilePresetOrientationOverridesGlobal(t *testing.T) {
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	cfg := &Config{
+		Presets: []PresetConfig{
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp", AutoOrient: boolPtr(false), Rotate: "270", Flip: "vertical"},
+		},
+	}
+	compiled, err := Compile(cfg, nil, def)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	or := p.Orientation()
+	if or == nil {
+		t.Fatal("expected orientation spec")
+	}
+	if or.AutoOrient || or.Rotate != processing.Rotation270 || or.Flip != processing.FlipVertical {
+		t.Errorf("orientation = %s, want auto-orient off, rotate 270, flip vertical", or.String())
+	}
+}
+
+func TestCompilePresetOrientationNoneDisables(t *testing.T) {
+	// "none" в пресете ЯВНО отключает унаследованный глобальный поворот/отражение.
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	cfg := &Config{
+		Presets: []PresetConfig{
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp", Rotate: "none", Flip: "none"},
+		},
+	}
+	compiled, err := Compile(cfg, nil, def)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	or := p.Orientation()
+	if or == nil {
+		t.Fatal("expected orientation spec")
+	}
+	if !or.AutoOrient || or.Rotate != processing.RotationNone || or.Flip != processing.FlipNone {
+		t.Errorf("orientation = %s, want auto-orient on, no rotate, no flip", or.String())
+	}
+}
+
+func TestCompilePresetOrientationNilDefault(t *testing.T) {
+	// nil defaultOrientation эквивалентен {AutoOrient: true}.
+	cfg := &Config{
+		Presets: []PresetConfig{
+			{Name: "thumb", Crop: "center", Size: "120x80", OutputFormat: "webp"},
+		},
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	or := p.Orientation()
+	if or == nil {
+		t.Fatal("expected orientation spec")
+	}
+	if !or.AutoOrient || or.Rotate != processing.RotationNone || or.Flip != processing.FlipNone {
+		t.Errorf("orientation = %s, want auto-orient on, no rotate, no flip", or.String())
+	}
+}
+
+func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
+	invalid := []*Config{
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Rotate: "45"}}},
+		{Presets: []PresetConfig{{Name: "a", Crop: "center", Size: "120x80", OutputFormat: "webp", Flip: "diagonal"}}},
+	}
+	for _, c := range invalid {
+		if err := ValidateConfig(c); err == nil {
+			t.Errorf("ValidateConfig(%+v) expected error", c)
+		}
+	}
+}
+
+// boolPtr — хелпер построения *bool для тестов.
+func boolPtr(b bool) *bool {
+	v := b
+	return &v
 }

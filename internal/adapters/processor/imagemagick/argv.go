@@ -111,11 +111,26 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 	}
 	args = append(args, src)
 
-	// Фиксированный набор операций обработки (без пользовательских аргументов).
-	// Порядок важен: -auto-orient ДО -strip (иначе EXIF Orientation удаляется
-	// раньше, чем применяется поворот).
+	// Ориентация: EXIF auto-orient (nil-спецификация = включён, историческое
+	// поведение) и ручные rotate/flip. Порядок важен: -auto-orient ДО -strip
+	// (иначе EXIF Orientation удаляется раньше, чем применяется поворот), а
+	// rotate/flip — ДО -trim/-thumbnail, чтобы поворот/отражение не искажали
+	// геометрию последующих операций.
+	if plan.Orientation == nil || plan.Orientation.AutoOrient {
+		args = append(args, "-auto-orient")
+	}
+	if plan.Orientation != nil {
+		if plan.Orientation.Rotate != processing.RotationNone {
+			args = append(args, "-rotate", plan.Orientation.Rotate.String())
+		}
+		if plan.Orientation.Flip == processing.FlipHorizontal {
+			args = append(args, "-flop")
+		}
+		if plan.Orientation.Flip == processing.FlipVertical {
+			args = append(args, "-flip")
+		}
+	}
 	args = append(args,
-		"-auto-orient",
 		"-strip",
 		"-filter", "Triangle",
 		"-define", "filter:support=2",
@@ -225,8 +240,15 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 	// Draft-декодирование (I11): при уменьшении изображения декодируем
 	// только необходимое разрешение (jpeg:size). Применяется только когда
 	// обе стороны целевого размера заданы и меньше потенциального источника.
+	// При повороте на 90/270 стороны меняются местами: jpeg:size задаёт
+	// разрешение ДО поворота, поэтому ширина/высота свапаются.
 	if !plan.Size.Original && plan.Size.Width > 0 && plan.Size.Height > 0 {
-		args = append(args, "-define", fmt.Sprintf("jpeg:size=%dx%d", plan.Size.Width, plan.Size.Height))
+		dw, dh := plan.Size.Width, plan.Size.Height
+		if plan.Orientation != nil &&
+			(plan.Orientation.Rotate == processing.Rotation90 || plan.Orientation.Rotate == processing.Rotation270) {
+			dw, dh = dh, dw
+		}
+		args = append(args, "-define", fmt.Sprintf("jpeg:size=%dx%d", dw, dh))
 	}
 
 	// Компрессия.

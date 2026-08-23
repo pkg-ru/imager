@@ -95,7 +95,17 @@ imagemagick:
 ```
 
 - `transform` — ровно один из кодов: `c` (crop), `t` (trim), `ct` (trim затем
-  crop). Комбинация `tc` и словесные значения (`crop`, `trim`) недопустимы.
+  crop), `sc` (smart-crop — attention libvips), `fc` (face-crop — ONNX YuNet),
+  `oc` (object-crop — ONNX SSD/YOLO), а также их trim-варианты
+  `sct`/`fct`/`oct` (сначала trim, затем соответсвующий crop). Комбинация
+  `tc` и словесные значения (`crop`, `trim`) недопустимы.
+  - `sc` и `sct` требуют сборки с `-tags libvips`;
+  - `fc`/`oc`/`fct`/`oct` требуют сборки с `-tags libvips` и `-tags onnx`,
+    а также сконфигурированных моделей в секции `detection` (иначе —
+    понятная ошибка);
+  - trim-варианты (`sct`/`fct`/`oct`) выполняют trim ДО кропа: детекция и
+    attention применяются к уже подрезанному изображению, поэтому координаты
+    боксов относятся к подрезанному холсту.
 - `dpr` — только `2` или `3`.
 - Preset не содержит `source-format` в конфигурации: исходный формат
   определяется URL. `output-format` пресета обязан совпадать с расширением
@@ -145,6 +155,7 @@ processing:        # умолчания обработки (default-quality и �
 source:            # source-хранилище (storage, path, параметры backend)
 result:            # result-хранилище (storage, path, параметры backend)
 libvips:           # основной движок: limits (timeout, output-bytes, concurrency, threads, max-cache-*)
+detection:         # детектор для fc/oc: face-model, object-model, confidence-threshold, max-objects, margin
 imagemagick:       # опциональный fallback для APNG: binary, policy.xml, resource limits
 application:       # output-limit
 observability:     # log-level
@@ -156,6 +167,13 @@ observability:     # log-level
 > не установлен, запросы с форматом APNG возвращают HTTP 501 с понятным
 > сообщением. Без тэка `libvips` сервис использует ImageMagick как primary
 > (обратная совместимость).
+>
+> **Детекция (face/object-crop)**: операции `fc`/`oc` требуют сборки с
+> `-tags onnx` (в дополнение к `-tags libvips`) и C-библиотеки ONNX Runtime
+> (`libonnxruntime`). Модели задаются путями в секции `detection`; пустой путь
+> = соответствующая операция отключена (запрос вернёт понятную ошибку).
+> Модели загружаются лениво при первом запросе и кэшируются в памяти на всё
+> время жизни процесса.
 
 Полный пример — в [`setting.yaml`](../setting.yaml) (с комментариями всех
 полей). Подробное описание всех секций, параметров, дефолтов и ограничений,

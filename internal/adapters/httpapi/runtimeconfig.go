@@ -56,6 +56,10 @@ type RuntimeConfig struct {
 	// через govips). Если libvips не скомпилирован (без тэка "libvips"),
 	// процессор недоступен и используется ImageMagick.
 	Libvips LibvipsConfig
+	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
+	// Пустые пути к моделям = face-crop/object-crop отключены (запрос с
+	// такими операциями вернёт понятную ошибку).
+	Detection DetectionConfig
 	// OutputLimit — application-level лимит размера выхода (0 = нет).
 	OutputLimit int64
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
@@ -133,6 +137,51 @@ type LibvipsConfig struct {
 	Limits libvips.Limits
 }
 
+// DetectionConfig — конфигурация детектора лиц/объектов для операций
+// face-crop ("fc") и object-crop ("oc") на libvips.
+//
+// Пустой путь модели (FaceModel/ObjectModel) = соответствующий детектор
+// отключён: запрос с такой операцией вернёт понятную ошибку от процессора.
+// Секция не имеет флага enabled — «включение» задаётся непустыми путями.
+type DetectionConfig struct {
+	// FaceModel — путь к ONNX-модели YuNet для детекции лиц.
+	// Пусто = face-crop недоступен.
+	FaceModel string
+	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
+	// объектов. Пусто = object-crop недоступен.
+	ObjectModel string
+	// ConfidenceThreshold — порог уверенности в интервале [0,1]. Боксы
+	// с Confidence ниже порога отбрасываются (до NMS). Дефолт: 0.5.
+	ConfidenceThreshold float64
+	// MaxObjects — максимальное число объектов после NMS (первые N самых
+	// уверенных). Должен быть > 0. Дефолт: 5.
+	MaxObjects int
+	// Margin — отступ к найденной области как доля от её размера в
+	// интервале [0,1]. Применяется равномерно по осям (половина с каждой
+	// стороны). 0 = кроп строго по bounding box. Дефолт: 0.1 (10%).
+	Margin float64
+}
+
+// DetectionYAML — YAML-представление DetectionConfig.
+//
+// Пороговые значения — указатели, чтобы отличать «не задано» (nil → дефолт)
+// от явного значения (включая 0), которое валидируется.
+type DetectionYAML struct {
+	// FaceModel — путь к ONNX-модели YuNet для детекции лиц.
+	FaceModel string `yaml:"face-model"`
+	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
+	// объектов.
+	ObjectModel string `yaml:"object-model"`
+	// ConfidenceThreshold — порог уверенности в интервале [0,1] (nil = 0.5).
+	ConfidenceThreshold *float64 `yaml:"confidence-threshold"`
+	// MaxObjects — максимальное число объектов после NMS (первые N самых
+	// уверенных, должет быть > 0; nil = 5).
+	MaxObjects *int `yaml:"max-objects"`
+	// Margin — отступ к найденной области как доля от её размера в
+	// интервале [0,1] (nil = 0.1).
+	Margin *float64 `yaml:"margin"`
+}
+
 // RuntimeConfigFile — YAML-представление единого runtime-конфига.
 //
 // Поля Policy/Processing декодируются как yaml.MapSlice и пере-кодируются
@@ -160,6 +209,8 @@ type RuntimeConfigFile struct {
 	ImageMagick ImageMagickYAML `yaml:"imagemagick"`
 	// Libvips — конфигурация libvips processor.
 	Libvips LibvipsYAML `yaml:"libvips"`
+	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
+	Detection DetectionYAML `yaml:"detection"`
 	// Application — прикладные лимиты.
 	Application ApplicationYAML `yaml:"application"`
 	// Observability — логирование и метрики.
@@ -517,6 +568,12 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		return nil, fmt.Errorf("httpapi: libvips: %w", err)
 	}
 
+	// Детектор лиц/объектов (face-crop/object-crop).
+	det, err := raw.Detection.build()
+	if err != nil {
+		return nil, fmt.Errorf("httpapi: detection: %w", err)
+	}
+
 	// Прикладные лимиты.
 	if raw.Application.OutputLimit < 0 {
 		return nil, fmt.Errorf("httpapi: application.output-limit: negative value %d", raw.Application.OutputLimit)
@@ -544,6 +601,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		Result:         result,
 		ImageMagick:    img,
 		Libvips:        lv,
+		Detection:      det,
 		OutputLimit:    raw.Application.OutputLimit,
 		BufferMaxBytes: bufferMaxBytes,
 		LogLevel:       logLevel,
@@ -781,6 +839,40 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout)
 		}
 		cfg.Limits.Timeout = d
+	}
+	return cfg, nil
+}
+
+// build конвертирует YAML-конфигурацию детектора в DetectionConfig с
+// валидацией (fail-fast). Значения по умолчанию: confidence-threshold = 0.5,
+// max-objects = 5, margin = 0.1. Пустые пути к моделям допустимы (детектор
+// просто отключён).
+func (d DetectionYAML) build() (DetectionConfig, error) {
+	cfg := DetectionConfig{
+		FaceModel:           d.FaceModel,
+		ObjectModel:         d.ObjectModel,
+		ConfidenceThreshold: 0.5,
+		MaxObjects:          5,
+		Margin:              0.1,
+	}
+	// nil = ключ не задан → дефолт. Явное значение (включая 0) валидируется.
+	if d.ConfidenceThreshold != nil {
+		cfg.ConfidenceThreshold = *d.ConfidenceThreshold
+	}
+	if d.MaxObjects != nil {
+		cfg.MaxObjects = *d.MaxObjects
+	}
+	if d.Margin != nil {
+		cfg.Margin = *d.Margin
+	}
+	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
+		return DetectionConfig{}, fmt.Errorf("confidence-threshold: must be in [0,1], got %v", cfg.ConfidenceThreshold)
+	}
+	if cfg.MaxObjects <= 0 {
+		return DetectionConfig{}, fmt.Errorf("max-objects: must be > 0, got %d", cfg.MaxObjects)
+	}
+	if cfg.Margin < 0 {
+		return DetectionConfig{}, fmt.Errorf("margin: must be >= 0, got %v", cfg.Margin)
 	}
 	return cfg, nil
 }

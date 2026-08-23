@@ -248,11 +248,24 @@ policy:
   # Каждый пресет:
   #   name (обязательный, ≤64 символов, без дефисов "-" в имени; допустимы
   #         буквы, цифры, "_", ".", "@" для суффикса @dpr);
-  #   crop/trim (bool; по умолчанию false) — формируют трансформацию:
-  #     crop=false trim=false → resize
-  #     crop=true  trim=false → crop       (центрированная обрезка)
-  #     crop=false trim=true  → trim       (обрезка краёв)
-  #     crop=true  trim=true  → crop-trim  (trim затем crop)
+  #   crop (строка; по умолчанию "" = кроп не используется):
+  #     ""        → resize (только изменение размера)
+  #     "center"  → crop   (центрированная обрезка)
+  #     "smart"   → smart-crop   (умная обрезка)
+  #     "face"    → face-crop    (обрезка по лицу)
+  #     "object"  → object-crop  (обрезка по объекту);
+  #   trim (bool; по умолчанию false) — обрезка однотонных полей;
+  #   комбинация crop+trim формирует трансформацию:
+  #     crop=""       trim=false → resize
+  #     crop="center" trim=false → crop
+  #     crop="smart"  trim=false → smart-crop
+  #     crop="face"   trim=false → face-crop
+  #     crop="object" trim=false → object-crop
+  #     crop=""       trim=true  → trim
+  #     crop="center" trim=true  → crop-trim
+  #     crop="smart"  trim=true  → smart-crop-trim
+  #     crop="face"   trim=true  → face-crop-trim
+  #     crop="object" trim=true  → object-crop-trim
   #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
   #   output-format — jpeg | png | webp | gif | avif | heif | apng | jxl (JPEG XL);
   #   quality — 0-100 (0 = default-quality из `processing`);
@@ -263,7 +276,21 @@ policy:
   #   loop — *bool: nil (не задано) = default-loop из processing;
   #          true = бесконечный loop, false = однопроходная анимация;
   #   watermark — имя ватермарки из секции watermarks (пусто = не задана;
-  #         приоритет выше path-policy и processing.default-watermark).
+  #         приоритет выше path-policy и processing.default-watermark);
+  #   auto-orient — *bool: nil (не задано) = наследовать глобальный дефолт
+  #         processing.default-auto-orient; true/false — явно включить/выключить
+  #         автоматический поворот по EXIF Orientation;
+  #   rotate — фиксированный поворот по часовой стрелке:
+  #         "" (не задано) = наследовать processing.default-rotate;
+  #         "none" = ЯВНО отключить поворот (перекрыть глобальный);
+  #         "90" | "180" | "270" — угол поворота;
+  #   flip — отражение:
+  #         "" (не задано) = наследовать processing.default-flip;
+  #         "none" = ЯВНО отключить отражение (перекрыть глобальный);
+  #         "horizontal" — зеркало слева-направо;
+  #         "vertical" — отражение сверху-вниз.
+  #   Ориентация применяется ДО resize/crop/trim (порядок: auto-orient →
+  #   rotate → flip).
   # Пресеты перечисляются ровно те, что доступны в URL (см. allowed-presets).
   # Имена пресетов должны быть УНИКАЛЬНЫМИ.
   presets:
@@ -292,6 +319,29 @@ policy:
       duration: 0     # 0 = без ограничения длительности
       loop: true      # зацикленная анимация (bool; nil = по default-loop)
 
+    # Примеры режимов crop (раскомментируйте при необходимости):
+    # - name: "avatar"          # центрированный кроп
+    #   crop: center
+    #   size: "100x100"
+    #   output-format: webp
+    #
+    # - name: "hero"            # умный кроп (smart-crop)
+    #   crop: smart
+    #   size: "800x600"
+    #   output-format: webp
+    #
+    # - name: "portrait"        # кроп по лицу + trim
+    #   crop: face
+    #   trim: true
+    #   size: "300x300"
+    #   output-format: jpeg
+    #
+    # - name: "product"         # кроп по объекту + trim
+    #   crop: object
+    #   trim: true
+    #   size: "500x500"
+    #   output-format: webp
+
   # path-policies — политики по префиксам пути канонических URL.
   # Применяются ТОЛЬКО к каноническим URL (не к пресетам) и лишь
   # ужесточают глобальную политику (не расширяют права).
@@ -300,9 +350,19 @@ policy:
   #   "/" — fallback: применяется ко всем путям без более специфичного совпадения.
   # Поля (все опциональны):
   #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
-  #   crop  — *bool: nil (не задано) = неважно; true = crop должен быть в URL;
-  #           false = crop запрещён в URL;
-  #   trim  — аналогично для trim;
+  #   crop  — правило допустимых crop-режимов. Три формы значения:
+  #       bool:   true = crop обязателен в URL (c или ct);
+  #               false = crop запрещён (c и ct отклоняются);
+  #       строка: имя режима — разрешён ТОЛЬКО этот режим:
+  #               "center" → c/ct, "smart" → sc/sct,
+  #               "face" → fc/fct, "object" → oc/oct;
+  #               "none" = любой crop-режим запрещён (эквивалент false);
+  #       список: crop: [smart, face] — разрешены ТОЛЬКО перечисленные режимы.
+  #       Режим автоматически покрывает свой trim-вариант (ct/sct/fct/oct),
+  #       поэтому отдельно указывать их не нужно. Неизвестное значение —
+  #       ошибка старта. nil (не задано) = неважно.
+  #   trim  — *bool: nil (не задано) = неважно; true = trim обязан быть в URL
+  #           (t/ct/sct/fct/oct); false = trim запрещён;
   #   watermark — имя ватермарки из секции watermarks: применяется к
   #           каноническим запросам префикса пути (приоритет ниже пресета,
   #           выше processing.default-watermark).
@@ -313,15 +373,29 @@ policy:
     - path: "/"
     - path: "/thumbs"        # для префикса /thumbs
       dpr: "0-1"
-      crop: true             # crop обязателен
+      crop: true             # crop обязателен (любой crop-режим)
     - path: "/banners"
       dpr: "0-2"
     - path: "/originals"
       dpr: "0-1"
-      crop: false
+      crop: false            # crop запрещён
       trim: false
     - path: "/admin"
       dpr: "0-1"
+
+    # Примеры правил с crop-режимами (раскомментируйте при необходимости):
+    # - path: "/avatars"
+    #   dpr: "0-1"
+    #   crop: center          # разрешён только центрированный кроп (c/ct)
+    # - path: "/news"
+    #   crop: smart           # разрешён только умный кроп (sc/sct)
+    # - path: "/portraits"
+    #   crop: face            # разрешён только кроп по лицу (fc/fct)
+    #   trim: true            # и trim обязателен (fct)
+    # - path: "/catalog"
+    #   crop: [smart, face]   # разрешены только эти два режима
+    # - path: "/gallery"
+    #   crop: none            # любой crop-режим запрещён
 
 ########################################
 # watermarks — именованные декларации ватермарок.
@@ -389,6 +463,33 @@ processing:
   # имя — ошибка старта.
   # Пример:
   # default-watermark: water-test
+
+  # default-auto-orient — автоматический поворот по EXIF Orientation
+  # ПО УМОЛЧАНИЮ.
+  # Тип: *bool. Дефолт: true (историческое поведение движков).
+  # true = при загрузке изображение автоматически поворачивается согласно
+  # тегу EXIF Orientation (фото с телефонов/камер отображаются правильно).
+  # false = EXIF Orientation игнорируется (изображение обрабатывается как
+  # сохранено). Пресеты могут перекрыть значение полем auto-orient.
+  # Пример:
+  # default-auto-orient: true
+
+  # default-rotate — фиксированный поворот ПО УМОЛЧАНИЮ (по часовой стрелке).
+  # Тип: string. Дефолт: "" (без поворота).
+  # Допустимые значения: "" (не задано), "none" (без поворота), "90", "180",
+  # "270". Применяется ПОСЛЕ auto-orient и ДО resize/crop/trim. Пресеты могут
+  # перекрыть значение полем rotate.
+  # Пример:
+  # default-rotate: "90"
+
+  # default-flip — отражение ПО УМОЛЧАНИЮ.
+  # Тип: string. Дефолт: "" (без отражения).
+  # Допустимые значения: "" (не задано), "none" (без отражения),
+  # "horizontal" (зеркало слева-направо), "vertical" (отражение сверху-вниз).
+  # Применяется ПОСЛЕ rotate и ДО resize/crop/trim. Пресеты могут перекрыть
+  # значение полем flip.
+  # Пример:
+  # default-flip: horizontal
 
 ########################################
 # source / result — хранилища исходников и результатов.
@@ -546,6 +647,50 @@ libvips:
 
     # max-cache-size — максимум операций в кэше libvips. 0 = default (100).
     max-cache-size: 100
+
+########################################
+# detection — детектор лиц/объектов для операций face-crop ("fc") и
+# object-crop ("oc").
+#
+# Детекция выполняется onnx-моделями (ONNX Runtime) внутри процесса libvips:
+#   - face-model:  YuNet; находит лица;
+#   - object-model: SSD/YOLO-подобная; находит объекты.
+# Бинарь должен быть собран с тэком "-tags onnx" и иметь C-библиотеку
+# ONNX Runtime (libonnxruntime). Без этого тэка детектор НЕ работает:
+# запросы с fc/oc вернут понятную ошибку.
+#
+# Включение/выключение задаётся ПУТЁМ К МОДЕЛИ: пустой путь = операция
+# отключена (флага enabled НЕТ). Чтобы использовать только face-crop,
+# укажите face-model и оставьте object-model пустой, и наоборот.
+#
+# Модели загружаются ЛЕНИВО (при первом запросе с соответствующей операцией)
+# и кэшируются в памяти до завершения процесса. Если файл модели отсутствует
+# на диске — ошибка при первом обращении (не при старте), чтобы сервис
+# продолжал работать без ONNX-инфраструктуры.
+########################################
+detection:
+  # face-model — путь к ONNX-модели YuNet для детекции лиц ("fc").
+  # Тип: string. Пусто = face-crop отключён.
+  face-model: ""
+
+  # object-model — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
+  # объектов ("oc"). Тип: string. Пусто = object-crop отключён.
+  object-model: ""
+
+  # confidence-threshold — порог уверенности детектора в интервале [0,1].
+  # Боксы с уверенностью ниже порога отбрасываются (до NMS).
+  # Тип: float. Дефолт: 0.5.
+  confidence-threshold: 0.5
+
+  # max-objects — максимальное число объектов, сохраняемых после NMS
+  # (первые N самых уверенных).
+  # Тип: int, должен быть > 0. Дефолт: 5.
+  max-objects: 5
+
+  # margin — отступ к найденной области как доля от её размера (0-1).
+  # Применяется равномерно по обеим осям (половина с каждой стороны).
+  # 0 = кроп строго по bounding box. Дефолт: 0.1 (10%).
+  margin: 0.1
 
 ########################################
 # imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback для APNG).
