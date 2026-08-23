@@ -3,6 +3,7 @@ package sftp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -65,6 +66,10 @@ type connPool struct {
 	idle   chan *pooledClient
 	cur    atomic.Int32
 	closed atomic.Bool
+	// closeMu сериализует put/close, устраняя гонку: без него клиент,
+	// прошедший проверку closed в put до close(), мог быть добавлен в
+	// idle после осушения канала и утечь (не закрыт, cur не уменьшен).
+	closeMu sync.Mutex
 }
 
 func newConnPool(opts Options) *connPool {
@@ -140,6 +145,10 @@ func (p *connPool) closeStale(pc *pooledClient) {
 // закрывается (пул не накапливает сверхлимитные).
 func (p *connPool) put(pc *pooledClient) {
 	pc.lastUsed = time.Now().UnixNano()
+	// closeMu устраняет гонку с close(): проверка closed и запись в idle
+	// атомарны относительно осушения канала в close().
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
 	if p.closed.Load() {
 		_ = pc.client.Close()
 		p.cur.Add(-1)
@@ -161,6 +170,8 @@ func (p *connPool) discard(pc *pooledClient) {
 
 // close закрывает пул и всех idle-клиентов.
 func (p *connPool) close() {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
 	p.closed.Store(true)
 	for {
 		select {

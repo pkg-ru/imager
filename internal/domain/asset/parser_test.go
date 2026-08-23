@@ -274,6 +274,40 @@ func TestParseRejectsTooLong(t *testing.T) {
 	}
 }
 
+func TestParsePresetWithNameContainingX(t *testing.T) {
+	// Регрессия: имя пресета, содержащее строчную "x" (например "max"),
+	// раньше ошибочно разбиралось как размер и отклонялось с 400.
+	req, err := Parse("/photos/photo-1-jpg/max.webp")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if !req.IsPreset() {
+		t.Fatal("expected preset request for preset name containing 'x'")
+	}
+	if req.PresetName().String() != "max" {
+		t.Errorf("PresetName = %q, want max", req.PresetName().String())
+	}
+}
+
+func TestParseCanonicalSizeStillWorks(t *testing.T) {
+	// Смоук: канонические размеры не сломаны после введения looksLikeSize.
+	cases := []string{
+		"/photos/photo-1-jpg/120x80.webp",
+		"/photos/photo-1-jpg/x50.webp",
+		"/photos/photo-1-jpg/180x.webp",
+		"/photos/photo-1-jpg/x.webp",
+	}
+	for _, url := range cases {
+		req, err := Parse(url)
+		if err != nil {
+			t.Fatalf("Parse(%q) error: %v", url, err)
+		}
+		if req.IsPreset() {
+			t.Errorf("Parse(%q): expected size request, got preset", url)
+		}
+	}
+}
+
 func TestParseSize(t *testing.T) {
 	tests := []struct {
 		in   string

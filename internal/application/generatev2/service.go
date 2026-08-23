@@ -505,7 +505,11 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < publishRetryAttempts; attempt++ {
+	var br *boundedReader
+	if limiter, ok := r.(*boundedReader); ok {
+		br = limiter
+	}
+	for attempt := range publishRetryAttempts {
 		if attempt > 0 {
 			delay := publishRetryBase << (attempt - 1)
 			if delay > publishRetryMax {
@@ -519,9 +523,14 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 			case <-timer.C:
 			}
 		}
-		// Каждая попытка читает буфер с начала (reader перематываем).
+		// Каждая попытка читает буфер с начала: перематываем reader и
+		// сбрасываем счётчик boundedReader, иначе повторная попытка
+		// опубликует усечённые данные.
 		if _, err := reader.Seek(0, io.SeekStart); err != nil {
 			return err
+		}
+		if br != nil {
+			br.reset()
 		}
 		lastErr = s.deps.Results.Publish(ctx, key, r, object.PublishOptions{})
 		if lastErr == nil {
@@ -539,16 +548,31 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 }
 
 // boundedReader ограничивает чтение max байт и сигнализирует о превышении
-// через errOutputLimit. Лимит проверяется ДО чтения: лишний байт не
-// читается и не передаётся в Publish (I12).
+// через errOutputLimit. Лимит проверяется ДО передачи данных дальше: лишний
+// байт не читается в p и не передаётся в Publish (I12), поэтому при
+// превышении в remote не попадает битый объект.
+//
+// Граничный случай: вывод ровно max байт допустим. Когда прочитано ровно
+// max, выполняется пробное чтение одного байта: если данных больше нет —
+// возвращается io.EOF (публикация успешна), если есть — errOutputLimit.
 type boundedReader struct {
-	r    io.Reader
-	max  int64
-	read int64
+	r     io.Reader
+	max   int64
+	read  int64
+	probe [1]byte
 }
 
 func (b *boundedReader) Read(p []byte) (int, error) {
 	if b.read >= b.max {
+		// Достигнут лимит. Пробуем прочитать один байт вне p, чтобы
+		// отличить «ровно max» (EOF) от «больше max» (ошибка).
+		n, err := b.r.Read(b.probe[:])
+		if n > 0 {
+			return 0, errOutputLimit
+		}
+		if err != nil {
+			return 0, err // io.EOF, если данных больше нет
+		}
 		return 0, errOutputLimit
 	}
 	if int64(len(p)) > b.max-b.read {
@@ -557,6 +581,12 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	b.read += int64(n)
 	return n, err
+}
+
+// reset сбрасывает счётчик прочитанных байт перед повторной попыткой
+// публикации (после Seek(0) базового reader'а).
+func (b *boundedReader) reset() {
+	b.read = 0
 }
 
 // mapResultError маппит ошибку ResultStore в типизированный OutcomeError.
@@ -811,8 +841,9 @@ func (b *memBuffer) NewReader() (io.ReadSeekCloser, error) {
 // memBufferReader — независимый reader поверх memBuffer с собственной
 // позицией чтения (для параллельного чтения клиентом и publish).
 type memBufferReader struct {
-	buf *memBuffer
-	pos int
+	buf    *memBuffer
+	pos    int
+	closed bool
 }
 
 func (r *memBufferReader) Read(p []byte) (int, error) {
@@ -850,8 +881,13 @@ func (r *memBufferReader) Seek(offset int64, whence int) (int64, error) {
 func (r *memBufferReader) Close() error {
 	r.buf.mu.Lock()
 	defer r.buf.mu.Unlock()
-	// N2: закрытие reader'а уменьшает счётчик; когда буфер закрыт и не
-	// осталось reader'ов, память освобождается.
+	// Идемпотентность: повторный Close этого reader'а не должен
+	// декрементировать refs повторно, иначе счётчик «украдёт» decrement
+	// другого активного reader'а и память будет освобождена преждевременно.
+	if r.closed {
+		return nil
+	}
+	r.closed = true
 	if r.buf.refs > 0 {
 		r.buf.refs--
 	}

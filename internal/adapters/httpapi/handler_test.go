@@ -121,6 +121,31 @@ func TestHandlerOptions(t *testing.T) {
 	}
 }
 
+func TestHandlerOptionsVaryOrigin(t *testing.T) {
+	// Регрессия: preflight-ответ должен содержать Vary: Origin, чтобы
+	// прокси-кэши не смешивали ответы разных origins (в т.ч. denied).
+	gen := newFakeGenerator()
+
+	for _, origin := range []string{"https://example.com", "https://evil.example"} {
+		h := newTestHandler(t, gen, baseConfig())
+		req := httptest.NewRequest(http.MethodOptions, "/img-png/c-120x80@2.png", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		vary := rec.Header().Values("Vary")
+		found := false
+		for _, v := range vary {
+			if strings.Contains(v, "Origin") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("Origin %q: Vary: Origin missing in OPTIONS response", origin)
+		}
+	}
+}
+
 func TestHandlerOptionsDeniedOrigin(t *testing.T) {
 	gen := newFakeGenerator()
 	h := newTestHandler(t, gen, baseConfig())

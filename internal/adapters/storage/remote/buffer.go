@@ -287,9 +287,9 @@ func (b *Buffer) NewReader() (io.ReadSeekCloser, error) {
 			b.readers--
 			return nil, err
 		}
-		return &BufferReader{buf: b, f: f, size: b.size}, nil
+		return &BufferReader{buf: b, f: f}, nil
 	}
-	return &BufferReader{buf: b, mem: b.mem, size: b.size}, nil
+	return &BufferReader{buf: b}, nil
 }
 
 // Close закрывает буфер для записи. Ресурсы (память/файл) освобождаются,
@@ -351,12 +351,13 @@ func (b *Buffer) InMemory() bool {
 }
 
 // BufferReader — независимый reader поверх Buffer с собственной позицией.
+// Для in-memory буфера читает живые данные буфера (записи, сделанные после
+// создания reader'а, видны), для spill-буфера — через собственный файловый
+// дескриптор.
 type BufferReader struct {
-	buf  *Buffer
-	f    *os.File // не nil, если буфер спиллен на диск
-	mem  []byte   // снимок памяти, если буфер в памяти
-	pos  int64
-	size int64
+	buf *Buffer
+	f   *os.File // не nil, если буфер спиллен на диск
+	pos int64
 }
 
 // Read реализует io.Reader.
@@ -368,12 +369,22 @@ func (r *BufferReader) Read(p []byte) (int, error) {
 		}
 		return n, err
 	}
-	if r.pos >= int64(len(r.mem)) {
+	r.buf.mu.Lock()
+	defer r.buf.mu.Unlock()
+	if r.buf.released {
+		return 0, errors.New("remote: buffer is released")
+	}
+	if r.pos >= r.buf.size {
 		return 0, io.EOF
 	}
-	n := copy(p, r.mem[r.pos:])
-	r.pos += int64(n)
-	return n, nil
+	avail := r.buf.size - r.pos
+	n := int64(len(p))
+	if n > avail {
+		n = avail
+	}
+	copy(p, r.buf.mem[r.pos:r.pos+n])
+	r.pos += n
+	return int(n), nil
 }
 
 // Seek реализует io.Seeker.
@@ -385,7 +396,9 @@ func (r *BufferReader) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		base = r.pos
 	case io.SeekEnd:
-		base = r.size
+		r.buf.mu.Lock()
+		base = r.buf.size
+		r.buf.mu.Unlock()
 	default:
 		return 0, errors.New("remote: invalid whence")
 	}

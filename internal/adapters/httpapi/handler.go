@@ -200,14 +200,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", "GET, HEAD, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	if origin := r.Header.Get("Origin"); origin != "" && h.originAllowed(origin) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		if h.cfg.AllowCredentials {
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		}
-		// Отражаем запрошенные headers (ограниченно).
-		if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
-			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+	if origin := r.Header.Get("Origin"); origin != "" {
+		// Vary: Origin — чтобы прокси-кэши не отдавали preflight-ответ
+		// одного origin другому (как и для основных ответов).
+		w.Header().Add("Vary", "Origin")
+		if h.originAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			if h.cfg.AllowCredentials {
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			// Отражаем запрошенные headers (ограниченно).
+			if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
+				w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -301,9 +306,11 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 // П.15: результат кэшируется по identity (canonical URL + size), чтобы не
 // пересчитывать SHA-256 на каждый запрос.
 func (h *Handler) etagFor(meta object.ObjectMetadata, result *generatev2.Result) string {
-	// Если metadata предоставляет ETag, используем его.
+	// Если metadata предоставляет ETag, используем его. Нормализуем:
+	// убираем кавычки, если хранилище уже вернуло quoted-ETag, чтобы не
+	// получить двойные кавычки в заголовке.
 	if meta.ETag != "" {
-		return `"` + meta.ETag + `"`
+		return `"` + strings.Trim(meta.ETag, `"`) + `"`
 	}
 	// Иначе — стабильная identity из canonical URL + size, кэшируем.
 	identity := result.URL + ":" + strconv.FormatInt(meta.Size, 10)

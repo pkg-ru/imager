@@ -176,7 +176,7 @@ func Parse(raw string) (*Request, error) {
 		return NewRequest(canon, sourceName, sourceFormat, transform, size, dpr, outputFormat)
 	}
 
-	if strings.Contains(base, "x") {
+	if looksLikeSize(base) {
 		// Канонический URL без transform: base — size.
 		size, err := ParseSize(base)
 		if err != nil {
@@ -226,6 +226,33 @@ func matchTransformPrefix(s string) (transform, size string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// looksLikeSize сообщает, похожа ли строка на канонический размер
+// ("120x80", "x50", "180x", "x"). Размер — это строго форма
+// [цифры] 'x' [цифры]; всё остальное (например, имя пресета "max")
+// размером не считается и разбирается как пресет.
+func looksLikeSize(s string) bool {
+	w, h, ok := strings.Cut(s, "x")
+	if !ok {
+		return false
+	}
+	if w == "" && h == "" {
+		return true // "x" — исходный размер
+	}
+	return allDigits(w) && allDigits(h)
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseSize разбирает строку размера в Size.

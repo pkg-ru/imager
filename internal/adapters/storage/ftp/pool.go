@@ -3,6 +3,7 @@ package ftp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -65,6 +66,10 @@ type connPool struct {
 	idle   chan *pooledConn
 	cur    atomic.Int32
 	closed atomic.Bool
+	// closeMu сериализует put/close, устраняя гонку: без него соединение,
+	// прошедшее проверку closed в put до close(), могло быть добавлено в
+	// idle после осушения канала и утечь (не закрыто, cur не уменьшен).
+	closeMu sync.Mutex
 }
 
 func newConnPool(opts Options) *connPool {
@@ -140,6 +145,10 @@ func (p *connPool) closeStale(pc *pooledConn) {
 // соединение закрывается (пул не накапливает сверхлимитные).
 func (p *connPool) put(pc *pooledConn) {
 	pc.lastUsed = time.Now().UnixNano()
+	// closeMu устраняет гонку с close(): проверка closed и запись в idle
+	// атомарны относительно осушения канала в close().
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
 	if p.closed.Load() {
 		_ = pc.conn.Quit()
 		p.cur.Add(-1)
@@ -161,6 +170,8 @@ func (p *connPool) discard(pc *pooledConn) {
 
 // close закрывает пул и все idle-соединения.
 func (p *connPool) close() {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
 	p.closed.Store(true)
 	for {
 		select {
