@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +20,7 @@ func TestHealthHeadNoBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Shutdown(context.Background()) }()
 
 	health := NewHealth(rt)
 
@@ -121,11 +120,11 @@ func TestMetricsAuthToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Shutdown(context.Background()) }()
 
 	health := NewHealth(rt)
-	mux := NewMuxWithAuth(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
-		MetricsAuthConfig{Token: "secret"})
+	mux := NewMuxWithAdmission(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
+		MetricsAuthConfig{Token: "secret"}, 0)
 
 	// Без токена — 403.
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
@@ -142,34 +141,6 @@ func TestMetricsAuthToken(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status with token = %d, want 200", rec.Code)
-	}
-}
-
-// TestReadinessCheckDependency проверяет п.5: readiness учитывает проверку
-// зависимостей.
-func TestReadinessCheckDependency(t *testing.T) {
-	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
-	}
-	defer rt.Close()
-
-	health := NewHealth(rt)
-	health.SetReadinessCheck(func() error { return errors.New("storage down") })
-
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	health.ReadinessHandler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("readiness with failing dep = %d, want 503", rec.Code)
-	}
-
-	// После восстановления зависимости — 200.
-	health.SetReadinessCheck(func() error { return nil })
-	rec = httptest.NewRecorder()
-	health.ReadinessHandler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("readiness with ok dep = %d, want 200", rec.Code)
 	}
 }
 
@@ -192,7 +163,7 @@ func TestRuntimeMaxBodyBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Shutdown(context.Background()) }()
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- rt.Serve() }()

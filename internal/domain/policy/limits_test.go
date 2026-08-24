@@ -81,7 +81,8 @@ func TestLimitsCheckPixelsOverflow(t *testing.T) {
 }
 
 func TestLimitsUnlimited(t *testing.T) {
-	l := Unlimited()
+	// Нулевые лимиты (эквивалент бывшего Unlimited()) ничего не ограничивают.
+	l, _ := NewLimits(Limits{})
 	if r := l.Check(math.MaxInt64, math.MaxInt32, math.MaxInt32, 100, 100, math.MaxInt64, math.MaxInt64); r.Exceeded() {
 		t.Errorf("unlimited limits should never exceed, got %+v", r)
 	}

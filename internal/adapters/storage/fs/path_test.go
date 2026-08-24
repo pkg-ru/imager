@@ -53,10 +53,10 @@ func TestCleanRelEmptyRoot(t *testing.T) {
 	}
 }
 
-// TestSafeKeyCleanRelConsistency — regression для fuzz-найденного дефекта:
-// cleanRel("0//0") успешно проходил, а SafeKey("0//0") возвращал false.
-// Инвариант: cleanRel success ⟺ SafeKey true (для непустого результата).
-func TestSafeKeyCleanRelConsistency(t *testing.T) {
+// TestCleanRelRejectsUnsafeKeys — regression для fuzz-найденного дефекта:
+// cleanRel("0//0") ошибочно отклонялся. Проверяет, что ключи со схлопываемыми
+// пустыми/"."-сегментами принимаются, а небезопасные — отклоняются.
+func TestCleanRelRejectsUnsafeKeys(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
 	cases := []object.ObjectKey{
 		"0//0",        // двойной слеш — пустой сегмент схлопывается
@@ -66,18 +66,13 @@ func TestSafeKeyCleanRelConsistency(t *testing.T) {
 		"a//b//c.jpg", // множественные пустые сегменты
 	}
 	for _, key := range cases {
-		rel, err := cleanRel(root, key)
-		if err != nil {
+		if _, err := cleanRel(root, key); err != nil {
 			t.Fatalf("cleanRel(%q) unexpected error: %v", key, err)
-		}
-		if !SafeKey(key) {
-			t.Fatalf("cleanRel(%q) succeeded (rel=%q) but SafeKey=false", key, rel)
 		}
 	}
 
-	// Обратное: если SafeKey=false, cleanRel должен отклонять.
 	rejected := []object.ObjectKey{
-		"a/../b.jpg", // ".." — консервативно отклоняется обоими
+		"a/../b.jpg", // ".." — консервативно отклоняется
 		"a\\b.jpg",   // обратный слеш
 		".meta/x",    // зарезервированный сегмент
 		".tmp-x/y",   // зарезервированный префикс
@@ -87,9 +82,6 @@ func TestSafeKeyCleanRelConsistency(t *testing.T) {
 		"a\x00b.jpg", // NUL внутри сегмента
 	}
 	for _, key := range rejected {
-		if SafeKey(key) {
-			t.Fatalf("SafeKey(%q) = true, want false", key)
-		}
 		if _, err := cleanRel(root, key); err == nil {
 			t.Fatalf("cleanRel(%q) expected error, got none", key)
 		}

@@ -70,11 +70,6 @@ func NewLimits(l Limits) (Limits, error) {
 	return l, nil
 }
 
-// Unlimited возвращает Limits без ограничений.
-func Unlimited() Limits {
-	return Limits{}
-}
-
 // CheckResult — результат проверки лимита.
 type CheckResult struct {
 	// ExceededLimit — имя превышенного лимита (пусто, если всё в порядке).

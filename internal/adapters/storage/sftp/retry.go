@@ -40,15 +40,16 @@ func (s *store) getClient(ctx context.Context) (*pooledClient, error) {
 	return &pooledClient{client: c}, nil
 }
 
-// withRetry — retry-каркас операций: acquire -> needDiscard defer -> op ->
-// при ошибке соединения discard и повторная попытка (до MaxAttempts).
+// withRetryPolicy — общий каркас retry-операций: acquire -> needDiscard
+// defer -> op -> классификация сырой ошибки политикой policy -> повторная
+// попытка с новым соединением (до MaxAttempts) или немедленный возврат.
 //
-// Контракт op: возвращает результат, сырую ошибку raw (по ней выполняется
-// классификация isClientErr) и замапленную ошибку mapped (возвращается
-// вызывающему; при успехе обе равны nil). Бизнес-ошибки и исчерпанный ctx
-// завершают цикл сразу; после исчерпания попыток возвращается последняя
-// mapped-ошибка.
-func withRetry[T any](ctx context.Context, s *store, op func(cl *pooledClient) (T, error, error)) (T, error) {
+// Контракт op: возвращает результат, сырую ошибку raw (по ней policy
+// решает, ретраить ли) и замапленную ошибку mapped (возвращается
+// вызывающему; при успехе обе равны nil). Ошибки, не прошедшие policy, и
+// исчерпанный ctx завершают цикл сразу; после исчерпания попыток
+// возвращается последняя mapped-ошибка.
+func withRetryPolicy[T any](ctx context.Context, s *store, policy func(error) bool, op func(cl *pooledClient) (T, error, error)) (T, error) {
 	ctx, cancel := s.opts.withTimeout(ctx)
 	defer cancel()
 	attempts := s.opts.attempts()
@@ -71,7 +72,7 @@ func withRetry[T any](ctx context.Context, s *store, op func(cl *pooledClient) (
 			return v, nil
 		}
 		lastErr = mapped
-		if !isClientErr(raw) {
+		if !policy(raw) {
 			var zero T
 			return zero, lastErr
 		}
@@ -83,4 +84,21 @@ func withRetry[T any](ctx context.Context, s *store, op func(cl *pooledClient) (
 	}
 	var zero T
 	return zero, lastErr
+}
+
+// neverRetry — политика повтора Publish: ни одна ошибка не ретраится,
+// операция выполняется ровно одной попыткой (историческое поведение
+// метода: внутренние ошибки возвращаются сразу).
+func neverRetry(error) bool { return false }
+
+// withRetry — retry-каркас операций: acquire -> needDiscard defer -> op ->
+// при ошибке соединения discard и повторная попытка (до MaxAttempts).
+//
+// Контракт op: возвращает результат, сырую ошибку raw (по ней выполняется
+// классификация isClientErr) и замапленную ошибку mapped (возвращается
+// вызывающему; при успехе обе равны nil). Бизнес-ошибки и исчерпанный ctx
+// завершают цикл сразу; после исчерпания попыток возвращается последняя
+// mapped-ошибка.
+func withRetry[T any](ctx context.Context, s *store, op func(cl *pooledClient) (T, error, error)) (T, error) {
+	return withRetryPolicy(ctx, s, isClientErr, op)
 }

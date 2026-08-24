@@ -398,90 +398,81 @@ func (c *sftpStreamCloser) Close() error {
 }
 
 // Publish полностью завершает upload до возврата: temp-upload + rename.
-// При ошибке соединения выполняется повторная попытка с новым соединением.
 //
-// Особенность метода: большинство внутренних ошибок (mkdir/create/write/
-// close/rename temp) не ретраятся — как и в исходной реализации, они
-// возвращаются сразу; retry выполняется только для ошибок соединения,
-// пробрасываемых из операций ниже. Метод оставлен вне общего каркаса
-// withRetry из-за этой специфики и работы с src-ридером.
+// Особенность метода: внутренние ошибки (dial/mkdir/create/write/close/
+// rename temp) не ретраятся — операция выполняется ровно одной попыткой
+// и возвращает ошибку сразу. Это выражено через общий каркас
+// withRetryPolicy с политикой neverRetry; работа с src-ридером и очистка
+// temp-файлов выполняются внутри одиночной попытки (publishAttempt).
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
+	_, err = withRetryPolicy(ctx, &r.store, neverRetry, func(cl *pooledClient) (struct{}, error, error) {
+		return struct{}{}, nil, r.publishAttempt(full, key, src, opts, cl)
+	})
+	return err
+}
+
+// publishAttempt выполняет одну попытку публикации на переданном клиенте.
+// Возвращаемая ошибка всегда замаплена (raw = nil): каркас не предпринимает
+// повторов независимо от типа ошибки.
+func (r *ResultStore) publishAttempt(full string, key object.ObjectKey, src io.Reader, opts object.PublishOptions, cl *pooledClient) error {
+	dir := path.Dir(full)
+	if err := cl.MkdirAll(dir); err != nil {
+		return remote.MapError("sftp mkdir", err)
+	}
+
+	if opts.NoOverwrite {
+		// Эксклюзивное создание целевого файла (O_EXCL): не перезаписывает
+		// существующий объект. Если файл уже существует — ErrConflict.
+		dst, err := cl.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
-			return remote.MapError("sftp dial", err)
-		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
+			if isExistErr(err) {
+				// Историческое поведение: бизнес-отказ не закрывает
+				// соединение каркасом.
+				cl.detach()
+				return remote.Conflict(key)
 			}
-		}()
-
-		dir := path.Dir(full)
-		if err := cl.MkdirAll(dir); err != nil {
-			return remote.MapError("sftp mkdir", err)
+			return remote.MapError("sftp create target", err)
 		}
-
-		if opts.NoOverwrite {
-			// Эксклюзивное создание целевого файла (O_EXCL): не перезаписывает
-			// существующий объект. Если файл уже существует — ErrConflict.
-			dst, err := cl.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
-			if err != nil {
-				if isExistErr(err) {
-					needDiscard = false
-					return remote.Conflict(key)
-				}
-				return remote.MapError("sftp create target", err)
-			}
-			if _, err := io.Copy(dst, src); err != nil {
-				_ = dst.Close()
-				_ = cl.Remove(full)
-				return remote.MapError("sftp write target", err)
-			}
-			if err := dst.Close(); err != nil {
-				_ = cl.Remove(full)
-				return remote.MapError("sftp close target", err)
-			}
-			needDiscard = false
-			return nil
+		if _, err := io.Copy(dst, src); err != nil {
+			_ = dst.Close()
+			_ = cl.Remove(full)
+			return remote.MapError("sftp write target", err)
 		}
-
-		// Временный файл в том же каталоге для атомарного rename.
-		tmpName := path.Join(dir, fmt.Sprintf(".tmp-%s-%d", path.Base(full), time.Now().UnixNano()))
-		tmp, err := cl.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
-		if err != nil {
-			return remote.MapError("sftp create temp", err)
+		if err := dst.Close(); err != nil {
+			_ = cl.Remove(full)
+			return remote.MapError("sftp close target", err)
 		}
-		cleanup := func() {
-			_ = tmp.Close()
-			_ = cl.Remove(tmpName)
-		}
-		if _, err := io.Copy(tmp, src); err != nil {
-			cleanup()
-			return remote.MapError("sftp write temp", err)
-		}
-		if err := tmp.Close(); err != nil {
-			_ = cl.Remove(tmpName)
-			return remote.MapError("sftp close temp", err)
-		}
-
-		if err := cl.PosixRename(tmpName, full); err != nil {
-			_ = cl.Remove(tmpName)
-			return remote.MapError("sftp rename", err)
-		}
-		needDiscard = false
 		return nil
 	}
-	return lastErr
+
+	// Временный файл в том же каталоге для атомарного rename.
+	tmpName := path.Join(dir, fmt.Sprintf(".tmp-%s-%d", path.Base(full), time.Now().UnixNano()))
+	tmp, err := cl.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	if err != nil {
+		return remote.MapError("sftp create temp", err)
+	}
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = cl.Remove(tmpName)
+	}
+	if _, err := io.Copy(tmp, src); err != nil {
+		cleanup()
+		return remote.MapError("sftp write temp", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = cl.Remove(tmpName)
+		return remote.MapError("sftp close temp", err)
+	}
+
+	if err := cl.PosixRename(tmpName, full); err != nil {
+		_ = cl.Remove(tmpName)
+		return remote.MapError("sftp rename", err)
+	}
+	return nil
 }
 
 // Delete удаляет объект. Идемпотентно. При ошибке соединения выполняется

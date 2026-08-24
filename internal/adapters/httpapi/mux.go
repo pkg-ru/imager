@@ -19,25 +19,6 @@ type MetricsAuthConfig struct {
 	AllowedIPs []string
 }
 
-// NewMux собирает корневой http.Handler: health endpoints, metrics и asset
-// handler, обёрнутый в observability middleware (request ID + metrics).
-//
-// Маршруты:
-//   - /healthz  — liveness
-//   - /readyz   — readiness
-//   - /metrics  — bounded-cardinality метрики (Prometheus exposition)
-//   - asset URL — делегируется Handler (fallback semantics)
-func NewMux(h *Handler, health *Health, metrics observability.Metrics) http.Handler {
-	return NewMuxWithAuth(h, health, metrics, MetricsAuthConfig{})
-}
-
-// NewMuxWithAuth собирает корневой http.Handler с опциональной защитой
-// /metrics (п.17). Если MetricsAuthConfig пуст — /metrics доступен без
-// аутентификации (совместимость).
-func NewMuxWithAuth(h *Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig) http.Handler {
-	return NewMuxWithAdmission(h, health, metrics, auth, 0)
-}
-
 // NewMuxWithAdmission собирает корневой http.Handler с опциональной защитой
 // /metrics (п.17) и admission control (В11). maxConcurrent — максимальное
 // число одновременно обрабатываемых asset-запросов (0 = без ограничения).

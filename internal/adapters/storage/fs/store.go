@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -395,12 +394,16 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 
 // quotaErr маппит ошибку записи в типизированную object.ErrQuota, если она
 // вызвана физическим лимитом диска (ENOSPC) или превышением квоты (EDQUOT).
-// Возвращает nil, если ошибка не относится к квоте.
+// Цели сравнения платформенно-специфичны (см. quota_unix.go,
+// quota_windows.go, quota_other.go): на платформах с этими errno
+// распознаются реальные ошибки ОС, на остальных (например plan9)
+// используется нейтральные заглушки. Возвращает nil, если ошибка не
+// относится к квоте.
 func quotaErr(err error) error {
-	if errors.Is(err, syscall.ENOSPC) {
+	if errors.Is(err, errNoSpace) {
 		return &object.QuotaError{Err: err, Reason: "no space left on device"}
 	}
-	if errors.Is(err, syscall.EDQUOT) {
+	if errors.Is(err, errQuotaExceeded) {
 		return &object.QuotaError{Err: err, Reason: "disk quota exceeded"}
 	}
 	return nil

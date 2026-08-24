@@ -38,27 +38,5 @@ func FuzzCleanRelContainment(f *testing.F) {
 		if !within(root, full) {
 			t.Fatalf("cleanRel(%q) escaped root: rel=%q full=%q", raw, rel, full)
 		}
-		// Успешный результат должен быть безопасным ключом.
-		if !SafeKey(key) {
-			t.Fatalf("cleanRel(%q) succeeded but SafeKey=false", raw)
-		}
-	})
-}
-
-// FuzzSafeKey проверяет, что SafeKey никогда не паникует и согласован с
-// cleanRel: если SafeKey=true, то cleanRel должен успешно пройти.
-func FuzzSafeKey(f *testing.F) {
-	seeds := []string{"a.jpg", "a/b.jpg", "../x", "a\\b", ".meta/x", ""}
-	for _, s := range seeds {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, raw string) {
-		key := object.ObjectKey(raw)
-		ok := SafeKey(key)
-		root := filepath.Join(t.TempDir(), "root")
-		_, err := cleanRel(root, key)
-		if ok && err != nil {
-			t.Fatalf("SafeKey(%q)=true but cleanRel failed: %v", raw, err)
-		}
 	})
 }

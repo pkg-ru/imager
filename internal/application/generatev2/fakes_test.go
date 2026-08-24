@@ -6,11 +6,29 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"testing"
 
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
+
+// wantOutcome проверяет, что err является *OutcomeError с указанной
+// категорией (в том числе обёрнутой) — тот же путь, что использует прод
+// (errors.As + switch по Kind).
+func wantOutcome(t *testing.T, err error, kind OutcomeKind) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected OutcomeError %v, got nil", kind)
+	}
+	var oe *OutcomeError
+	if !errors.As(err, &oe) {
+		t.Fatalf("err = %v (%T), want *OutcomeError", err, err)
+	}
+	if oe.Kind != kind {
+		t.Fatalf("kind = %v, want %v", oe.Kind, kind)
+	}
+}
 
 // memArtifact — object.Artifact поверх []byte.
 type memArtifact struct {

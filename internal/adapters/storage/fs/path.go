@@ -65,58 +65,6 @@ func isReservedSegment(p string) bool {
 	return false
 }
 
-// SafeKey сообщает, является ли key допустимым для файловой системы под
-// данным хранилищем (не пересекается с внутренними сегментами).
-func SafeKey(key object.ObjectKey) bool {
-	raw := string(key)
-	if raw == "" {
-		return false
-	}
-	if strings.ContainsRune(raw, '\\') {
-		return false
-	}
-	// NUL-байт недопустим в путях на всех платформах (filepath.Abs/Stat
-	// вернут "invalid argument"). Отклоняем его, чтобы SafeKey и cleanRel
-	// были согласованы.
-	if strings.ContainsRune(raw, 0) {
-		return false
-	}
-	clean := filepath.ToSlash(raw)
-	clean = strings.Trim(clean, "/")
-	var out []string
-	for _, p := range strings.Split(clean, "/") {
-		switch p {
-		case "", ".":
-			// Пустые сегменты (двойные слеши) и "." схлопываются cleanRel —
-			// SafeKey должен согласованно их пропускать.
-			continue
-		case "..", reservedSegment:
-			return false
-		}
-		if strings.HasPrefix(p, reservedSegmentPrefix) {
-			return false
-		}
-		if isReservedSegment(p) {
-			return false
-		}
-		if len(p) > maxSegmentLen {
-			return false
-		}
-		out = append(out, p)
-	}
-	// Если после схлопывания пустых/"." сегментов не осталось ни одного
-	// значимого (например, ключ "." или "//"), cleanRel отклоняет его —
-	// SafeKey должен быть согласован.
-	if len(out) == 0 {
-		return false
-	}
-	// Согласованно с cleanRel: длина итогового пути ограничена.
-	if len(filepath.Join(out...)) > maxPathLen {
-		return false
-	}
-	return true
-}
-
 // cleanRel нормализует ObjectKey в безопасный относительный путь внутри root.
 // Гарантирует root containment: ключ не может выйти за пределы root через
 // "..", абсолютные пути или разделители Windows.
@@ -145,7 +93,7 @@ func cleanRelAbs(absRoot string, key object.ObjectKey) (string, error) {
 		return "", errUnsafeContainment()
 	}
 	// NUL-байт недопустим в путях на всех платформах; отклоняем его
-	// типизированной ошибкой containment (согласованно с SafeKey).
+	// типизированной ошибкой containment.
 	if strings.ContainsRune(raw, 0) {
 		return "", errUnsafeContainment()
 	}
@@ -161,10 +109,9 @@ func cleanRelAbs(absRoot string, key object.ObjectKey) (string, error) {
 		case "", ".":
 			continue
 		case "..":
-			// ".." отклоняется безусловно (консервативно), согласованно с
-			// SafeKey. Даже если ".." можно схлопнуть (a/../b), мы не
-			// разрешаем его: это упрощает инвариант cleanRel success ⟺
-			// SafeKey true и исключает неоднозначность.
+			// ".." отклоняется безусловно (консервативно). Даже если ".."
+			// можно схлопнуть (a/../b), мы не разрешаем его: это упрощает
+			// инвариант и исключает неоднозначность.
 			return "", errUnsafeContainment()
 		default:
 			// Запрещаем обратный слеш в сегменте (Windows-разделитель).

@@ -57,15 +57,6 @@ func ValidOperation(op Operation) bool {
 	}
 }
 
-// Operations возвращает все допустимые операции.
-func Operations() []Operation {
-	return []Operation{
-		OpResize, OpCrop, OpTrim, OpCropTrim,
-		OpSmartCrop, OpFaceCrop, OpObjectCrop,
-		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim,
-	}
-}
-
 // Format — закрытый enum форматов файлов.
 type Format string
 
@@ -96,11 +87,6 @@ func ValidFormat(f Format) bool {
 	default:
 		return false
 	}
-}
-
-// Formats возвращает все допустимые форматы.
-func Formats() []Format {
-	return []Format{FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG, FormatJPEGXL}
 }
 
 // ParseFormat разбирает строку в Format (регистронезависимо).

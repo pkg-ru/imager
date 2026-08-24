@@ -37,7 +37,7 @@ func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 	pol := &policy.Policy{
 		Global: policy.GlobalPolicy{
 			Authorization: policy.AuthUnsafe,
-			Limits:        policy.Unlimited(),
+			Limits:        policy.Limits{},
 		},
 	}
 	presets, err := asset.NewPresetSet([]*asset.Preset{
@@ -145,10 +145,7 @@ func mustReq(t *testing.T, path, srcName, srcFmt string, tr asset.Transform, siz
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
-	d, err := asset.NewDPR(dpr)
-	if err != nil {
-		t.Fatalf("dpr: %v", err)
-	}
+	d := asset.DPR(dpr)
 	r, err := asset.NewRequest(path, sn, sf, tr, sz, d, of)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -208,8 +205,7 @@ func TestGeneratePresetResolves(t *testing.T) {
 	sf, _ := asset.NewFormat("png")
 	pn, _ := asset.NewPresetName("thumb")
 	of, _ := asset.NewFormat("webp")
-	d, _ := asset.NewDPR(2)
-	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, d, of)
+	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
 	if err != nil {
 		t.Fatalf("preset request: %v", err)
 	}
@@ -240,8 +236,7 @@ func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 	sf, _ := asset.NewFormat("png")
 	pn, _ := asset.NewPresetName("thumb")
 	of, _ := asset.NewFormat("webp")
-	d, _ := asset.NewDPR(2)
-	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, d, of)
+	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
 	if err != nil {
 		t.Fatalf("preset request: %v", err)
 	}
@@ -280,7 +275,7 @@ func TestGenerateForbidden(t *testing.T) {
 			Global: policy.GlobalPolicy{
 				Authorization: policy.AuthSafe,
 				SizeRules:     []policy.SizeRule{{Width: &policy.Range{Min: 100, Max: 100}, Height: &policy.Range{Min: 100, Max: 100}}},
-				Limits:        policy.Unlimited(),
+				Limits:        policy.Limits{},
 			},
 		}
 	})
@@ -291,9 +286,7 @@ func TestGenerateForbidden(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected forbidden error")
 	}
-	if !IsOutcome(err, OutcomeForbidden) {
-		t.Fatalf("kind = %v, want forbidden", err)
-	}
+	wantOutcome(t, err, OutcomeForbidden)
 }
 
 func TestGenerateNotFound(t *testing.T) {
@@ -304,9 +297,7 @@ func TestGenerateNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected not-found error")
 	}
-	if !IsOutcome(err, OutcomeNotFound) {
-		t.Fatalf("kind = %v, want not-found", err)
-	}
+	wantOutcome(t, err, OutcomeNotFound)
 }
 
 func TestGenerateConcurrentSameKeyDedup(t *testing.T) {
@@ -376,9 +367,7 @@ func TestGenerateCanceled(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected canceled error")
 		}
-		if !IsOutcome(err, OutcomeCanceled) {
-			t.Fatalf("kind = %v, want canceled", err)
-		}
+		wantOutcome(t, err, OutcomeCanceled)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Generate did not return after cancel")
 	}
@@ -395,9 +384,7 @@ func TestGenerateProcessorError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected processing error")
 	}
-	if !IsOutcome(err, OutcomeProcessing) {
-		t.Fatalf("kind = %v, want processing", err)
-	}
+	wantOutcome(t, err, OutcomeProcessing)
 }
 
 // TestGenerateProcessorOverloaded проверяет, что перегрузка процессора
@@ -413,9 +400,7 @@ func TestGenerateProcessorOverloaded(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected overloaded error")
 	}
-	if !IsOutcome(err, OutcomeOverloaded) {
-		t.Fatalf("kind = %v, want overloaded", err)
-	}
+	wantOutcome(t, err, OutcomeOverloaded)
 }
 
 func TestGeneratePublishError(t *testing.T) {
@@ -429,9 +414,7 @@ func TestGeneratePublishError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unavailable error")
 	}
-	if !IsOutcome(err, OutcomeUnavailable) {
-		t.Fatalf("kind = %v, want unavailable", err)
-	}
+	wantOutcome(t, err, OutcomeUnavailable)
 }
 
 func TestGenerateOutputLimit(t *testing.T) {
@@ -446,9 +429,7 @@ func TestGenerateOutputLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected quota error")
 	}
-	if !IsOutcome(err, OutcomeQuota) {
-		t.Fatalf("kind = %v, want quota", err)
-	}
+	wantOutcome(t, err, OutcomeQuota)
 }
 
 func TestGenerateQuotaOnPublish(t *testing.T) {
@@ -462,9 +443,7 @@ func TestGenerateQuotaOnPublish(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected quota error")
 	}
-	if !IsOutcome(err, OutcomeQuota) {
-		t.Fatalf("kind = %v, want quota", err)
-	}
+	wantOutcome(t, err, OutcomeQuota)
 }
 
 func TestGenerateInvalidPlan(t *testing.T) {
@@ -478,9 +457,7 @@ func TestGenerateInvalidPlan(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid error")
 	}
-	if !IsOutcome(err, OutcomeInvalid) {
-		t.Fatalf("kind = %v, want invalid", err)
-	}
+	wantOutcome(t, err, OutcomeInvalid)
 }
 
 func TestGenerateNilRequest(t *testing.T) {
@@ -489,9 +466,7 @@ func TestGenerateNilRequest(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid error")
 	}
-	if !IsOutcome(err, OutcomeInvalid) {
-		t.Fatalf("kind = %v, want invalid", err)
-	}
+	wantOutcome(t, err, OutcomeInvalid)
 }
 
 // TestBuildPlanDetectionTransforms проверяет маппинг новых transform-кодов

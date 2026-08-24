@@ -217,13 +217,6 @@ func (rt *Runtime) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// Close немедленно закрывает сервер и listener.
-func (rt *Runtime) Close() error {
-	rt.ready.Store(false)
-	rt.alive.Store(false)
-	return rt.server.Close()
-}
-
 // WaitSignal ожидает сигнал завершения (SIGINT/SIGTERM) и возвращает его.
 // Не создаёт утечек: регистрирует обработчик и снимает его после получения.
 //

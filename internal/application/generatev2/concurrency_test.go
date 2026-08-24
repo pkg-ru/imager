@@ -100,9 +100,7 @@ func TestGenerateCancelNoGoroutineLeak(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected canceled error")
 		}
-		if !IsOutcome(err, OutcomeCanceled) {
-			t.Fatalf("kind = %v, want canceled", err)
-		}
+		wantOutcome(t, err, OutcomeCanceled)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Generate did not return after cancel (possible goroutine leak)")
 	}

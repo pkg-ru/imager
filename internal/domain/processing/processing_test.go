@@ -3,7 +3,13 @@ package processing
 import "testing"
 
 func TestValidOperation(t *testing.T) {
-	for _, op := range Operations() {
+	// Полный список допустимых операций зафиксирован явно.
+	ops := []Operation{
+		OpResize, OpCrop, OpTrim, OpCropTrim,
+		OpSmartCrop, OpFaceCrop, OpObjectCrop,
+		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim,
+	}
+	for _, op := range ops {
 		if !ValidOperation(op) {
 			t.Errorf("ValidOperation(%q) = false, want true", op)
 		}
@@ -14,7 +20,9 @@ func TestValidOperation(t *testing.T) {
 }
 
 func TestValidFormat(t *testing.T) {
-	for _, f := range Formats() {
+	// Полный список допустимых форматов зафиксирован явно.
+	formats := []Format{FormatJPEG, FormatPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatAPNG, FormatJPEGXL}
+	for _, f := range formats {
 		if !ValidFormat(f) {
 			t.Errorf("ValidFormat(%q) = false, want true", f)
 		}

@@ -18,10 +18,11 @@ func TestRuntimeReadinessLiveness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Shutdown(context.Background()) }()
 
 	health := NewHealth(rt)
-	mux := NewMux(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil)
+	mux := NewMuxWithAdmission(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
+		MetricsAuthConfig{}, 0)
 
 	// Liveness до shutdown.
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

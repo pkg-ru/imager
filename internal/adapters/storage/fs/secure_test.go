@@ -14,50 +14,114 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/application/ports/contract"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
 
-// TestResultStoreContractFS — контрактные тесты, общие для всех будущих
-// адаптеров (S3, external disk).
+// TestResultStoreContractFS — контрактные тесты ResultStore против продового
+// порта storage.ResultStore (сценарии общие для всех адаптеров: FS, S3,
+// external disk).
 func TestResultStoreContractFS(t *testing.T) {
-	contract.Run(t, contract.ResultStoreContract{
-		NewResult: func(t *testing.T) storage.ResultStore {
-			s, err := NewResultStore(t.TempDir())
-			if err != nil {
-				t.Fatalf("NewResultStore: %v", err)
-			}
-			return s
-		},
+	newResult := func(t *testing.T) storage.ResultStore {
+		s, err := NewResultStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewResultStore: %v", err)
+		}
+		return s
+	}
+	ctx := context.Background()
+
+	t.Run("PublishAndOpen", func(t *testing.T) {
+		s := newResult(t)
+		key := object.ObjectKey("test.bin")
+		data := []byte("hello")
+		if err := s.Publish(ctx, key, bytes.NewReader(data), object.PublishOptions{}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		art, err := s.Open(ctx, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer art.Close()
+		got, err := io.ReadAll(art)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if string(got) != string(data) {
+			t.Fatalf("got %q, want %q", got, data)
+		}
+	})
+	t.Run("DeleteIdempotent", func(t *testing.T) {
+		s := newResult(t)
+		key := object.ObjectKey("del.bin")
+		if err := s.Publish(ctx, key, bytes.NewReader([]byte("x")), object.PublishOptions{}); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		if err := s.Delete(ctx, key); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if err := s.Delete(ctx, key); err != nil {
+			t.Fatalf("Delete idempotent: %v", err)
+		}
 	})
 }
 
-// TestSourceStoreContractFS — контрактные тесты SourceStore, общие для всех
-// будущих read-only адаптеров (S3, external disk, FTP).
+// TestSourceStoreContractFS — контрактные тесты SourceStore против продового
+// порта storage.SourceStore (сценарии общие для всех read-only адаптеров:
+// S3, external disk, FTP).
 func TestSourceStoreContractFS(t *testing.T) {
-	contract.RunSource(t, contract.SourceStoreContract{
-		NewSource: func(t *testing.T) storage.SourceStore {
-			s, err := NewSourceStore(t.TempDir())
-			if err != nil {
-				t.Fatalf("NewSourceStore: %v", err)
-			}
-			return s
-		},
-		Seed: func(t *testing.T, s storage.SourceStore, key object.ObjectKey, data []byte) {
-			t.Helper()
-			fs, ok := s.(*SourceStore)
-			if !ok {
-				t.Fatalf("expected *SourceStore, got %T", s)
-			}
-			full := filepath.Join(fs.Root(), filepath.FromSlash(key.String()))
-			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			if err := os.WriteFile(full, data, 0o644); err != nil {
-				t.Fatalf("write seed: %v", err)
-			}
-		},
+	newSource := func(t *testing.T) storage.SourceStore {
+		s, err := NewSourceStore(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewSourceStore: %v", err)
+		}
+		return s
+	}
+	seed := func(t *testing.T, s storage.SourceStore, key object.ObjectKey, data []byte) {
+		t.Helper()
+		fs, ok := s.(*SourceStore)
+		if !ok {
+			t.Fatalf("expected *SourceStore, got %T", s)
+		}
+		full := filepath.Join(fs.Root(), filepath.FromSlash(key.String()))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatalf("write seed: %v", err)
+		}
+	}
+	ctx := context.Background()
+
+	t.Run("OpenNotFound", func(t *testing.T) {
+		s := newSource(t)
+		if _, err := s.Open(ctx, object.ObjectKey("nonexistent")); !object.IsNotFound(err) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+	t.Run("LookupNotFound", func(t *testing.T) {
+		s := newSource(t)
+		if _, err := s.Lookup(ctx, object.ObjectKey("nonexistent")); !object.IsNotFound(err) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+	t.Run("OpenSeeded", func(t *testing.T) {
+		s := newSource(t)
+		key := object.ObjectKey("seeded.bin")
+		data := []byte("seed-data")
+		seed(t, s, key, data)
+		art, err := s.Open(ctx, key)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer art.Close()
+		got, err := io.ReadAll(art)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if string(got) != string(data) {
+			t.Fatalf("got %q, want %q", got, data)
+		}
 	})
 }
 

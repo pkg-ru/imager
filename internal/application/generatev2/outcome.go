@@ -13,7 +13,6 @@
 package generatev2
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -63,14 +62,4 @@ func (e *OutcomeError) Unwrap() error { return e.Cause }
 // outcome создаёт OutcomeError.
 func outcome(kind OutcomeKind, reason string, cause error) *OutcomeError {
 	return &OutcomeError{Kind: kind, Reason: reason, Cause: cause}
-}
-
-// IsOutcome сообщает, является ли err типизированной ошибкой OutcomeError
-// с указанной категорией (в том числе обёрнутой).
-func IsOutcome(err error, kind OutcomeKind) bool {
-	var oe *OutcomeError
-	if !errors.As(err, &oe) {
-		return false
-	}
-	return oe.Kind == kind
 }

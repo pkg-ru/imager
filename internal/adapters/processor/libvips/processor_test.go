@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +17,6 @@ import (
 
 // fakeBackend — тестовый движок без cgo: возвращает данные или ошибку.
 type fakeBackend struct {
-	mu        sync.Mutex
 	block     chan struct{}
 	err       error
 	processed int32

@@ -19,7 +19,7 @@ func (p *pooledClient) Close() error {
 
 // discard закрывает клиента и освобождает слот пула. Идемпотентно.
 func (p *pooledClient) discard() {
-	if p == nil {
+	if p == nil || p.client == nil {
 		return
 	}
 	if p.entry != nil {
@@ -27,6 +27,18 @@ func (p *pooledClient) discard() {
 		return
 	}
 	_ = p.client.Close()
+}
+
+// detach отключает клиента от владения каркаса: последующий discard
+// становится no-op (соединение и слот пула не затрагиваются). Используется
+// Publish при ErrConflict, чтобы сохранить историческое поведение метода —
+// бизнес-отказ не приводит к закрытию соединения каркасом.
+func (p *pooledClient) detach() {
+	if p == nil {
+		return
+	}
+	p.entry = nil
+	p.client = nil
 }
 
 // connPool — тонкая обёртка над generic-пулом remote.Pool, ограничивающая

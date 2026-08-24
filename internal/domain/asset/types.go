@@ -55,8 +55,6 @@ const (
 
 // Допустимые символы компонентов.
 const (
-	// pathChars — символы, допустимые в пути: буквы, цифры, "-", "_", "/".
-	pathChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
 	// nameChars — символы, допустимые в имени исходника.
 	nameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 	// presetNameChars — символы, допустимые в имени пресета. Дефисы
@@ -164,21 +162,9 @@ func NewDimension(v int) (Dimension, error) {
 // Int возвращает значение как int.
 func (d Dimension) Int() int { return int(d) }
 
-// DPR — device pixel ratio (множитель плотности пикселей).
+// DPR — device pixel ratio (множитель плотности пикселей). Значения
+// создаются парсером URL/пресетов литералами после валидации диапазона.
 type DPR int
-
-// NewDPR создаёт DPR с проверкой диапазона. Допустимы значения 1 (default,
-// отсутствие суффикса), 2 и 3 (явные). Явная передача 0 или 1 отклоняется
-// на уровне парсера, а не здесь.
-func NewDPR(v int) (DPR, error) {
-	if v < DefaultDPR {
-		return 0, fmt.Errorf("dpr must be in [%d,%d], got %d", DefaultDPR, MaxDPR, v)
-	}
-	if v > MaxDPR {
-		return 0, fmt.Errorf("dpr must be in [%d,%d], got %d", DefaultDPR, MaxDPR, v)
-	}
-	return DPR(v), nil
-}
 
 // Int возвращает значение как int.
 func (d DPR) Int() int { return int(d) }

@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -389,15 +390,33 @@ func TestParseDimensionOverflow(t *testing.T) {
 }
 
 func TestParseDPRRange(t *testing.T) {
-	// Допустимы 1 (default), 2 и 3.
-	for _, ok := range []int{1, 2, 3} {
-		if _, err := NewDPR(ok); err != nil {
-			t.Errorf("NewDPR(%d) unexpected error: %v", ok, err)
+	// Отсутствие суффикса означает DPR=1.
+	req, err := Parse("/photos/photo-1-jpg/c-120x80.webp")
+	if err != nil {
+		t.Fatalf("Parse without dpr: %v", err)
+	}
+	if req.DPR().Int() != DefaultDPR {
+		t.Errorf("DPR = %d, want %d (default)", req.DPR().Int(), DefaultDPR)
+	}
+
+	// Явные @2 и @3 допустимы.
+	for _, ok := range []int{2, 3} {
+		url := "/photos/photo-1-jpg/c-120x80@" + strconv.Itoa(ok) + ".webp"
+		req, err := Parse(url)
+		if err != nil {
+			t.Errorf("Parse(%q) unexpected error: %v", url, err)
+			continue
+		}
+		if req.DPR().Int() != ok {
+			t.Errorf("Parse(%q) DPR = %d, want %d", url, req.DPR().Int(), ok)
 		}
 	}
-	for _, bad := range []int{0, 4, 5, -1} {
-		if _, err := NewDPR(bad); err == nil {
-			t.Errorf("NewDPR(%d) expected error", bad)
+
+	// Явные @0, @1, @4, @5, @-1 отклоняются парсером.
+	for _, bad := range []string{"0", "1", "4", "5", "-1"} {
+		url := "/photos/photo-1-jpg/c-120x80@" + bad + ".webp"
+		if _, err := Parse(url); err == nil {
+			t.Errorf("Parse(%q) expected error", url)
 		}
 	}
 }
