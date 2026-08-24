@@ -266,3 +266,48 @@ func TestSourceStoreNotFoundAndOpen(t *testing.T) {
 		t.Fatalf("read = %q, want %q", got, payload)
 	}
 }
+
+// TestResultStoreList проверяет List: возвращает ключи с заданным префиксом,
+// пропуская временные файлы публикации.
+func TestResultStoreList(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+
+	// Публикуем ассеты исходника "thumbs/photo.jpg".
+	keys := []object.ObjectKey{
+		"thumbs/photo-jpg/thumb.webp",
+		"thumbs/photo-jpg/c-120x80@2.webp",
+		"thumbs/other-jpg/thumb.webp",
+	}
+	for _, k := range keys {
+		if err := store.Publish(ctx, k, strings.NewReader("x"), object.PublishOptions{}); err != nil {
+			t.Fatalf("Publish(%q): %v", k, err)
+		}
+	}
+
+	// List по префиксу исходника возвращает только его ассеты.
+	got, err := store.List(ctx, object.ObjectKey("thumbs/photo-jpg/"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List len = %d, want 2 (got %v)", len(got), got)
+	}
+	for _, k := range got {
+		if !strings.HasPrefix(k.String(), "thumbs/photo-jpg/") {
+			t.Errorf("key %q outside prefix", k)
+		}
+	}
+
+	// List с пустым префиксом возвращает все.
+	all, err := store.List(ctx, object.ObjectKey(""))
+	if err != nil {
+		t.Fatalf("List(empty): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("List(empty) len = %d, want 3", len(all))
+	}
+}

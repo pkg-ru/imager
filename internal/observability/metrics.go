@@ -55,7 +55,18 @@ const (
 	OpResultPublish StorageOp = "result_publish"
 )
 
-// Metrics — узкий порт observability для request/cache/processor/storage
+// AssetErrorKind — bounded-cardinality категория ошибки asset URL.
+type AssetErrorKind string
+
+// Категории ошибок asset URL (фиксированный enum — bounded cardinality).
+const (
+	AssetErrParse          AssetErrorKind = "parse"
+	AssetErrPresetNotFound AssetErrorKind = "preset_not_found"
+	AssetErrInvalidPlan    AssetErrorKind = "invalid_plan"
+	AssetErrPolicyDenied   AssetErrorKind = "policy_denied"
+)
+
+// Metrics — узкий порт observability для pipeline/cache/processor/storage
 // стадий. Реализации обязаны сохранять bounded cardinality: все label-ы
 // являются фиксированными enum-ами, а не произвольными значениями.
 type Metrics interface {
@@ -75,6 +86,9 @@ type Metrics interface {
 	// Storage.
 	IncStorageOp(op StorageOp, err bool)
 	ObserveStorageDuration(op StorageOp, err bool, d time.Duration)
+
+	// Asset errors (observability ошибок asset URL).
+	IncAssetError(kind AssetErrorKind)
 }
 
 // nopMetrics — заглушка, используемая при отсутствии метрик.
@@ -89,6 +103,7 @@ func (nopMetrics) IncProcessorError()                                    {}
 func (nopMetrics) ObserveProcessorDuration(time.Duration)                {}
 func (nopMetrics) IncStorageOp(StorageOp, bool)                          {}
 func (nopMetrics) ObserveStorageDuration(StorageOp, bool, time.Duration) {}
+func (nopMetrics) IncAssetError(AssetErrorKind)                          {}
 
 // NopMetrics возвращает no-op реализацию Metrics.
 func NopMetrics() Metrics { return nopMetrics{} }
@@ -141,7 +156,8 @@ type StdMetrics struct {
 	procSuccess *expvar.Int
 	procError   *expvar.Int
 	procDur     *histogram
-	storageOps  *expvar.Map // op -> success/error counters
+	storageOps  *expvar.Map // op -> success|error counters
+	assetErrors *expvar.Map // kind -> counter (ошибки asset URL)
 	// storageDur — bounded registry гистограмм длительности storage ops.
 	// Ключ — фиксированный набор "op_success"/"op_error". sync.Map
 	// даёт lock-free чтение (LoadOrStore) без глобального мьютекса.
@@ -171,6 +187,7 @@ func NewStdMetrics() *StdMetrics {
 		procError:   getOrNewInt("imager_processor_errors"),
 		procDur:     getOrNewHistogram("imager_processor_duration_seconds"),
 		storageOps:  getOrNewMap("imager_storage_ops"),
+		assetErrors: getOrNewMap("imager_asset_errors"),
 
 		// Gauges публикуются как expvar-переменные.
 		httpInflight:     getOrNewInt("imager_http_inflight"),
@@ -265,6 +282,15 @@ func (m *StdMetrics) IncStorageOp(op StorageOp, err bool) {
 		key += "_success"
 	}
 	m.storageOps.Add(key, 1)
+	bumpMetricsVersion()
+}
+
+// IncAssetError инкрементирует счётчик ошибок asset URL по категории.
+func (m *StdMetrics) IncAssetError(kind AssetErrorKind) {
+	if m.assetErrors == nil {
+		return
+	}
+	m.assetErrors.Add(string(kind), 1)
 	bumpMetricsVersion()
 }
 

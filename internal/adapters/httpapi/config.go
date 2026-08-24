@@ -8,8 +8,10 @@ package httpapi
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
+	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/observability"
 )
 
@@ -28,6 +30,84 @@ type NotFoundConfig struct {
 	// Redirect — URL для 301-редиректа при not-found.
 	Redirect string
 }
+
+// SourceFallbackConfig — конфигурация fallback на исходный файл при ошибке
+// ассета (несуществующий пресет, неканонический URL, запрещённая политика).
+//
+// Если включено и исходный файл существует, вместо пикселя/ошибки отдаётся
+// исходный файл с его оригинальными Content-Type/именем/форматом.
+type SourceFallbackConfig struct {
+	// Enabled — включать ли source fallback. Дефолт false (текущее поведение).
+	Enabled bool
+	// Status — HTTP-статус ответа: http.StatusOK или http.StatusNotFound.
+	// 0 → дефолт http.StatusNotFound.
+	Status int
+	// CacheControl — значение Cache-Control для fallback-ответа. Дефолт
+	// "no-store".
+	CacheControl string
+}
+
+// DefaultSourceFallbackStatus — HTTP-статус source fallback по умолчанию.
+const DefaultSourceFallbackStatus = http.StatusNotFound
+
+// DefaultSourceFallbackCacheControl — Cache-Control source fallback по умолчанию.
+const DefaultSourceFallbackCacheControl = "no-store"
+
+// AssetErrorConfig — конфигурация observability ошибок asset URL.
+type AssetErrorConfig struct {
+	// Enabled — включать ли учёт ошибок asset URL (счётчики, top-paths,
+	// структурные логи). Дефолт true.
+	Enabled bool
+	// LogLevel — уровень структурного лога ошибки: debug|info|warn|error.
+	// Дефолт warn.
+	LogLevel string
+	// TopPaths — конфигурация bounded-реестра проблемных путей.
+	TopPaths TopPathsConfig
+}
+
+// TopPathsConfig — конфигурация реестра проблемных путей (top-paths).
+type TopPathsConfig struct {
+	// Enabled — включать ли учёт top-paths. Дефолт false.
+	Enabled bool
+	// MaxEntries — максимальное число отслеживаемых путей (LRU). Дефолт 1024.
+	MaxEntries int
+	// ReportTop — число путей в отчёте (Top(n)). Дефолт 20.
+	ReportTop int
+	// KeyMode — режим ключа: "source" (путь исходника) или "hash"
+	// (sha256 первые 16 байт hex). Дефолт "source".
+	KeyMode string
+}
+
+// AdminConfig — конфигурация административных эндпоинтов.
+//
+// По умолчанию admin-эндпоинты ВЫКЛЮЧЕНЫ (enabled: false). При включении
+// обязателен непустой bearer-токен, иначе старт завершается ошибкой
+// (fail-fast) — endpoindы не могут работать с пустой авторизацией.
+type AdminConfig struct {
+	// Enabled — включать ли admin-эндпоинты (POST /admin/assets/generate,
+	// DELETE /admin/assets/delete). Дефолт false.
+	Enabled bool
+	// Token — bearer-токен для авторизации через
+	// Authorization: Bearer <token> (crypto/subtle.ConstantTimeCompare).
+	// Обязателен при Enabled=true.
+	Token string
+	// Workers — число параллельных фоновых генераций. Дефолт 2.
+	Workers int
+	// QueueSize — ёмкость очереди задач. Переполнение → 503. Дефолт 64.
+	QueueSize int
+	// WaitTimeout — таймаут режима wait=true (ожидания завершения всех
+	// ассетов до ответа). Дефолт 300s.
+	WaitTimeout time.Duration
+}
+
+// DefaultAdminWorkers — число воркеров admin-очереди по умолчанию.
+const DefaultAdminWorkers = 2
+
+// DefaultAdminQueueSize — ёмкость admin-очереди по умолчанию.
+const DefaultAdminQueueSize = 64
+
+// DefaultAdminWaitTimeout — таймаут режима wait=true по умолчанию.
+const DefaultAdminWaitTimeout = 300 * time.Second
 
 // Config — typed runtime конфигурация HTTP-адаптера.
 type Config struct {
@@ -59,6 +139,15 @@ type Config struct {
 	// NotFound — конфигурация not-found fallback.
 	NotFound NotFoundConfig
 
+	// SourceFallback — конфигурация fallback на исходный файл при ошибке
+	// ассета (несуществующий пресет, неканонический URL, запрещённая
+	// политика). Выключено по умолчанию.
+	SourceFallback SourceFallbackConfig
+
+	// Sources — хранилище исходников для source fallback. nil = фича
+	// недоступна (fallback не выполняется).
+	Sources storage.SourceStore
+
 	// Pixel — генератор прозрачного пикселя для not-found.pixel (может быть
 	// nil, тогда pixel-fallback недоступен).
 	Pixel PixelGenerator
@@ -69,6 +158,15 @@ type Config struct {
 	// Metrics — опциональные метрики (request/cache/processor/storage).
 	// Если nil, используется NopMetrics.
 	Metrics observability.Metrics
+
+	// AssetErrors — конфигурация observability ошибок asset URL
+	// (счётчики, top-paths, структурные логи).
+	AssetErrors AssetErrorConfig
+
+	// Admin — конфигурация административных эндпоинтов. По умолчанию
+	// выключены; при включении регистрируются POST /admin/assets/generate и
+	// DELETE /admin/assets/delete.
+	Admin AdminConfig
 
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
 	// HTTP-запросов (admission control). 0 = без ограничения. При превышении
@@ -101,6 +199,48 @@ func (c *Config) Validate() error {
 	if c.MaxURLLen < 0 {
 		return fmt.Errorf("httpapi: max url len must be non-negative")
 	}
+	// Source fallback: статус должен быть 0 (→404), 200 или 404.
+	switch c.SourceFallback.Status {
+	case 0, http.StatusOK, http.StatusNotFound:
+	default:
+		return fmt.Errorf("httpapi: source-fallback.status must be 200 or 404, got %d", c.SourceFallback.Status)
+	}
+	// Asset errors observability.
+	if c.AssetErrors.Enabled {
+		switch c.AssetErrors.LogLevel {
+		case "", "debug", "info", "warn", "error":
+		default:
+			return fmt.Errorf("httpapi: asset-errors.log-level must be one of debug|info|warn|error, got %q", c.AssetErrors.LogLevel)
+		}
+		if c.AssetErrors.TopPaths.Enabled {
+			switch c.AssetErrors.TopPaths.KeyMode {
+			case "", "source", "hash":
+			default:
+				return fmt.Errorf("httpapi: asset-errors.top-paths.key-mode must be source or hash, got %q", c.AssetErrors.TopPaths.KeyMode)
+			}
+			if c.AssetErrors.TopPaths.MaxEntries < 0 {
+				return fmt.Errorf("httpapi: asset-errors.top-paths.max-entries must be non-negative, got %d", c.AssetErrors.TopPaths.MaxEntries)
+			}
+			if c.AssetErrors.TopPaths.ReportTop < 0 {
+				return fmt.Errorf("httpapi: asset-errors.top-paths.report-top must be non-negative, got %d", c.AssetErrors.TopPaths.ReportTop)
+			}
+		}
+	}
+	// Admin: при включении обязателен непустой токен (fail-fast). Значения
+	// workers/queue-size/wait-timeout не могут быть отрицательными (0 = дефолт,
+	// применяется в normalize).
+	if c.Admin.Enabled && c.Admin.Token == "" {
+		return fmt.Errorf("httpapi: admin.enabled requires non-empty admin.token")
+	}
+	if c.Admin.Workers < 0 {
+		return fmt.Errorf("httpapi: admin.workers must be non-negative, got %d", c.Admin.Workers)
+	}
+	if c.Admin.QueueSize < 0 {
+		return fmt.Errorf("httpapi: admin.queue-size must be non-negative, got %d", c.Admin.QueueSize)
+	}
+	if c.Admin.WaitTimeout < 0 {
+		return fmt.Errorf("httpapi: admin.wait-timeout must be non-negative, got %v", c.Admin.WaitTimeout)
+	}
 	return nil
 }
 
@@ -120,6 +260,36 @@ func (c *Config) normalize() {
 	}
 	if c.GenerateTimeout <= 0 {
 		c.GenerateTimeout = DefaultGenerateTimeout
+	}
+	// Source fallback умолчания.
+	if c.SourceFallback.Status == 0 {
+		c.SourceFallback.Status = DefaultSourceFallbackStatus
+	}
+	if c.SourceFallback.CacheControl == "" {
+		c.SourceFallback.CacheControl = DefaultSourceFallbackCacheControl
+	}
+	// Asset errors умолчания.
+	if c.AssetErrors.LogLevel == "" {
+		c.AssetErrors.LogLevel = "warn"
+	}
+	if c.AssetErrors.TopPaths.MaxEntries == 0 {
+		c.AssetErrors.TopPaths.MaxEntries = 1024
+	}
+	if c.AssetErrors.TopPaths.ReportTop == 0 {
+		c.AssetErrors.TopPaths.ReportTop = 20
+	}
+	if c.AssetErrors.TopPaths.KeyMode == "" {
+		c.AssetErrors.TopPaths.KeyMode = "source"
+	}
+	// Admin умолчания.
+	if c.Admin.Workers == 0 {
+		c.Admin.Workers = DefaultAdminWorkers
+	}
+	if c.Admin.QueueSize == 0 {
+		c.Admin.QueueSize = DefaultAdminQueueSize
+	}
+	if c.Admin.WaitTimeout <= 0 {
+		c.Admin.WaitTimeout = DefaultAdminWaitTimeout
 	}
 }
 

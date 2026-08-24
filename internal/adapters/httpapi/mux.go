@@ -23,11 +23,17 @@ type MetricsAuthConfig struct {
 // одновременно обрабатываемых asset-запросов (0 = без ограничения).
 // Admission применяется ТОЛЬКО к asset handler ("/"), не к health/metrics,
 // чтобы liveness/readiness оставались доступными при перегрузке.
-func NewMuxWithAdmission(h *Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig, maxConcurrent int) http.Handler {
+func NewMuxWithAdmission(h http.Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig, maxConcurrent int, admin http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", health.LivenessHandler())
 	mux.Handle("/readyz", health.ReadinessHandler())
 	mux.Handle("/metrics", protectMetrics(observability.MetricsHandler(), auth))
+	// Административные эндпоинты регистрируются ДО корневого "/*", только
+	// если admin включён (admin != nil). Иначе запросы /admin/* уходят в
+	// asset handler → 404.
+	if admin != nil {
+		mux.Handle("/admin/", admin)
+	}
 	// Корневой путь и всё остальное — через handler (asset URL, fallback/404).
 	// Admission control ограничивает число одновременно обрабатываемых
 	// asset-запросов: при переполнении семафора — HTTP 503 + Retry-After.

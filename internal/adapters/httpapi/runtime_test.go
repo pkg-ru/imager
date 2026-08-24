@@ -23,7 +23,7 @@ func TestRuntimeReadinessLiveness(t *testing.T) {
 
 	health := NewHealth(rt)
 	mux := NewMuxWithAdmission(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
-		MetricsAuthConfig{}, 0)
+		MetricsAuthConfig{}, 0, nil)
 
 	// Liveness до shutdown.
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

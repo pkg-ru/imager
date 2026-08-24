@@ -88,6 +88,7 @@ func (r *recordingMetrics) IncProcessorError()                                  
 func (r *recordingMetrics) ObserveProcessorDuration(time.Duration)                {}
 func (r *recordingMetrics) IncStorageOp(StorageOp, bool)                          {}
 func (r *recordingMetrics) ObserveStorageDuration(StorageOp, bool, time.Duration) {}
+func (r *recordingMetrics) IncAssetError(AssetErrorKind)                          {}
 
 func TestMetricsHandlerOutputsCounters(t *testing.T) {
 	sm := NewStdMetrics()

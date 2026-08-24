@@ -51,6 +51,118 @@ func parseErr(url, reason, segment string) error {
 // безопасная canonicalization: запрещены traversal-сегменты, encoded
 // разделители ("%2f", "%2F"), control-символы, а также ограничены длина
 // и набор символов.
+// SourceRef — ссылка на исходник, извлечённая из произвольного URL.
+//
+// Используется для source fallback: когда полный Parse не удался (неверный
+// preset, неканонический URL, недопустимый план), но исходник можно надёжно
+// выделить из URL, сервис может отдать исходный файл вместо пикселя/ошибки.
+type SourceRef struct {
+	Path         string
+	SourceName   string
+	SourceFormat string // расширение без точки, lowercase
+}
+
+// SourceFileName возвращает имя файла исходника, включая расширение.
+func (s *SourceRef) SourceFileName() string {
+	if s == nil {
+		return ""
+	}
+	if s.SourceFormat != "" {
+		return s.SourceName + "." + s.SourceFormat
+	}
+	return s.SourceName
+}
+
+// Key возвращает канонический ключ исходника в хранилище: "path/name.ext"
+// либо просто "name.ext", если путь пуст.
+func (s *SourceRef) Key() string {
+	if s == nil {
+		return ""
+	}
+	file := s.SourceFileName()
+	if s.Path == "" {
+		return file
+	}
+	return s.Path + "/" + file
+}
+
+// ExtractSourceBestEffort пытается извлечь path/sourceName/sourceFormat из
+// произвольного URL даже если полный Parse не удался. Возвращает nil, если
+// извлечь безопасно нельзя.
+//
+// Используется тот же разбор «от конца», что в Parse (последняя точка →
+// output format; последний "/" → rest; последний "-" → name-format), но БЕЗ
+// строгих проверок формата/размера/пресета. Обязательны только непустые
+// name/format и прохождение существующих проверок безопасности пути
+// (rejectUnsafe + CanonicalPath).
+func ExtractSourceBestEffort(raw string) *SourceRef {
+	if raw == "" {
+		return nil
+	}
+	if len(raw) > MaxURLLen {
+		return nil
+	}
+	if err := rejectUnsafe(raw); err != nil {
+		return nil
+	}
+
+	rest := strings.TrimPrefix(raw, "/")
+
+	// Последняя точка → output format (отбрасываем, нам нужен core).
+	lastDot := strings.LastIndex(rest, ".")
+	if lastDot < 0 {
+		return nil
+	}
+	if rest[lastDot+1:] == "" {
+		return nil
+	}
+	core := rest[:lastDot]
+
+	// core = {path}/{source_name}-{source_format}/{rest}.
+	// Последний "/" отделяет rest (transform-size / size / preset_name) от
+	// {path}/{source_name}-{source_format}.
+	lastSlash := strings.LastIndex(core, "/")
+	if lastSlash < 0 {
+		return nil
+	}
+	head := core[:lastSlash]
+	restPart := core[lastSlash+1:]
+	if restPart == "" {
+		return nil
+	}
+
+	// В head отделяем path от source_name-source_format по последнему "/".
+	path := ""
+	sourcePart := head
+	if s := strings.LastIndex(head, "/"); s >= 0 {
+		path = head[:s]
+		sourcePart = head[s+1:]
+	}
+
+	// sourcePart = source_name-source_format.
+	dash := strings.LastIndex(sourcePart, "-")
+	if dash < 0 {
+		return nil
+	}
+	sourceName := sourcePart[:dash]
+	sourceFormat := sourcePart[dash+1:]
+	if sourceName == "" || sourceFormat == "" {
+		return nil
+	}
+
+	// Канонизируем путь (те же проверки безопасности, что в Parse).
+	canon, err := NewCanonicalizer().CanonicalPath(path)
+	if err != nil {
+		return nil
+	}
+
+	return &SourceRef{
+		Path:         canon,
+		SourceName:   sourceName,
+		SourceFormat: strings.ToLower(sourceFormat),
+	}
+}
+
 func Parse(raw string) (*Request, error) {
 	if raw == "" {
 		return nil, parseErr(raw, "empty url", "")

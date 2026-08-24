@@ -46,11 +46,16 @@ type Handler struct {
 	// Ограничен по числу ключей, чтобы не расти безгранично.
 	etagCache *lru.Cache[string, string]
 
+	// topPaths — bounded реестр проблемных путей (top-paths). Создаётся в
+	// New, если asset-errors.top-paths.enabled. nil = учёт выключен.
+	topPaths *observability.TopPaths
+
 	// copyPool — sync.Pool буферов копирования (64 KiB), чтобы не аллоцировать
 	// новый буфер на каждый запрос (оптимизация горячего пути).
 	copyPool sync.Pool
 }
 
+// New создаёт Handler. Конфигурация валидируется и нормализуется.
 // New создаёт Handler. Конфигурация валидируется и нормализуется.
 func New(gen Generator, cfg Config) (*Handler, error) {
 	if gen == nil {
@@ -64,7 +69,7 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 	if log == nil {
 		log = observability.NopLogger()
 	}
-	return &Handler{
+	h := &Handler{
 		gen:       gen,
 		cfg:       cfg,
 		log:       log,
@@ -75,7 +80,12 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 				return make([]byte, 64*1024)
 			},
 		},
-	}, nil
+	}
+	// Top-paths реестр создаётся, если включён.
+	if cfg.AssetErrors.Enabled && cfg.AssetErrors.TopPaths.Enabled {
+		h.topPaths = observability.NewTopPaths(cfg.AssetErrors.TopPaths.MaxEntries)
+	}
+	return h, nil
 }
 
 // buildFormatMap строит безопасный маппинг output format -> content-type.
@@ -181,6 +191,12 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	req, err := asset.Parse(path)
 	if err != nil {
+		h.recordAssetError(observability.AssetErrParse, path, "", err.Error())
+		// Source fallback: если исходник существует, отдаём его вместо
+		// ошибки (неканонический URL).
+		if h.serveSourceFallback(w, r, path) {
+			return
+		}
 		h.log.Warnf("httpapi: invalid asset url: %v", err)
 		h.writeError(w, r, http.StatusBadRequest, "invalid", "invalid asset url")
 		return
@@ -197,7 +213,7 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.gen.Generate(genCtx, req)
 	if err != nil {
-		h.mapError(w, r, err)
+		h.mapError(w, r, err, path)
 		return
 	}
 	defer result.Close()
@@ -286,7 +302,8 @@ func ifNoneMatch(header, etag string) bool {
 }
 
 // mapError маппит типизированную ошибку use case в HTTP-статус.
-func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
+// rawPath — исходный путь запроса (для source fallback и observability).
+func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, rawPath string) {
 	// Отмена контекста (таймаут генерации) → 504.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		h.log.Warnf("httpapi: canceled: %v", err)
@@ -312,8 +329,26 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
 
 	switch oe.Kind {
 	case generatev2.OutcomeInvalid:
+		// Определяем категорию: preset_not_found (неразрешимый пресет) или
+		// invalid_plan (недопустимый план/канонизация).
+		kind := observability.AssetErrInvalidPlan
+		if isPresetNotFound(oe) {
+			kind = observability.AssetErrPresetNotFound
+		}
+		h.recordAssetError(kind, rawPath, presetNameOf(oe), oe.Reason)
+		// Source fallback: если исходник существует, отдаём его вместо
+		// ошибки (несуществующий пресет / недопустимый план).
+		if h.serveSourceFallback(w, r, rawPath) {
+			return
+		}
 		h.writeError(w, r, http.StatusBadRequest, "invalid", "invalid request")
 	case generatev2.OutcomeForbidden:
+		h.recordAssetError(observability.AssetErrPolicyDenied, rawPath, "", oe.Reason)
+		// Source fallback: если исходник существует, отдаём его вместо
+		// ошибки (запрещённая политика).
+		if h.serveSourceFallback(w, r, rawPath) {
+			return
+		}
 		h.log.Warnf("httpapi: forbidden: %v", oe)
 		h.writeError(w, r, http.StatusForbidden, "forbidden", "forbidden")
 	case generatev2.OutcomeNotFound:
@@ -427,6 +462,134 @@ func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file
 	}
 	// Буферизованное копирование (64 KiB).
 	_, _ = io.CopyBuffer(w, f, make([]byte, 64*1024))
+}
+
+// serveSourceFallback пытается отдать исходный файл вместо ошибки ассета.
+//
+// Возвращает true, если fallback выполнен (ответ записан). Логика:
+//   - фича выключена (SourceFallback.Enabled == false) → false;
+//   - ExtractSourceBestEffort не смог безопасно извлечь исходник → false;
+//   - исходник не найден в хранилище → false;
+//   - иначе отдаём исходный файл с его оригинальными заголовками.
+func (h *Handler) serveSourceFallback(w http.ResponseWriter, r *http.Request, rawURL string) bool {
+	sf := h.cfg.SourceFallback
+	if !sf.Enabled {
+		return false
+	}
+	if h.cfg.Sources == nil {
+		return false
+	}
+	ref := asset.ExtractSourceBestEffort(rawURL)
+	if ref == nil {
+		return false
+	}
+	key := object.ObjectKey(ref.Key())
+	art, err := h.cfg.Sources.Open(r.Context(), key)
+	if err != nil {
+		if object.IsNotFound(err) {
+			return false
+		}
+		// Другие ошибки хранилища (unavailable/forbidden) — не fallback,
+		// оставляем обычную обработку ошибки.
+		return false
+	}
+	defer art.Close()
+
+	meta := art.Metadata()
+	// Content-Type: из метаданных, иначе по расширению, иначе octet-stream.
+	ct := meta.ContentType
+	if ct == "" {
+		ct = mime.TypeByExtension("." + ref.SourceFormat)
+	}
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	if meta.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	}
+	// Content-Disposition: inline; filename="name.ext".
+	w.Header().Set("Content-Disposition", `inline; filename="`+ref.SourceFileName()+`"`)
+	w.Header().Set("Cache-Control", sf.CacheControl)
+	if meta.ETag != "" {
+		w.Header().Set("ETag", `"`+strings.Trim(meta.ETag, `"`)+`"`)
+	}
+
+	status := sf.Status
+	if status == 0 {
+		status = DefaultSourceFallbackStatus
+	}
+	w.WriteHeader(status)
+	if r.Method == http.MethodHead {
+		return true
+	}
+	buf := h.copyPool.Get().([]byte)
+	defer h.copyPool.Put(buf)
+	_, _ = io.CopyBuffer(w, art, buf)
+	return true
+}
+
+// recordAssetError фиксирует ошибку asset URL: счётчик метрик, top-paths
+// (если включено) и структурный лог.
+func (h *Handler) recordAssetError(kind observability.AssetErrorKind, rawURL, preset, reason string) {
+	ae := h.cfg.AssetErrors
+	if !ae.Enabled {
+		return
+	}
+	if h.cfg.Metrics != nil {
+		h.cfg.Metrics.IncAssetError(kind)
+	}
+	// Top-paths: ключ — путь исходника (source) или hash.
+	if ae.TopPaths.Enabled && h.topPaths != nil {
+		key := h.topPathKey(rawURL)
+		h.topPaths.Inc(key)
+	}
+	// Структурный лог.
+	observability.LogAssetError(h.log, ae.LogLevel, observability.AssetErrorEvent{
+		Kind:   string(kind),
+		URL:    rawURL,
+		Preset: preset,
+		Reason: reason,
+	})
+}
+
+// topPathKey вычисляет ключ для top-paths по конфигурируемому режиму.
+func (h *Handler) topPathKey(rawURL string) string {
+	mode := h.cfg.AssetErrors.TopPaths.KeyMode
+	if mode == "hash" {
+		sum := sha256.Sum256([]byte(rawURL))
+		return hex.EncodeToString(sum[:16])
+	}
+	// source: путь исходника, если извлекается, иначе raw URL.
+	if ref := asset.ExtractSourceBestEffort(rawURL); ref != nil {
+		return ref.Key()
+	}
+	return rawURL
+}
+
+// isPresetNotFound сообщает, является ли OutcomeInvalid ошибкой
+// неразрешимого пресета (preset not found).
+func isPresetNotFound(oe *generatev2.OutcomeError) bool {
+	if oe == nil {
+		return false
+	}
+	var re *asset.ResolveError
+	if errors.As(oe.Cause, &re) {
+		return re.PresetName != "" && re.Reason == "preset not found"
+	}
+	return false
+}
+
+// presetNameOf извлекает имя пресета из ошибки разрешения, если есть.
+func presetNameOf(oe *generatev2.OutcomeError) string {
+	if oe == nil {
+		return ""
+	}
+	var re *asset.ResolveError
+	if errors.As(oe.Cause, &re) {
+		return re.PresetName
+	}
+	return ""
 }
 
 // writeError пишет стабильный error envelope.

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -472,6 +474,57 @@ func (r *ResultStore) CacheStats(ctx context.Context) (CacheStats, error) {
 		TotalBytes: bytes,
 		Evicted:    r.cache.evictedCount(),
 	}, nil
+}
+
+// List возвращает ключи результатов, начинающиеся с prefix. Реализует
+// опциональный storage.Lister (используется admin DELETE по исходнику).
+//
+// Каталог результатов обходится рекурсивно; файлы метаданных (>/.meta) и
+// временные файлы публикации исключаются, ключи нормализуются в canonical
+// форму (filepath.ToSlash). Пустой prefix означает «все объекты».
+func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]object.ObjectKey, error) {
+	pre := string(prefix)
+	// Нормализуем префикс: без ведущих "/", "//" не допускаем.
+	pre = strings.Trim(pre, "/")
+	var keys []object.ObjectKey
+	err := filepath.Walk(r.root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if ctx != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return cErr
+			}
+		}
+		if info.IsDir() {
+			if info.Name() == reservedSegment {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// Временные файлы публикации пропускаем.
+		if strings.HasPrefix(info.Name(), reservedSegmentPrefix) {
+			return nil
+		}
+		rel, relErr := filepath.Rel(r.root, path)
+		if relErr != nil {
+			return nil
+		}
+		key := filepath.ToSlash(rel)
+		if pre != "" && !strings.HasPrefix(key, pre) {
+			return nil
+		}
+		keys = append(keys, object.ObjectKey(key))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fs: list: %w", err)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys, nil
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)

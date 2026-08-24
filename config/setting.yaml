@@ -173,6 +173,24 @@ http:
     # Тип: string (URL). Дефолт: пусто.
     # redirect: "https://example.com/404"
 
+  # source-fallback — fallback на ИСХОДНЫЙ файл при ошибке ассета
+  # (несуществующий пресет, неканонический URL, запрещённая политика).
+  # Если включено и исходный файл существует, вместо пикселя/ошибки отдаётся
+  # исходный файл с его оригинальными Content-Type/именем/форматом.
+  # Выключено по умолчанию (текущее поведение).
+  source-fallback:
+    # enabled — включать ли source fallback.
+    # Тип: bool. Дефолт: false.
+    enabled: false
+
+    # status — HTTP-статус ответа при source fallback.
+    # Тип: int. Дефолт: 404. Допустимо: 200 или 404.
+    status: 404
+
+    # cache-control — Cache-Control для source fallback-ответа.
+    # Тип: string. Дефолт: "no-store".
+    cache-control: "no-store"
+
 ########################################
 # policy — deny-by-default политика авторизации и лимитов.
 #
@@ -881,3 +899,66 @@ observability:
   # маппится в slog levels). В production рекомендуется "info"/"warn";
   # "debug" максимально подробен (для отладки).
   log-level: "info"
+
+  # asset-errors — observability ошибок asset URL (несуществующий пресет,
+  # неканонический URL, запрещённая политика, недопустимый план).
+  # Включает: счётчики (imager_asset_errors), bounded top-paths и
+  # структурные логи.
+  asset-errors:
+    # enabled — включать ли учёт ошибок asset URL.
+    # Тип: bool. Дефолт: true.
+    enabled: true
+
+    # log-level — уровень структурного лога ошибки asset URL.
+    # Тип: string. Дефолт: "warn". Допустимо: debug|info|warn|error.
+    log-level: "warn"
+
+    # top-paths — bounded реестр проблемных путей (LRU, вытеснение).
+    # Тип: секция. Дефолт: выключен.
+    top-paths:
+      # enabled — включать ли учёт top-paths. Тип: bool. Дефолт: false.
+      enabled: false
+      # max-entries — максимальное число отслеживаемых путей (LRU).
+      # Тип: int. Дефолт: 1024.
+      max-entries: 1024
+      # report-top — число путей в отчёте (Top(n)). Тип: int. Дефолт: 20.
+      report-top: 20
+      # key-mode — режим ключа: "source" (путь исходника) или "hash"
+      # (sha256 первые 16 байт hex). Тип: string. Дефолт: "source".
+      key-mode: "source"
+
+########################################
+# admin — административные эндпоинты (ВЫКЛЮЧЕНЫ по умолчанию).
+#
+# Позволяют управлять ассетами: фоновая генерация всех/выбранных ассетов
+# исходника и удаление ассетов. Доступность и авторизация настраиваются
+# здесь. При включении (enabled: true) ОБЯЗАТЕЛЕН непустой token — иначе
+# старт завершится ошибкой (fail-fast).
+#
+# Маршруты (регистрируются только при enabled: true):
+#   POST   /admin/assets/generate   — генерация ассетов
+#   DELETE /admin/assets/delete     — удаление ассетов
+#
+# Авторизация: заголовок "Authorization: Bearer <token>".
+# Неверный/отсутствующий токен → HTTP 403.
+#
+# ВАЖНО: секция закомментирована, чтобы не менять активное поведение
+# (admin выключен). Раскомментируйте и задайте свой token при необходимости.
+# admin:
+#   # enabled — включать ли admin-эндпоинты. Тип: bool. Дефолт: false.
+#   enabled: false
+#
+#   # token — bearer-токен для авторизации. Тип: string. Дефолт: "".
+#   # Обязателен при enabled: true (иначе fail-fast ошибка старта).
+#   token: "REPLACE_WITH_STRONG_SECRET"
+#
+#   # workers — число параллельных фоновых генераций. Тип: int. Дефолт: 2.
+#   workers: 2
+#
+#   # queue-size — ёмкость очереди задач; переполнение → HTTP 503.
+#   # Тип: int. Дефолт: 64.
+#   queue-size: 64
+#
+#   # wait-timeout — таймаут режима wait=true (ожидания завершения всех
+#   # ассетов до ответа). Тип: duration-строка. Дефолт: "300s".
+#   wait-timeout: "300s"

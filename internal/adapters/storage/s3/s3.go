@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -720,6 +721,59 @@ func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 		token = out.NextContinuationToken
 	}
 	return stats, nil
+}
+
+// List возвращает ключи результатов, начинающиеся с prefix. Реализует
+// опциональный storage.Lister (используется admin DELETE по исходнику).
+//
+// Перечисление выполняется через ListObjectsV2 с пагинацией (защита от
+// бесконечного цикла — maxListPages). Возвращаемые ключи — canonical
+// (без префикса bucket-конфигурации).
+func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]object.ObjectKey, error) {
+	pre := string(prefix)
+	pre = trimSlashes(pre)
+	fullPrefix := pre
+	if r.opts.Prefix != "" {
+		if fullPrefix != "" {
+			fullPrefix = r.opts.Prefix + "/" + fullPrefix
+		} else {
+			fullPrefix = r.opts.Prefix
+		}
+	}
+	var keys []object.ObjectKey
+	var token *string
+	for page := 0; ; page++ {
+		if page >= maxListPages {
+			return nil, fmt.Errorf("s3: list exceeded %d pages (possible infinite pagination)", maxListPages)
+		}
+		out, err := r.opts.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(r.opts.Bucket),
+			Prefix:            aws.String(fullPrefix),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return nil, MapError("s3 list", err)
+		}
+		for _, obj := range out.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			key := *obj.Key
+			// Срезаем префикс bucket-конфигурации, чтобы вернуть canonical ключ.
+			if r.opts.Prefix != "" {
+				key = strings.TrimPrefix(key, r.opts.Prefix+"/")
+			}
+			keys = append(keys, object.ObjectKey(key))
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			break
+		}
+		if out.NextContinuationToken == nil {
+			return nil, fmt.Errorf("s3: list truncated without continuation token")
+		}
+		token = out.NextContinuationToken
+	}
+	return keys, nil
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)

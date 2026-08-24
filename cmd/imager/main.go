@@ -126,6 +126,13 @@ func main() {
 	rt.AddCloser(proc.Processor)
 	rt.AddCloser(app.Pool)
 
+	// Admin-сервис: запускаем пул воркеров (если admin включён) и
+	// регистрируем graceful drain очереди при shutdown.
+	if app.AdminSvc != nil {
+		app.AdminSvc.Start(context.Background())
+		rt.AddCloser(app.AdminSvc)
+	}
+
 	// Периодическая уборка осиротевших temp-файлов публикации.
 	// Запускаем janitor для каталога результатов (каждые 5 минут, файлы
 	// старше 1 часа). Останавливается при shutdown через rt.AddCloser.
@@ -148,7 +155,7 @@ func main() {
 	// Admission control: ограничиваем число одновременно обрабатываемых
 	// asset-запросов лимитом из конфигурации (http.max-concurrent-requests).
 	rt.SetHandler(httpapi.NewMuxWithAdmission(app.Handler, health, metrics,
-		httpapi.MetricsAuthConfig{}, rc.HTTP.MaxConcurrentRequests))
+		httpapi.MetricsAuthConfig{}, rc.HTTP.MaxConcurrentRequests, app.AdminHandler))
 
 	logger.Infof("imager: listening on %s", rt.Addr())
 

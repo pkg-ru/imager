@@ -35,6 +35,11 @@ type RuntimeConfig struct {
 	// Server — конфигурация HTTP-сервера (адрес и таймауты).
 	Server ServerConfig
 
+	// Admin — конфигурация административных эндпоинтов. По умолчанию
+	// выключены (enabled: false). При включении регистрируются
+	// POST /admin/assets/generate и DELETE /admin/assets/delete.
+	Admin AdminConfig
+
 	// SourceDir — каталог исходников (используется при FS source).
 	SourceDir string
 	// ResultDir — каталог результатов (используется при FS result).
@@ -172,6 +177,8 @@ type RuntimeConfigFile struct {
 	Watermarks []config.WatermarkConfig `yaml:"watermarks"`
 	// Server — конфигурация HTTP-сервера.
 	Server ServerYAML `yaml:"server"`
+	// Admin — конфигурация административных эндпоинтов.
+	Admin AdminYAML `yaml:"admin"`
 	// HTTP — конфигурация HTTP-адаптера.
 	HTTP HTTPYAML `yaml:"http"`
 	// Policy — конфигурация политики (пробрасывается в config.Config).
@@ -388,6 +395,30 @@ type ApplicationYAML struct {
 type ObservabilityYAML struct {
 	// LogLevel — уровень логов: debug, info, warn, error (по умолчанию info).
 	LogLevel string `yaml:"log-level"`
+	// AssetErrors — учёт ошибок asset URL (счётчики, top-paths, логи).
+	AssetErrors AssetErrorsYAML `yaml:"asset-errors"`
+}
+
+// AssetErrorsYAML — YAML-представление AssetErrorConfig.
+type AssetErrorsYAML struct {
+	// Enabled — включать ли учёт ошибок asset URL. Дефолт true.
+	Enabled *bool `yaml:"enabled"`
+	// LogLevel — уровень структурного лога ошибки. Дефолт warn.
+	LogLevel string `yaml:"log-level"`
+	// TopPaths — bounded-реестр проблемных путей.
+	TopPaths TopPathsYAML `yaml:"top-paths"`
+}
+
+// TopPathsYAML — YAML-представление TopPathsConfig.
+type TopPathsYAML struct {
+	// Enabled — включать ли учёт top-paths. Дефолт false.
+	Enabled bool `yaml:"enabled"`
+	// MaxEntries — максимальное число отслеживаемых путей (LRU). Дефолт 1024.
+	MaxEntries int `yaml:"max-entries"`
+	// ReportTop — число путей в отчёте. Дефолт 20.
+	ReportTop int `yaml:"report-top"`
+	// KeyMode — режим ключа: source | hash. Дефолт source.
+	KeyMode string `yaml:"key-mode"`
 }
 
 // MetadataYAML — конфигурация sidecar-кэша моделей и largest_ai_asset
@@ -405,6 +436,25 @@ type MetadataYAML struct {
 	// локально по этому пути, независимо от типов source/result.
 	// Тип: string. Дефолт: <эффективный локальный result-каталог>/.meta.
 	Dir string `yaml:"dir"`
+}
+
+// AdminYAML — YAML-представление AdminConfig.
+//
+// Выключено по умолчанию (enabled: false). При enabled: true ТРЕБУЕТСЯ
+// непустой token (иначе fail-fast ошибка старта). workers ≥ 1 (дефолт 2),
+// queue-size ≥ 1 (дефолт 64), wait-timeout > 0 (дефолт "300s").
+type AdminYAML struct {
+	// Enabled — включать ли admin-эндпоинты. Дефолт false.
+	Enabled bool `yaml:"enabled"`
+	// Token — bearer-токен (Authorization: Bearer <token>). Обязателен при
+	// enabled: true.
+	Token string `yaml:"token"`
+	// Workers — число параллельных фоновых генераций. Дефолт 2.
+	Workers int `yaml:"workers"`
+	// QueueSize — ёмкость очереди задач; переполнение → 503. Дефолт 64.
+	QueueSize int `yaml:"queue-size"`
+	// WaitTimeout — таймаут режима wait=true (duration). Дефолт "300s".
+	WaitTimeout string `yaml:"wait-timeout"`
 }
 
 // HTTPYAML — YAML-представление httpapi.Config.
@@ -427,9 +477,21 @@ type HTTPYAML struct {
 	GenerateTimeout string `yaml:"generate-timeout"`
 	// NotFound — not-found fallback.
 	NotFound NotFoundYAML `yaml:"not-found"`
+	// SourceFallback — fallback на исходный файл при ошибке ассета.
+	SourceFallback SourceFallbackYAML `yaml:"source-fallback"`
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
 	// HTTP-запросов (0 = без ограничения).
 	MaxConcurrentRequests int `yaml:"max-concurrent-requests"`
+}
+
+// SourceFallbackYAML — YAML-представление SourceFallbackConfig.
+type SourceFallbackYAML struct {
+	// Enabled — включать ли source fallback. Дефолт false.
+	Enabled bool `yaml:"enabled"`
+	// Status — HTTP-статус ответа: 200 или 404 (0 → 404).
+	Status int `yaml:"status"`
+	// CacheControl — Cache-Control для fallback-ответа. Дефолт "no-store".
+	CacheControl string `yaml:"cache-control"`
 }
 
 // NotFoundYAML — YAML-представление NotFoundConfig.
@@ -499,6 +561,43 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			Page:     raw.HTTP.NotFound.Page,
 			Redirect: raw.HTTP.NotFound.Redirect,
 		},
+		SourceFallback: SourceFallbackConfig{
+			Enabled:      raw.HTTP.SourceFallback.Enabled,
+			Status:       raw.HTTP.SourceFallback.Status,
+			CacheControl: raw.HTTP.SourceFallback.CacheControl,
+		},
+		Admin: AdminConfig{
+			Enabled:   raw.Admin.Enabled,
+			Token:     raw.Admin.Token,
+			Workers:   raw.Admin.Workers,
+			QueueSize: raw.Admin.QueueSize,
+		},
+	}
+	// Admin wait-timeout (duration).
+	if raw.Admin.WaitTimeout != "" {
+		d, err := time.ParseDuration(raw.Admin.WaitTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("httpapi: admin.wait-timeout: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("httpapi: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout)
+		}
+		httpCfg.Admin.WaitTimeout = d
+	}
+	// Asset errors observability (fail-fast на неверных значениях).
+	assetErrorsEnabled := true
+	if raw.Observability.AssetErrors.Enabled != nil {
+		assetErrorsEnabled = *raw.Observability.AssetErrors.Enabled
+	}
+	httpCfg.AssetErrors = AssetErrorConfig{
+		Enabled:  assetErrorsEnabled,
+		LogLevel: raw.Observability.AssetErrors.LogLevel,
+		TopPaths: TopPathsConfig{
+			Enabled:    raw.Observability.AssetErrors.TopPaths.Enabled,
+			MaxEntries: raw.Observability.AssetErrors.TopPaths.MaxEntries,
+			ReportTop:  raw.Observability.AssetErrors.TopPaths.ReportTop,
+			KeyMode:    raw.Observability.AssetErrors.TopPaths.KeyMode,
+		},
 	}
 	if raw.HTTP.GenerateTimeout != "" {
 		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout)
@@ -510,6 +609,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		}
 		httpCfg.GenerateTimeout = d
 	}
+	httpCfg.normalize() // применяем умолчания (статус 404, cache-control и т.д.)
 	if err := httpCfg.Validate(); err != nil {
 		return nil, fmt.Errorf("httpapi: http: %w", err)
 	}
@@ -602,6 +702,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		Pipeline:        cfg,
 		HTTP:            httpCfg,
 		Server:          server,
+		Admin:           httpCfg.Admin,
 		SourceDir:       sourceDir,
 		ResultDir:       resultDir,
 		Source:          source,

@@ -84,6 +84,18 @@ type Publisher interface {
 	Publish(ctx context.Context, key object.ObjectKey, r io.Reader, opts object.PublishOptions) error
 }
 
+// Lister — ОПЦИОНАЛЬНЫЙ интерфейс перечисления объектов result-хранилища по
+// префиксу ключа (например, для admin DELETE /admin/assets/delete по
+// исходнику). Не является частью обязательного контракта ResultStore:
+// адаптеры без List не поддерживают режим удаления «по исходнику» (501).
+//
+// Реализации обязаны возвращать ключи, начинающиеся с prefix (без учёта
+// зарезервированных внутренних объектов, если адаптер их хранит).
+type Lister interface {
+	// List возвращает ключи объектов хранилища, начинающиеся с prefix.
+	List(ctx context.Context, prefix object.ObjectKey) ([]object.ObjectKey, error)
+}
+
 // ArtifactFactory — фабрика открытых объектов, используемая адаптерами для
 // создания Artifact из своих ресурсов. Позволяет переиспользовать логику
 // метаданных между адаптерами.

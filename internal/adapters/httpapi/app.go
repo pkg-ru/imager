@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
 
 	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
 	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
 	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
+	"github.com/pkg-ru/imager/internal/application/adminsvc"
 	"github.com/pkg-ru/imager/internal/application/generatev2"
 	"github.com/pkg-ru/imager/internal/application/ports/detector"
 	"github.com/pkg-ru/imager/internal/application/ports/metadata"
@@ -70,6 +72,12 @@ type App struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов. Может быть
 	// закрыт при пересоздании приложения (доп. замечание).
 	Pool *remote.BufferPool
+
+	// AdminSvc — admin-сервис (nil, если admin выключен). Требует Start()
+	// перед использованием и Stop()/Close() при shutdown.
+	AdminSvc *adminsvc.Service
+	// AdminHandler — HTTP-обработчик /admin/* (nil, если admin выключен).
+	AdminHandler http.Handler
 }
 
 // Build собирает новый pipeline. Fail-fast на invalid config.
@@ -167,17 +175,44 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		return nil, fmt.Errorf("httpapi: build: generatev2: %w", err)
 	}
 
-	// HTTP handler.
+	// HTTP handler. Пробрасываем хранилище исходников в конфиг для source
+	// fallback (nil = фича недоступна).
+	opt.HTTP.Sources = sources
 	h, err := New(svc, opt.HTTP)
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: build: handler: %w", err)
 	}
 
+	// Admin-сервис и handler (только если admin включён). Валидация
+	// admin.enabled + token выполняется в Config.Validate (fail-fast).
+	var adminSvc *adminsvc.Service
+	var adminHandler http.Handler
+	if opt.HTTP.Admin.Enabled {
+		adminSvc, err = adminsvc.New(adminsvc.Deps{
+			Gen:     svc,
+			Sources: sources,
+			Results: results,
+			Presets: compiled.Presets,
+			Policy:  compiled.Policy,
+			Logger:  opt.HTTP.Logger,
+		}, adminsvc.Config{
+			Workers:     opt.HTTP.Admin.Workers,
+			QueueSize:   opt.HTTP.Admin.QueueSize,
+			WaitTimeout: opt.HTTP.Admin.WaitTimeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("httpapi: build: adminsvc: %w", err)
+		}
+		adminHandler = NewAdminHandler(adminSvc, opt.HTTP.Admin, opt.HTTP.Logger)
+	}
+
 	return &App{
-		Handler: h,
-		Service: svc,
-		Sources: sources,
-		Results: results,
-		Pool:    pool,
+		Handler:      h,
+		Service:      svc,
+		Sources:      sources,
+		Results:      results,
+		Pool:         pool,
+		AdminSvc:     adminSvc,
+		AdminHandler: adminHandler,
 	}, nil
 }

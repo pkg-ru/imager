@@ -117,3 +117,58 @@ libvips:
 #
 # observability:
 #   log-level: "debug"
+#
+# # http.source-fallback — fallback на исходный файл при ошибке ассета
+# # (несуществующий пресет, неканонический URL, запрещённая политика).
+# # Выключен по умолчанию. status: 200 или 404 (дефолт 404).
+# http:
+#   source-fallback:
+#     enabled: false
+#     status: 404
+#     cache-control: "no-store"
+#
+# # observability.asset-errors — учёт ошибок asset URL (счётчики, top-paths,
+# # структурные логи). Включён по умолчанию.
+# observability:
+#   asset-errors:
+#     enabled: true
+#     log-level: warn
+#     top-paths:
+#       enabled: false
+#       max-entries: 1024
+#       report-top: 20
+#       key-mode: source   # source | hash
+#
+# admin — административные эндпоинты (ВЫКЛЮЧЕНЫ по умолчанию).
+# Позволяют управлять ассетами: фоновая генерация всех/выбранных ассетов
+# исходника и удаление ассетов. Доступность и авторизация настраиваются
+# здесь. При включении (enabled: true) ОБЯЗАТЕЛЕН непустой token — иначе
+# старт завершится ошибкой (fail-fast).
+#
+# Маршруты (регистрируются только при enabled: true):
+#   POST   /admin/assets/generate   — генерация ассетов
+#   DELETE /admin/assets/delete     — удаление ассетов
+#
+# Авторизация: заголовок "Authorization: Bearer <token>".
+# Неверный/отсутствующий токен → HTTP 403.
+#
+# ВАЖНО: секция закомментирована, чтобы не менять активное поведение
+# (admin выключен). Раскомментируйте и задайте свой token при необходимости.
+# admin:
+#   # enabled — включать ли admin-эндпоинты. Тип: bool. Дефолт: false.
+#   enabled: false
+#
+#   # token — bearer-токен для авторизации. Тип: string. Дефолт: "".
+#   # Обязателен при enabled: true (иначе fail-fast ошибка старта).
+#   token: "REPLACE_WITH_STRONG_SECRET"
+#
+#   # workers — число параллельных фоновых генераций. Тип: int. Дефолт: 2.
+#   workers: 2
+#
+#   # queue-size — ёмкость очереди задач; переполнение → HTTP 503.
+#   # Тип: int. Дефолт: 64.
+#   queue-size: 64
+#
+#   # wait-timeout — таймаут режима wait=true (ожидания завершения всех
+#   # ассетов до ответа). Тип: duration-строка. Дефолт: "300s".
+#   wait-timeout: "300s"

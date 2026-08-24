@@ -126,7 +126,7 @@ func TestMetricsAuthToken(t *testing.T) {
 
 	health := NewHealth(rt)
 	mux := NewMuxWithAdmission(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
-		MetricsAuthConfig{Token: "secret"}, 0)
+		MetricsAuthConfig{Token: "secret"}, 0, nil)
 
 	// Без токена — 403.
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
