@@ -22,12 +22,13 @@
 ########################################
 # Локальные переопределения (активные).
 
-# ImageMagick: абсолютный путь к бинарю (ОПЦИОНАЛЬНЫЙ fallback для APNG).
+# ImageMagick: абсолютный путь к бинарю (ОПЦИОНАЛЬНЫЙ fallback для сборок
+# без тега "libvips"). В обычном сценарии (libvips работает) не используется.
 # На Windows имя `magick` может не разрешаться через PATH (например, при
-# запуске из IDE/службы), поэтому указываем полный путь к magick.exe.
-# Используйте прямые слэши.
-imagemagick:
-  binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
+# запуске из IDE/службы), поэтому при необходимости укажите полный путь к
+# magick.exe. Используйте прямые слэши.
+# imagemagick:
+#   binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
 
 # libvips: настройки основного процессора (in-process govips). Секция
 # актуальна, если бинарь собран с -tags libvips (см. config/setting.yaml).

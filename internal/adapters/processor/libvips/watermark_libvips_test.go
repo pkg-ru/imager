@@ -57,7 +57,7 @@ func makePng(t *testing.T) []byte {
 	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
-			img.SetRGBA(x, y, 0, 255, 0, 255)
+			img.SetRGBA(x, y, color.RGBA{0, 255, 0, 255})
 		}
 	}
 	var out bytes.Buffer

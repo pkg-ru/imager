@@ -8,9 +8,9 @@
 // возвращающая понятную ошибку об отсутствии поддержки.
 //
 // Адаптер реализует порт processor.Processor (internal/application/ports/
-// processor). Используется как primary-движок в routing.Processor; APNG
-// не поддерживается libvips — такой вызов возвращает ошибку, и роутинг
-// переключается на ImageMagick fallback.
+// processor). Используется как primary-движок в routing.Processor. libvips
+// (≥ 8.13) поддерживает все форматы, включая APNG (чтение и запись как
+// multi-page PNG).
 package libvips
 
 import (

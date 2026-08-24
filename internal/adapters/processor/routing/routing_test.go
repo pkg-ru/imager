@@ -85,13 +85,13 @@ func TestRoutingUsesPrimary(t *testing.T) {
 	}
 }
 
-func TestRoutingFallbackForAPNG(t *testing.T) {
+func TestRoutingAPNGUsesPrimary(t *testing.T) {
 	primary := &recProcessor{name: "primary"}
 	fallback := &recProcessor{name: "fallback"}
 
 	r, err := New(Options{
 		Primary:      primary,
-		PrimaryCaps:  caps("libvips", processing.FormatJPEG, processing.FormatPNG),
+		PrimaryCaps:  caps("libvips", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
 		Fallback:     fallback,
 		FallbackCaps: caps("imagemagick", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
 	})
@@ -107,8 +107,9 @@ func TestRoutingFallbackForAPNG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if primary.calls != 0 || fallback.calls != 1 {
-		t.Fatalf("primary.calls=%d fallback.calls=%d, want 0/1", primary.calls, fallback.calls)
+	// APNG покрывается primary (libvips ≥ 8.13) — fallback не вызывается.
+	if primary.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("primary.calls=%d fallback.calls=%d, want 1/0", primary.calls, fallback.calls)
 	}
 }
 
@@ -123,9 +124,10 @@ func TestRoutingEngineUnavailableWithoutFallback(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
+	// Формат вне покрытия primary и без fallback → engine-unavailable.
 	_, err = r.Process(context.Background(), processor.Input{
 		Source: strings.NewReader("DATA"),
-		Plan:   plan(t, processing.FormatPNG, processing.FormatAPNG, processing.OpResize),
+		Plan:   plan(t, processing.FormatGIF, processing.FormatAPNG, processing.OpResize),
 	}, io.Discard)
 	if err == nil {
 		t.Fatal("Process: want engine-unavailable error")

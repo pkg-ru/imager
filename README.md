@@ -1,8 +1,8 @@
 # Imager <sup><sup><sub>([Imager Client](https://github.com/pkg-ru/imager-client))</sub></sup></sup>
 
-**Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + libvips, ImageMagick — опциональный fallback).
+**Imager** — HTTP-микросервис для генерации и компрессии изображений на лету (Go + libvips; ImageMagick — опциональный fallback для сборок без тега `libvips`).
 
-Сервис принимает запрос на миниатюру (ассет) — генерирует её из исходного файла через **libvips** (in-process, govips) и сохраняет в хранилище результатов. При повторных запросах того же ассета сервис отдаёт ранее созданный файл (кэш по каноническому идентификатору). **ImageMagick** остаётся опциональным fallback для форматов, не поддерживаемых libvips (APNG).
+Сервис принимает запрос на миниатюру (ассет) — генерирует её из исходного файла через **libvips** (in-process, govips) и сохраняет в хранилище результатов. При повторных запросах того же ассета сервис отдаёт ранее созданный файл (кэш по каноническому идентификатору). libvips покрывает все форматы, включая **APNG** (≥ 8.13); **ImageMagick** не требуется.
 
 > Например, вы хотите сжать и уменьшить картинку. Для этого нужно сформировать [каноническую ссылку](https://github.com/pkg-ru/imager-client) (ассет) на картинку — при запросе которой сервис **Imager** на лету создаст сжатую миниатюру и вернёт её пользователю.
 >
@@ -15,8 +15,8 @@
 ## Возможности
 
 - **Обработка изображений на лету**: resize, crop (центрированная обрезка), trim (обрезка краёв), crop+trim.
-- **Движки**: libvips (основной, in-process через govips, cgo) + ImageMagick (опциональный fallback только для APNG). Маршрутизация — `internal/adapters/processor/routing`.
-- **Форматы**: входные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `jxl`, `tiff`, `bmp` (+ PDF/PSD/RAW в будущем через libvips); выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `jxl`. **APNG** — только через ImageMagick (если не установлен, запрос с APNG возвращает понятную ошибку).
+- **Движки**: libvips (основной, in-process через govips, cgo) покрывает все форматы, включая APNG; ImageMagick — опциональный fallback для сборок без тега `libvips`. Маршрутизация — `internal/adapters/processor/routing`.
+- **Форматы**: входные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `jxl`, `tiff`, `bmp` (+ PDF/PSD/RAW в будущем через libvips); выходные — `jpeg`, `png`, `webp`, `gif`, `avif`, `heif`, `apng`, `jxl`. **APNG** обрабатывается libvips (≥ 8.13) как multi-page PNG.
 - **Пресеты**: именованные конфигурации обработки, вызываемые коротким URL.
 - **Политики**: deny-by-default авторизация (`safe`/`unsafe`), whitelist пресетов, правила размеров, path-политики (longest prefix match).
 - **Лимиты**: на всех уровнях — политика запроса, libvips/ImageMagick (resource limits + application-level), прикладные лимиты сервиса.
@@ -78,8 +78,8 @@
 ### Требования
 
 - Go 1.25+ (для сборки из исходников).
-- **libvips** (`vips-dev` / `libvips-dev`) + C-компилятор (gcc/clang) для сборки с тэком `-tags libvips` (основной движок).
-- [ImageMagick](https://imagemagick.org/script/download.php) (`magick` для версии 7, `convert` для версии 6) — **опционально**, только для APNG.
+- **libvips** (`vips-dev` / `libvips-dev`) + C-компилятор (gcc/clang) для сборки с тэком `-tags libvips` (основной движок). Требуется версия **≥ 8.13** для поддержки APNG.
+- [ImageMagick](https://imagemagick.org/script/download.php) — **опционально**, только для сборок без тега `libvips` (emergency-fallback).
 - Docker (опционально, для запуска в контейнере).
 
 ### Сборка и запуск локально
@@ -91,7 +91,7 @@ go build -tags libvips -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 IMAGER_CONFIG_DIR=. ./imager
 ```
 
-Сборка без libvips (ImageMagick как primary; APNG работает, остальные форматы — через ImageMagick):
+Сборка без libvips (ImageMagick как primary; все форматы, включая APNG, — через ImageMagick):
 
 ```bash
 go build -trimpath -ldflags="-s -w" -o imager ./cmd/imager
@@ -330,8 +330,8 @@ watermarks:
 
 Ограничения движков:
 
-- **libvips** (основной движок) реализует `position`/`repeat`/`size` полностью; для анимированных выходов (GIF/WebP/HEIF) ватермарка накладывается на **каждый кадр**.
-- **ImageMagick** (fallback для APNG): точный размер только в px-форме; `contain`/`cover` рендерятся в натуральном размере файла; все режимы `repeat`, кроме `no-repeat`, — как сплошная плитка.
+- **libvips** (основной движок) реализует `position`/`repeat`/`size` полностью; для анимированных выходов (GIF/WebP/APNG/HEIF) ватермарка накладывается на **каждый кадр**.
+- **ImageMagick** (fallback для сборок без тега `libvips`): точный размер только в px-форме; `contain`/`cover` рендерятся в натуральном размере файла; все режимы `repeat`, кроме `no-repeat`, — как сплошная плитка.
 
 ### `source` / `result` — хранилища
 

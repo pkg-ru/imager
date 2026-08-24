@@ -46,9 +46,9 @@ COPY . .
 RUN go build -tags libvips -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
-# Runtime: минимальный образ с libvips (основной движок), ImageMagick
-# (опциональный fallback для APNG) и FFmpeg.
-# Pinned base image. Non-root пользователь, read-only root layout.
+# Runtime: минимальный образ с libvips (основной движок) и FFmpeg.
+# libvips покрывает все форматы, включая APNG (≥ 8.13); ImageMagick не
+# требуется. Pinned base image. Non-root пользователь, read-only root layout.
 ###############################################################################
 FROM alpine:3.20
 
@@ -56,8 +56,7 @@ FROM alpine:3.20
 # libvips — основной процессор; сопутствующие библиотеки кодеков:
 #   libheif (HEIF/AVIF), libde265 (HEVC), libjxl (JPEG XL),
 #   poppler (PDF), libraw (RAW), librsvg (SVG), ghostscript (PDF/PS).
-# ImageMagick оставлен ОПЦИОНАЛЬНО для APNG (единственный формат, который
-# libvips не поддерживает). ffmpeg — пост-обработка видео (если нужна).
+# ffmpeg — пост-обработка видео (если нужна).
 RUN apk add --no-cache --update \
         vips-tools~=8.15 \
         libvips~=8.15 \
@@ -68,7 +67,6 @@ RUN apk add --no-cache --update \
         libraw~=0.21 \
         librsvg~=2.58 \
         ghostscript~=10.02 \
-        imagemagick~=7.1.1 \
         ffmpeg~=6.1 \
         tzdata~=2024a \
         ca-certificates \

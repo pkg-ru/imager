@@ -9,13 +9,13 @@ package libvips
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/davidbyttow/govips/v2/vips"
 
+	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -146,7 +146,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 // load загружает изображение из памяти. FailOnError всегда включён;
 // AutoRotate (EXIF orientation) управляется планом: nil-спецификация =
 // включён (историческое поведение). Для анимированных входов/выходов
-// загружаются все кадры (NumPages=-1).
+// (включая APNG) загружаются все кадры (NumPages=-1).
 func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	params := vips.NewImportParams()
 	params.AutoRotate.Set(plan.Orientation == nil || plan.Orientation.AutoOrient)
@@ -511,8 +511,33 @@ func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, p
 	return nil
 }
 
+// stripAllMetadata принудительно удаляет все пользовательские метаданные
+// (EXIF/GPS, XMP, IPTC, описания) и ICC-профиль перед экспортом.
+//
+// Вызывается для ВСЕХ форматов как defense-in-depth: часть кодеков libvips
+// (heifsave, jxlsave) не поддерживает опцию strip и копирует метаданные
+// исходника в выходной файл. govips RemoveMetadata сохраняет технические
+// поля (orientation, n-pages/page-height/delay/loop), необходимые для
+// корректного отображения; orientation к этому моменту уже применён при
+// загрузке (AutoRotate). RemoveICCProfile удаляет цветовой профиль —
+// консистентно с ImageMagick -strip.
+func stripAllMetadata(img *vips.ImageRef) error {
+	if err := img.RemoveMetadata(); err != nil {
+		return fmt.Errorf("libvips: remove metadata: %w", err)
+	}
+	if err := img.RemoveICCProfile(); err != nil {
+		return fmt.Errorf("libvips: remove icc profile: %w", err)
+	}
+	return nil
+}
+
 // exportImage экспортирует изображение в целевой формат.
 func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.ProcessingPlan) ([]byte, error) {
+	// Единая принудительная зачистка метаданных на готовом ассете — до
+	// экспорта, независимо от поддержки strip конкретным кодеком.
+	if err := stripAllMetadata(img); err != nil {
+		return nil, err
+	}
 	switch plan.OutputFormat {
 	case processing.FormatJPEG:
 		p := vips.NewJpegExportParams()
@@ -556,9 +581,17 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportJxl(p)
 		return out, err
 	case processing.FormatAPNG:
-		// APNG не поддерживается libvips. Ошибка перехватывается роутингом
-		// (routing), который переключается на ImageMagick fallback.
-		return nil, errors.New("libvips: APNG is not supported by libvips; use ImageMagick (fallback)")
+		// APNG — надмножество PNG: pngsave автоматически пишет анимацию
+		// (acTL/fcTL/fdAT чанки) для multi-page изображений (кадры загружены
+		// с NumPages=-1, page-height < высоты стека). Для одиночного
+		// изображения результат — статичный PNG, который также является
+		// валидным APNG (без анимации). Метаданные анимации (delay/loop)
+		// сохраняются из исходника (см. applyAnimation).
+		p := vips.NewPngExportParams()
+		p.StripMetadata = true
+		p.Compression = 6
+		out, _, err := img.ExportPng(p)
+		return out, err
 	default:
 		return nil, fmt.Errorf("libvips: unsupported output format %q", plan.OutputFormat)
 	}

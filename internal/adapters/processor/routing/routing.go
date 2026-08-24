@@ -1,16 +1,16 @@
 // Package routing реализует маршрутизацию между процессорами:
 // libvips (основной, in-process через govips) и ImageMagick (опциональный
-// fallback для форматов, не поддерживаемых libvips — например APNG).
+// fallback для сборок без тега "libvips").
 //
 // Выбор движка происходит на основе плана обработки (ProcessingPlan):
 //   - если формат ИЛИ операция покрываются основным процессором — он
 //     используется;
-//   - если формат требует fallback-движка (например APNG) и fallback
-//     настроен — используется fallback;
-//   - если формат требует fallback-движка, но он не настроен — возвращается
+//   - если формат не покрывается primary и fallback настроен — используется
+//     fallback;
+//   - если формат не покрывается ни одним движком — возвращается
 //     типизированная ошибка ErrEngineUnavailable.
 //
-// Пакет изолирован от cgo: он работает через абстрактный порт
+// Пакет изолирован от cgo: он живёт через абстрактный порт
 // processor.Processor и не зависит от govips/libvips напрямую.
 package routing
 
@@ -25,8 +25,8 @@ import (
 )
 
 // ErrEngineUnavailable — сигнал, что для запрошенного формата/операции нет
-// доступного движка. Возвращается, когда формат требует fallback-движка,
-// который не сконфигурирован (например APNG без установленного ImageMagick).
+// доступного движка. Возвращается, когда формат не покрывается ни primary,
+// ни fallback (например, сборка без тега "libvips" и без ImageMagick).
 var ErrEngineUnavailable = errors.New("routing: engine unavailable for requested format")
 
 // UnsupportedError описывает неподдерживаемый формат/операцию.
@@ -67,9 +67,9 @@ type Capability struct {
 //
 // Основной (primary) процессор обрабатывает подавляющее большинство
 // операций. Fallback-процессор используется ТОЛЬКО для форматов, которые
-// основной не покрывает (например APNG, если основной — libvips).
-// Если fallback не настроен (nil), форматы вне покрытия primary вызывают
-// ErrEngineUnavailable.
+// основной не покрывает (например, когда primary — ImageMagick, а формат
+// требует libvips). Если fallback не настроен (nil), форматы вне покрытия
+// primary вызывают ErrEngineUnavailable.
 type Processor struct {
 	primary      processor.Processor
 	primaryCaps  Capability
@@ -131,7 +131,7 @@ func (p *Processor) engineFor(plan *processing.ProcessingPlan) (processor.Proces
 		return p.primary, nil
 	}
 
-	// Пытаемся переключить на fallback, если формат требует его (APNG).
+	// Пытаемся переключить на fallback, если формат не покрыт primary.
 	if p.fallback != nil {
 		if p.fallbackCovered(plan) {
 			return p.fallback, nil
@@ -149,7 +149,7 @@ func (p *Processor) engineFor(plan *processing.ProcessingPlan) (processor.Proces
 	if p.fallback != nil {
 		missing = p.fallbackCaps.Name
 	} else {
-		missing = "imagemagick (for APNG)"
+		missing = "imagemagick"
 	}
 	return nil, &UnsupportedError{
 		Format:    plan.OutputFormat,

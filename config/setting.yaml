@@ -693,16 +693,16 @@ detection:
   margin: 0.1
 
 ########################################
-# imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback для APNG).
+# imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback).
 #
-# ImageMagick НЕ обязателен: libvips — основной движок. ImageMagick
-# используется ТОЛЬКО для форматов, не поддерживаемых libvips (APNG —
-# единственный такой формат). Если ImageMagick не установлен, запросы с
-# APNG возвращают понятную ошибку ("работа с этим форматом возможна только
-# при установленном ImageMagick").
+# ImageMagick НЕ обязателен: libvips — основной движок и покрывает все
+# форматы, включая APNG (≥ 8.13). ImageMagick используется ТОЛЬКО как
+# emergency-fallback для сборок без тега "libvips" (обратная совместимость).
+# В обычном сценарии (libvips работает) ImageMagick не создаётся и не
+# запускается вовсе.
 #
 # Процессор запускает бинарник ImageMagick как subprocess для каждой
-# операции. Лимиты применяются ТРЁМЯ слоями:
+# операции. Лимиты применяются ТРЕМЯ слоями:
 #   1) -limit аргументы командной строки (limits ниже);
 #   2) сгенерированный policy.xml (policy ниже) через MAGICK_CONFIGURE_PATH;
 #   3) application-level ограничения: bounded writer (output-bytes) и
