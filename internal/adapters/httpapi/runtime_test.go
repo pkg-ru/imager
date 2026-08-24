@@ -9,6 +9,7 @@ import (
 )
 
 func TestRuntimeReadinessLiveness(t *testing.T) {
+	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -65,6 +66,7 @@ func TestRuntimeReadinessLiveness(t *testing.T) {
 }
 
 func TestRuntimeServeAndShutdown(t *testing.T) {
+	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -116,6 +118,7 @@ func TestRuntimeServeAndShutdown(t *testing.T) {
 // ShutdownTimeout активные соединения принудительно закрываются и Shutdown
 // возвращается (bounded graceful shutdown, без зависания).
 func TestRuntimeShutdownTimeoutForceClose(t *testing.T) {
+	requireLocalhostTCP(t)
 	release := make(chan struct{})
 	rt, err := NewRuntime(RuntimeOptions{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +168,7 @@ func TestRuntimeShutdownTimeoutForceClose(t *testing.T) {
 }
 
 func TestRuntimeShutdownWaitsForActiveRequest(t *testing.T) {
+	requireLocalhostTCP(t)
 	release := make(chan struct{})
 	started := make(chan struct{})
 	rt, err := NewRuntime(RuntimeOptions{

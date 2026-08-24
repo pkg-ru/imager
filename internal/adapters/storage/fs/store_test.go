@@ -195,6 +195,42 @@ func TestResultStoreDeleteAndStats(t *testing.T) {
 	}
 }
 
+// TestResultStoreMetaSegmentIsolated — публичные операции ResultStore
+// отклоняют ключи с зарезервированным сегментом ".meta" (изоляция sidecar-
+// метаданных от пространства ассетов, раздел 7.2 дизайн-дока).
+func TestResultStoreMetaSegmentIsolated(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+
+	keys := []object.ObjectKey{
+		".meta/about.png.json", // чтение sidecar как ассета
+		"x/.meta/y",            // вложенный сегмент
+		"meta/../.meta/x",      // обход через ".." (отклоняется отдельно)
+	}
+
+	for _, key := range keys {
+		if _, err := store.Open(ctx, key); !object.IsUnsafePath(err) {
+			t.Errorf("Open(%q): expected ErrUnsafePath, got %v", key, err)
+		}
+		if _, err := store.Lookup(ctx, key); !object.IsUnsafePath(err) {
+			t.Errorf("Lookup(%q): expected ErrUnsafePath, got %v", key, err)
+		}
+		if _, err := store.ReadStream(ctx, key); !object.IsUnsafePath(err) {
+			t.Errorf("ReadStream(%q): expected ErrUnsafePath, got %v", key, err)
+		}
+		if err := store.Delete(ctx, key); !object.IsUnsafePath(err) {
+			t.Errorf("Delete(%q): expected ErrUnsafePath, got %v", key, err)
+		}
+		err := store.Publish(ctx, key, strings.NewReader("x"), object.PublishOptions{})
+		if !object.IsUnsafePath(err) {
+			t.Errorf("Publish(%q): expected ErrUnsafePath, got %v", key, err)
+		}
+	}
+}
+
 func TestSourceStoreNotFoundAndOpen(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

@@ -3,10 +3,14 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
+	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
 	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
 	"github.com/pkg-ru/imager/internal/application/generatev2"
+	"github.com/pkg-ru/imager/internal/application/ports/detector"
+	"github.com/pkg-ru/imager/internal/application/ports/metadata"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/config"
@@ -45,6 +49,18 @@ type AppOptions struct {
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
+
+	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset
+	// (docs/METADATA_STORE.md, раздел 9).
+	MetadataEnabled bool
+	// MetadataDir — КОРЕНЬ sidecar-хранилища метаданных (metadata.dir):
+	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
+	// source/result. Пусто = дефолт `<эффективный локальный
+	// result-каталог>/.meta` (обратно совместимо; docs/METADATA_STORE.md,
+	// раздел 9). Применяется, только если MetadataEnabled и Detector задан.
+	MetadataDir string
+	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция остаётся в процессоре).
+	Detector detector.Detector
 }
 
 // App — собранный pipeline.
@@ -98,6 +114,35 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		return nil, fmt.Errorf("httpapi: build: processor is required (ImageMagick adapter or fake)")
 	}
 
+	// Sidecar-кэш метаданных (docs/METADATA_STORE.md, раздел 9).
+	//
+	// metaRoot задаётся metadata.dir (ЯВНЫЙ локальный путь, независимый от
+	// хранилищ source/result); если не задан — дефолт
+	// `<эффективный локальный result-каталог>/.meta` (обратно совместимо).
+	// Эффективный локальный result-каталог = result.path, иначе ResultDir.
+	// Отключён, если metadata выключено, детектор не задан или локальный
+	// result-каталог не определён (best-effort: ошибки не ломают генерацию).
+	var metaStore metadata.Store
+	if opt.MetadataEnabled && opt.Detector != nil {
+		metaRoot := opt.MetadataDir
+		if metaRoot == "" {
+			localResultDir := opt.ResultStorage.Path
+			if localResultDir == "" {
+				localResultDir = opt.ResultDir
+			}
+			if localResultDir != "" {
+				metaRoot = filepath.Join(localResultDir, ".meta")
+			}
+		}
+		if metaRoot != "" {
+			ms, err := fs.NewMetadataStore(metaRoot)
+			if err != nil {
+				return nil, fmt.Errorf("httpapi: build: metadata store: %w", err)
+			}
+			metaStore = ms
+		}
+	}
+
 	// Координатор.
 	coord := singleflight.New(singleflight.Options{})
 
@@ -116,6 +161,8 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		DefaultOrientation: compiled.DefaultOrientation,
 		Logger:             opt.HTTP.Logger,
 		Metrics:            opt.HTTP.Metrics,
+		Metadata:           metaStore,
+		Detector:           opt.Detector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: build: generatev2: %w", err)

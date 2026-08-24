@@ -24,6 +24,7 @@ import (
 	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
 	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -64,16 +65,6 @@ func (e *LimitError) Error() string {
 
 // Unwrap возвращает исходную ошибку.
 func (e *LimitError) Unwrap() error { return e.Err }
-
-// IsLimitError сообщает, является ли err типизированной ошибкой лимита
-// libvips (в том числе обёрнутой).
-func IsLimitError(err error, kind LimitKind) bool {
-	var le *LimitError
-	if !errors.As(err, &le) {
-		return false
-	}
-	return le.Kind == kind
-}
 
 // Limits — resource limits для libvips-обработчика.
 //
@@ -127,15 +118,33 @@ type Options struct {
 	DetectorMargin float64
 }
 
+// backendResult — результат обработки движка: байты + размеры выхода и
+// входа (для заполнения processor.Result; 0 = неизвестно).
+type backendResult struct {
+	data         []byte
+	width        int
+	height       int
+	sourceWidth  int
+	sourceHeight int
+}
+
 // backend — реализация обработки изображения (build-tag specific):
-//   - libvipsBackend (process_libvips.go, tag "libvips") — реальный govips;
+//   - libvips (process_libvips.go, tag "libvips") — реальный govips;
 //   - stubBackend (process_stub.go, tag "!libvips") — заглушка с ошибкой.
 //
 // Интерфейс держит "живой" код адаптера свободным от cgo.
 type backend interface {
 	// process выполняет загрузку, обработку по плану и экспорт. Возвращает
-	// байты результата. Ошибки контекста/лимитов — через ctx и LimitError.
-	process(ctx context.Context, data []byte, plan *processing.ProcessingPlan) ([]byte, error)
+	// байты результата и размеры. Ошибки контекста/лимитов — через ctx и
+	// LimitError. detectionsReady/boxes — готовые боксы детекции из
+	// sidecar-кэша (docs/METADATA_STORE.md, раздел 8.3): при true процессор
+	// НЕ вызывает ИИ-модель, а использует переданные боксы (в координатах
+	// оригинала).
+	process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error)
+	// prepareRGB извлекает RGB-пиксели источника в размерах ОРИГИНАЛА
+	// (без trim) для детекции на уровне приложения (ensureDetections).
+	// Возвращает nil, если движок не поддерживает подготовку RGB.
+	prepareRGB(ctx context.Context, data []byte) (*processor.RGBFrame, error)
 	// close освобождает ресурсы движка (например, vips.Shutdown).
 	// Идемпотентен.
 	close() error
@@ -158,6 +167,7 @@ type Processor struct {
 }
 
 var _ processor.Processor = (*Processor)(nil)
+var _ processor.RGBPreparer = (*Processor)(nil)
 
 // DefaultSourceBytes — дефолтный лимит размера ВХОДНЫХ данных (10 MiB).
 // Применяется, если SourceBytes == 0. Защита от OOM при чтении
@@ -253,8 +263,8 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	// cgo-операция не прерывается по ctx, но сервис не блокируется:
 	// по истечении контекста возвращается ошибка, а слот семафора
 	// освобождается (defer p.sem.release() выше).
-	output, err := runWatchdog(runCtx, func() ([]byte, error) {
-		return p.backend.process(runCtx, data, in.Plan)
+	br, err := runWatchdog(runCtx, func() (*backendResult, error) {
+		return p.backend.process(runCtx, data, in.Plan, in.DetectionsReady, in.Boxes)
 	})
 	if err != nil {
 		if runCtx.Err() != nil {
@@ -272,7 +282,7 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 
 	// Запись результата через bounded writer: OutputBytes → LimitOutput.
 	bw := shared.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
-	_, _ = bw.Write(output)
+	_, _ = bw.Write(br.data)
 	exceeded, actual := bw.ExceededN()
 	if exceeded {
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
@@ -280,7 +290,37 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	if err != nil && !errors.Is(err, shared.ErrOutputLimitExceeded) {
 		return nil, err
 	}
-	return &processor.Result{Size: actual}, nil
+	return &processor.Result{
+		Size:         actual,
+		Width:        br.width,
+		Height:       br.height,
+		SourceWidth:  br.sourceWidth,
+		SourceHeight: br.sourceHeight,
+	}, nil
+}
+
+// PrepareRGB извлекает RGB-пиксели источника в размерах ОРИГИНАЛА (без
+// trim) для детекции на уровне приложения (ensureDetections). Реализует
+// processor.RGBPreparer; отсутствие поддержки движком → nil (деградация).
+func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*processor.RGBFrame, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("libvips: nil context")
+	}
+	if src == nil {
+		return nil, fmt.Errorf("libvips: nil source")
+	}
+	sourceLimit := p.limits.SourceBytes
+	if sourceLimit <= 0 {
+		sourceLimit = DefaultSourceBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(src, sourceLimit))
+	if err != nil {
+		return nil, fmt.Errorf("libvips: read source: %w", err)
+	}
+	if int64(len(data)) >= sourceLimit {
+		return nil, &LimitError{Kind: LimitOutput, Limit: sourceLimit, Actual: int64(len(data))}
+	}
+	return p.backend.prepareRGB(ctx, data)
 }
 
 // runWatchdog выполняет тяжёлую (cgo) операцию в отдельной горутине и
@@ -292,22 +332,23 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 // Важно: завершившаяся по таймауту горутина остаётся висеть в cgo до
 // фактического завершения операции libvips. Это допустимый компромисс:
 // сервис не блокирует пул воркеров и не теряет семафор.
-func runWatchdog(ctx context.Context, fn func() ([]byte, error)) ([]byte, error) {
-	done := make(chan result, 1)
+func runWatchdog[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	done := make(chan watchdogResult[T], 1)
 	go func() {
 		out, err := fn()
-		done <- result{out: out, err: err}
+		done <- watchdogResult[T]{out: out, err: err}
 	}()
 	select {
 	case r := <-done:
 		return r.out, r.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		var zero T
+		return zero, ctx.Err()
 	}
 }
 
-// result — результат watchdog-вызова.
-type result struct {
-	out []byte
+// watchdogResult — результат watchdog-вызова.
+type watchdogResult[T any] struct {
+	out T
 	err error
 }

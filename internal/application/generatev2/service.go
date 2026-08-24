@@ -10,9 +10,12 @@ import (
 	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
 	"github.com/pkg-ru/imager/internal/application/ports/buffer"
 	"github.com/pkg-ru/imager/internal/application/ports/coordinator"
+	"github.com/pkg-ru/imager/internal/application/ports/detector"
+	"github.com/pkg-ru/imager/internal/application/ports/metadata"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/object"
 	"github.com/pkg-ru/imager/internal/domain/policy"
 	"github.com/pkg-ru/imager/internal/domain/processing"
@@ -74,6 +77,15 @@ type Deps struct {
 	// Metrics — опциональные метрики (request/cache/processor/storage).
 	// Если nil, используется NopMetrics.
 	Metrics observability.Metrics
+	// Metadata — локальное sidecar-хранилище метаданных родительских
+	// файлов (кэш результатов ИИ-моделей + largest_ai_asset).
+	// nil = кэш моделей отключён, поведение идентично прежнему.
+	// docs/METADATA_STORE.md, раздел 8.1.
+	Metadata metadata.Store
+	// Detector — ИИ-детекция лиц/объектов на уровне приложения.
+	// nil = детекция остаётся в процессоре (self-detection).
+	// Используется только вместе с Metadata; оба nil или оба заданы.
+	Detector detector.Detector
 }
 
 func (d *Deps) validate() error {
@@ -282,8 +294,16 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 		return nil, outcome(OutcomeForbidden, "policy limit: "+check.ExceededLimit, errLimitExceeded)
 	}
 
-	// Обработка в Buffer + параллельная публикация в remote.
-	buf, err := s.processAndPublish(ctx, key, processor.Input{Source: src, Plan: plan})
+	// Кэш ИИ-моделей: для планов с детекцией (fc/oc/fct/oct) боксы
+	// загружаются из sidecar или добываются детектором ОДИН раз на
+	// родителя (keyed singleflight по "meta:"+srcKey). best-effort:
+	// при любом сбое возвращается (false, nil) — процессор работает
+	// по прежней схеме (self-detection).
+	in := processor.Input{Source: src, Plan: plan, SourceKey: srcKey}
+	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, srcKey, plan, src)
+
+	// Обработка в Processor + параллельная публикация в remote.
+	buf, err := s.processAndPublish(ctx, key, in)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +506,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	}
 
 	procStart := time.Now()
-	_, procErr := s.deps.Processor.Process(ctx, in, buf)
+	procRes, procErr := s.deps.Processor.Process(ctx, in, buf)
 	if ctx.Err() != nil {
 		s.metrics.IncProcessorError()
 		s.metrics.ObserveProcessorDuration(time.Since(procStart))
@@ -537,6 +557,27 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	}
 	s.metrics.IncStorageOp(observability.OpResultPublish, false)
 	s.metrics.ObserveStorageDuration(observability.OpResultPublish, false, time.Since(pubStart))
+
+	// largest_ai_asset: best-effort обновление после успешной публикации,
+	// ТОЛЬКО при реальном ИИ-ассете (выход больше родителя с теми же
+	// пропорциями: srcW×srcH → outW×outH). Обычные resize/watermark не
+	// кандидаты → в Metadata даже не входим (ленивость: ни Load, ни Update,
+	// ни singleflight). Пропуск проверяется здесь, ДО Coordinator.Do, чтобы
+	// не создавать на каждый publish. Размеры берём из Result процессора
+	// (0 = неизвестно → ShouldTrackAsAIAsset вернёт false).
+	if procRes != nil && filemeta.ShouldTrackAsAIAsset(
+		procRes.SourceWidth, procRes.SourceHeight,
+		procRes.Width, procRes.Height,
+	) {
+		s.updateLargestAIAsset(
+			ctx,
+			in.SourceKey,
+			key,
+			in.Plan.OutputFormat.String(),
+			procRes.Width, procRes.Height,
+			procRes.SourceWidth, procRes.SourceHeight,
+		)
+	}
 	return buf, nil
 }
 

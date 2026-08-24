@@ -109,5 +109,11 @@ libvips:
 #     disabled-coders:
 #       - "PDF"
 #
+# # metadata: явный локальный корень sidecar-метаданных (metadata.dir),
+# # независимый от хранилищ source/result. Удобно при remote-result
+# # (S3/SFTP/FTP), чтобы указать известный локальный каталог.
+# metadata:
+#   dir: "./data/meta"
+#
 # observability:
 #   log-level: "debug"

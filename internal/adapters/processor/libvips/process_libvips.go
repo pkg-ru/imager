@@ -16,6 +16,8 @@ import (
 	"github.com/davidbyttow/govips/v2/vips"
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
+	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -73,8 +75,11 @@ func (b *libvipsBackend) close() error {
 }
 
 // process загружает изображение из данных, применяет план и экспортирует в
-// требуемый формат.
-func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *processing.ProcessingPlan) ([]byte, error) {
+// требуемый формат. detectionsReady/boxes — готовые боксы детекции из
+// sidecar-кэша (docs/METADATA_STORE.md, раздел 8.3): при true процессор НЕ
+// вызывает ИИ-модель, а использует переданные боксы (в координатах
+// оригинала; для fct/oct транслируются на trim-offset).
+func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error) {
 	// Отмена контекста проверяется перед затратной работой.
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -89,6 +94,13 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, err
 	}
 	defer img.Close()
+
+	// Размеры входа (из заголовка) для Result; для анимации — высота кадра.
+	srcW := img.Width()
+	srcH := img.Height()
+	if ph := img.PageHeight(); img.Pages() > 1 && ph > 0 && srcH > ph {
+		srcH = ph
+	}
 
 	// К2: проверка отмены контекста между стадиями.
 	if ctx.Err() != nil {
@@ -105,7 +117,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, err
 	}
 
-	if err := b.applyOperation(ctx, img, plan); err != nil {
+	if err := b.applyOperation(ctx, img, plan, detectionsReady, boxes); err != nil {
 		return nil, err
 	}
 
@@ -140,7 +152,68 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &backendResult{
+		data:         out,
+		width:        img.Width(),
+		height:       img.Height(),
+		sourceWidth:  srcW,
+		sourceHeight: srcH,
+	}, nil
+}
+
+// prepareRGB извлекает RGB-пиксели источника в размерах ОРИГИНАЛА (без
+// trim) для детекции на уровне приложения (ensureDetections). Реализует
+// backend.prepareRGB; код вынесен из applyDetectionCrop (дизайн 8.3).
+func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processor.RGBFrame, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	// Загружаем без изменений: только для извлечения RGB в исходных размерах.
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatJPEG, processing.FormatJPEG,
+		processing.Size{Original: true}, 1, 80, nil, 0, 0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("libvips: prepareRGB: plan: %w", err)
+	}
+	img, err := b.load(ctx, data, plan)
+	if err != nil {
+		return nil, err
+	}
+	defer img.Close()
+
+	W := img.Width()
+	H := img.Height()
+	if ph := img.PageHeight(); img.Pages() > 1 && ph > 0 && H > ph {
+		H = ph
+	}
+
+	tmp, err := img.Copy()
+	if err != nil {
+		return nil, fmt.Errorf("libvips: prepareRGB: copy: %w", err)
+	}
+	defer tmp.Close()
+	if err := tmp.ToColorSpace(vips.InterpretationSRGB); err != nil {
+		return nil, fmt.Errorf("libvips: prepareRGB: to-srgb: %w", err)
+	}
+	if err := tmp.Cast(vips.BandFormatUchar); err != nil {
+		return nil, fmt.Errorf("libvips: prepareRGB: cast: %w", err)
+	}
+	if H < img.Height() {
+		if err := tmp.ExtractArea(0, 0, W, H); err != nil {
+			return nil, fmt.Errorf("libvips: prepareRGB: extract first frame: %w", err)
+		}
+	}
+	if tmp.Bands() > 3 {
+		if err := tmp.ExtractBand(0, 3); err != nil {
+			return nil, fmt.Errorf("libvips: prepareRGB: extract rgb: %w", err)
+		}
+	}
+	pixels, err := tmp.ToBytes()
+	if err != nil {
+		return nil, fmt.Errorf("libvips: prepareRGB: to-bytes: %w", err)
+	}
+	return &processor.RGBFrame{Pixels: pixels, Width: W, Height: H}, nil
 }
 
 // load загружает изображение из памяти. FailOnError всегда включён;
@@ -337,7 +410,10 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 }
 
 // applyOperation применяет операцию из плана к изображению.
-func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan) error {
+// detectionsReady/boxes — готовые боксы из sidecar-кэша (координаты
+// оригинала); для fct/oct транслируются на trim-offset внутри
+// applyDetectionCrop.
+func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -371,7 +447,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера.
-		if err := b.applyDetectionCrop(ctx, img, plan); err != nil {
+		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes); err != nil {
 			return err
 		}
 	case processing.OpTrim:
@@ -400,11 +476,13 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	case processing.OpObjectCropTrim:
 		// Сначала trim, затем детекторная обрезка. Детекция выполняется на
 		// УЖЕ подрезанном изображении, поэтому координаты боксов детектора
-		// относятся к подрезанному изображению.
+		// относятся к подрезанному изображению. При готовых боксах из кэша
+		// (координаты оригинала) они транслируются на trim-offset внутри
+		// applyDetectionCrop.
 		if err := applyTrim(img, string(plan.Operation)); err != nil {
 			return err
 		}
-		if err := b.applyDetectionCrop(ctx, img, plan); err != nil {
+		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes); err != nil {
 			return err
 		}
 	default:
@@ -445,13 +523,9 @@ func applyTrim(img *vips.ImageRef, op string) error {
 // Для анимированных изображений детекция выполняется по первому кадру
 // (PageHeight), а область применяется ко всему стеку кадров — это
 // согласовано с поведением trim/crop для анимации.
-func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan) error {
+func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-	det := b.opts.Detector
-	if det == nil || !det.Available() {
-		return fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
 	}
 
 	// Размеры кадра: для анимации используем высоту одного кадра.
@@ -461,49 +535,64 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		H = ph
 	}
 
-	// Извлечение RGB-пикселей: работаем на копии, чтобы не менять исходник.
-	tmp, err := img.Copy()
-	if err != nil {
-		return fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
-	}
-	defer tmp.Close()
-	if err := tmp.ToColorSpace(vips.InterpretationSRGB); err != nil {
-		return fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
-	}
-	if err := tmp.Cast(vips.BandFormatUchar); err != nil {
-		return fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
-	}
-	// Для анимации берём только первый кадр (высота H).
-	if H < img.Height() {
-		if err := tmp.ExtractArea(0, 0, W, H); err != nil {
-			return fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
+	// Готовые боксы из sidecar-кэша (координаты ОРИГИНАЛА). Для trim-вариантов
+	// (fct/oct) изображение уже подрезано (applyTrim выполнен до вызова), поэтому
+	// боксы транслируются на trim-offset. Для fc/oc изображение не менялось —
+	// боксы используются напрямую.
+	var detBoxes []detection.Box
+	if detectionsReady {
+		detBoxes = translateBoxes(boxes, W, H)
+	} else {
+		// Self-detection: прежнее поведение (модель вызывается здесь).
+		det := b.opts.Detector
+		if det == nil || !det.Available() {
+			return fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
 		}
-	}
-	// Приводим к 3 каналам (RGB), если есть альфа.
-	if tmp.Bands() > 3 {
-		if err := tmp.ExtractBand(0, 3); err != nil {
-			return fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
-		}
-	}
-	rgb, err := tmp.ToBytes()
-	if err != nil {
-		return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
-	}
 
-	// Детекция.
-	var boxes []detection.Box
-	switch plan.Operation {
-	case processing.OpFaceCrop, processing.OpFaceCropTrim:
-		boxes, err = det.DetectFaces(ctx, rgb, W, H)
-	case processing.OpObjectCrop, processing.OpObjectCropTrim:
-		boxes, err = det.DetectObjects(ctx, rgb, W, H)
-	}
-	if err != nil {
-		return fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err)
+		// Извлечение RGB-пикселей: работаем на копии, чтобы не менять исходник.
+		tmp, err := img.Copy()
+		if err != nil {
+			return fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
+		}
+		defer tmp.Close()
+		if err := tmp.ToColorSpace(vips.InterpretationSRGB); err != nil {
+			return fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
+		}
+		if err := tmp.Cast(vips.BandFormatUchar); err != nil {
+			return fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
+		}
+		// Для анимации берём только первый кадр (высота H).
+		if H < img.Height() {
+			if err := tmp.ExtractArea(0, 0, W, H); err != nil {
+				return fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
+			}
+		}
+		// Приводим к 3 каналам (RGB), если есть альфа.
+		if tmp.Bands() > 3 {
+			if err := tmp.ExtractBand(0, 3); err != nil {
+				return fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
+			}
+		}
+		rgb, err := tmp.ToBytes()
+		if err != nil {
+			return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
+		}
+
+		// Детекция.
+		var err2 error
+		switch plan.Operation {
+		case processing.OpFaceCrop, processing.OpFaceCropTrim:
+			detBoxes, err2 = det.DetectFaces(ctx, rgb, W, H)
+		case processing.OpObjectCrop, processing.OpObjectCropTrim:
+			detBoxes, err2 = det.DetectObjects(ctx, rgb, W, H)
+		}
+		if err2 != nil {
+			return fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err2)
+		}
 	}
 
 	// Выбор области кропа и применение.
-	rect := detection.SelectCrop(boxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	rect := detection.SelectCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
 	if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
 		return fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
 	}
@@ -511,6 +600,39 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		return fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
 	}
 	return nil
+}
+
+// translateBoxes транслирует боксы из координат ОРИГИНАЛА в координаты
+// текущего кадра (после trim). Для fc/oc (без trim) кадр совпадает с
+// оригиналом — боксы используются как есть. Для fct/oct кадр уже подрезан
+// (applyTrim выполнен), поэтому боксы сдвигаются на trim-offset и
+// зажимаются в кадр (clamp идентичен fitRect из detection.box.go).
+func translateBoxes(boxes []filemeta.PixelBox, W, H int) []detection.Box {
+	out := make([]detection.Box, 0, len(boxes))
+	for _, b := range boxes {
+		x := b.X
+		y := b.Y
+		w := b.Width
+		h := b.Height
+		// Clamp в кадр [0,W)x[0,H).
+		if x < 0 {
+			x = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+		if x+w > W {
+			w = W - x
+		}
+		if y+h > H {
+			h = H - y
+		}
+		if w <= 0 || h <= 0 {
+			continue
+		}
+		out = append(out, detection.Box{X: x, Y: y, W: w, H: h, Confidence: 1.0})
+	}
+	return out
 }
 
 // applyAnimation применяет настройки анимации (loop) для анимированных

@@ -153,7 +153,14 @@ func (r *ResultStore) warmCache() {
 			}
 			return err
 		}
-		if info.IsDir() || info.Name() == reservedSegment {
+		// Каталог метаданных sidecar-файлов пропускается ЦЕЛИКОМ
+		// (filepath.SkipDir): meta-файлы не должны попадать в LRU-таблицу
+		// квоты и становиться целями eviction (R9 дизайн-дока). Ранее
+		// "return nil" пропускал только сам каталог, но не его содержимое.
+		if info.IsDir() {
+			if info.Name() == reservedSegment {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, relErr := filepath.Rel(r.root, path)

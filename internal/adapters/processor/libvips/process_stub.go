@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -31,8 +33,12 @@ func newStubBackend(Options) (backend, error) {
 	return &stubBackend{}, nil
 }
 
-func (s *stubBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan) ([]byte, error) {
+func (s *stubBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
 	return nil, fmt.Errorf("%w: process_libvips.go: libvips (govips) is not available in this build; rebuild with -tags libvips", ErrNotCompiled)
+}
+
+func (s *stubBackend) prepareRGB(_ context.Context, _ []byte) (*processor.RGBFrame, error) {
+	return nil, fmt.Errorf("%w: libvips (govips) is not available in this build; rebuild with -tags libvips", ErrNotCompiled)
 }
 
 func (s *stubBackend) close() error { return nil }

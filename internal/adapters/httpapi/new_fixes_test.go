@@ -16,6 +16,7 @@ import (
 // TestHealthHeadNoBody проверяет п.16: для HEAD health-эндпоинты пишут только
 // заголовки (Content-Length), без тела.
 func TestHealthHeadNoBody(t *testing.T) {
+	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -116,6 +117,7 @@ func TestETagCached(t *testing.T) {
 
 // TestMetricsAuthToken проверяет п.17: /metrics защищён токеном.
 func TestMetricsAuthToken(t *testing.T) {
+	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
@@ -146,6 +148,7 @@ func TestMetricsAuthToken(t *testing.T) {
 
 // TestRuntimeMaxBodyBytes проверяет п.7: лимит тела запроса.
 func TestRuntimeMaxBodyBytes(t *testing.T) {
+	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Читаем тело, чтобы MaxBytesHandler применил лимит. Если чтение
@@ -173,7 +176,9 @@ func TestRuntimeMaxBodyBytes(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Тело больше лимита → 413.
-	client := &http.Client{}
+	// Таймаут обязателен: на Windows http.Client без таймаута может
+	// блокироваться на dial навсегда, если соединение не устанавливается.
+	client := &http.Client{Timeout: 5 * time.Second}
 	body := strings.Repeat("x", 100)
 	req, err := http.NewRequest(http.MethodPost, "http://"+rt.Addr().String()+"/", strings.NewReader(body))
 	if err != nil {

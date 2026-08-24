@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -83,16 +84,19 @@ func hasRedPixel(t *testing.T, data []byte) bool {
 // всю переданную область и запоминает размеры кадра, переданного детектору.
 type fakeDetector struct {
 	lastW, lastH int
+	calls        int
 }
 
 func (f *fakeDetector) Available() bool { return true }
 
 func (f *fakeDetector) DetectFaces(_ context.Context, _ []byte, width, height int) ([]detection.Box, error) {
+	f.calls++
 	f.lastW, f.lastH = width, height
 	return []detection.Box{{X: 0, Y: 0, W: width, H: height, Confidence: 1.0}}, nil
 }
 
 func (f *fakeDetector) DetectObjects(_ context.Context, _ []byte, width, height int) ([]detection.Box, error) {
+	f.calls++
 	f.lastW, f.lastH = width, height
 	return []detection.Box{{X: 0, Y: 0, W: width, H: height, Confidence: 1.0}}, nil
 }
@@ -113,7 +117,7 @@ func TestOpSmartCropTrim(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan)
+	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -144,7 +148,7 @@ func TestOpFaceCropTrimUsesTrimmedDimensions(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan)
+	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -177,7 +181,7 @@ func TestOpObjectCropTrimUsesTrimmedDimensions(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan)
+	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -190,5 +194,78 @@ func TestOpObjectCropTrimUsesTrimmedDimensions(t *testing.T) {
 	}
 	if !hasRedPixel(t, out) {
 		t.Error("output lost the red content after trim+object-crop")
+	}
+}
+
+// TestOpFaceCropWithReadyBoxes проверяет, что при DetectionsReady=true
+// процессор НЕ вызывает ИИ-модель, а использует переданные боксы
+// (координаты оригинала; fc — без trim, боксы как есть).
+func TestOpFaceCropWithReadyBoxes(t *testing.T) {
+	det := &fakeDetector{}
+	plan, err := processing.NewProcessingPlan(
+		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	// Красный прямоугольник [20,20)x[80,60) на холсте 120x80. Бокс в
+	// координатах оригинала совпадает с ним.
+	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
+	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if det.calls != 0 {
+		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
+	}
+	w, h := decodePngSize(t, out)
+	if w != 60 || h != 40 {
+		t.Errorf("output size = %dx%d, want 60x40", w, h)
+	}
+	if !hasRedPixel(t, out) {
+		t.Error("output lost the red content after face-crop with ready boxes")
+	}
+}
+
+// TestOpFaceCropTrimReadyBoxesTranslation проверяет трансляцию предзаданных
+// боксов на trim-offset: бокс задан в координатах ОРИГИНАЛА (120x80), а
+// кадр после trim — 60x40 (красный прямоугольник [20,20)x[80,60)).
+func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
+	det := &fakeDetector{}
+	plan, err := processing.NewProcessingPlan(
+		processing.OpFaceCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	// Бокс в координатах оригинала: весь красный прямоугольник.
+	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
+	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if det.calls != 0 {
+		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
+	}
+	w, h := decodePngSize(t, out)
+	if w != 60 || h != 40 {
+		t.Errorf("output size = %dx%d, want 60x40", w, h)
+	}
+	if !hasRedPixel(t, out) {
+		t.Error("output lost the red content after trim+face-crop with ready boxes")
 	}
 }

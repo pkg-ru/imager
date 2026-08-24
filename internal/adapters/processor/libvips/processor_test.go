@@ -12,6 +12,7 @@ import (
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/internal/domain/filemeta"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
@@ -22,7 +23,7 @@ type fakeBackend struct {
 	processed int32
 }
 
-func (f *fakeBackend) process(ctx context.Context, data []byte, _ *processing.ProcessingPlan) ([]byte, error) {
+func (f *fakeBackend) process(ctx context.Context, data []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
 	atomic.AddInt32(&f.processed, 1)
 	if f.block != nil {
 		select {
@@ -34,7 +35,11 @@ func (f *fakeBackend) process(ctx context.Context, data []byte, _ *processing.Pr
 	if f.err != nil {
 		return nil, f.err
 	}
-	return bytes.ToUpper(data), nil
+	return &backendResult{data: bytes.ToUpper(data)}, nil
+}
+
+func (f *fakeBackend) prepareRGB(_ context.Context, _ []byte) (*processor.RGBFrame, error) {
+	return nil, nil // не поддерживается тестовым движком
 }
 
 func (f *fakeBackend) close() error { return nil }
@@ -112,7 +117,11 @@ func TestProcessNilArgs(t *testing.T) {
 // Не зависит от build tags (в отличие от stubBackend из process_stub.go).
 type notCompiledBackend struct{}
 
-func (n *notCompiledBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan) ([]byte, error) {
+func (n *notCompiledBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
+	return nil, ErrNotCompiled
+}
+
+func (n *notCompiledBackend) prepareRGB(_ context.Context, _ []byte) (*processor.RGBFrame, error) {
 	return nil, ErrNotCompiled
 }
 

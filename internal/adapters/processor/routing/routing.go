@@ -64,7 +64,8 @@ type Capability struct {
 }
 
 // Processor — маршрутизатор между основным и fallback процессорами.
-//
+var _ processor.RGBPreparer = (*Processor)(nil)
+
 // Основной (primary) процессор обрабатывает подавляющее большинство
 // операций. Fallback-процессор используется ТОЛЬКО для форматов, которые
 // основной не покрывает (например, когда primary — ImageMagick, а формат
@@ -122,6 +123,19 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 		return nil, err
 	}
 	return engine.Process(ctx, in, out)
+}
+
+// PrepareRGB делегирует подготовку RGB-пикселей выбранному движку.
+// Реализует processor.RGBPreparer (извлечение RGB для детекции на уровне
+// приложения, ensureDetections). Если выбранный движок не поддерживает
+// подготовку RGB — возвращается ошибка (деградация к self-detection).
+func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*processor.RGBFrame, error) {
+	// RGBPreparer не зависит от плана — используем primary-движок.
+	prep, ok := p.primary.(processor.RGBPreparer)
+	if !ok {
+		return nil, errors.New("routing: primary processor does not implement RGBPreparer")
+	}
+	return prep.PrepareRGB(ctx, src)
 }
 
 // engineFor выбирает процессор для плана.

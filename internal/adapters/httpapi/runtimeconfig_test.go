@@ -152,3 +152,96 @@ detection:
 		t.Fatal("expected error for unknown detection.enabled field")
 	}
 }
+
+// TestParseRuntimeConfigMetadataDefault проверяет дефолт metadata.enabled=true
+// при отсутствии секции metadata.
+func TestParseRuntimeConfigMetadataDefault(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if !rc.MetadataEnabled {
+		t.Errorf("MetadataEnabled = false, want default true")
+	}
+}
+
+// TestParseRuntimeConfigMetadataEnabledFalse проверяет явное
+// metadata.enabled: false.
+func TestParseRuntimeConfigMetadataEnabledFalse(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+metadata:
+  enabled: false
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.MetadataEnabled {
+		t.Errorf("MetadataEnabled = true, want false")
+	}
+}
+
+// TestParseRuntimeConfigMetadataDirAccepted проверяет, что metadata.dir теперь
+// ПОДДЕРЖИВАЕТСЯ: явный локальный корень sidecar-хранилища, независимый от
+// хранилищ source/result. Пусто = дефолт (пустая строка → деривация в DI).
+func TestParseRuntimeConfigMetadataDir(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+metadata:
+  dir: /custom/meta
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig with metadata.dir: %v", err)
+	}
+	if rc.MetadataDir != "/custom/meta" {
+		t.Errorf("MetadataDir = %q, want /custom/meta", rc.MetadataDir)
+	}
+	if !rc.MetadataEnabled {
+		t.Errorf("MetadataEnabled = false, want default true")
+	}
+}
+
+// TestParseRuntimeConfigMetadataDirDefault проверяет, что при отсутствии
+// metadata.dir поле остаётся пустым (дефолт <resultRoot>/.meta применяется
+// на уровне DI — app.go).
+func TestParseRuntimeConfigMetadataDirDefault(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte("version: \"1\"\n" +
+		"policy:\n" +
+		"  global:\n" +
+		"    authorization: unsafe\n" +
+		"metadata:\n" +
+		"  enabled: true\n"))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.MetadataDir != "" {
+		t.Errorf("MetadataDir = %q, want empty (default)", rc.MetadataDir)
+	}
+}
+
+// TestParseRuntimeConfigMetadataUnknownField проверяет strict-декодирование:
+// неизвестный ключ в секции metadata — ошибка старта.
+func TestParseRuntimeConfigMetadataUnknownField(t *testing.T) {
+	yaml := `
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+metadata:
+  ttl: 60
+`
+	if _, err := ParseRuntimeConfig([]byte(yaml)); err == nil {
+		t.Fatal("expected error for unknown metadata.ttl field")
+	}
+}

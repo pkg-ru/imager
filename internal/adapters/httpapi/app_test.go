@@ -105,3 +105,59 @@ func TestBuildFullPipeline(t *testing.T) {
 		t.Errorf("Content-Type = %q, want image/png", ct)
 	}
 }
+
+// TestBuildWithMetadataEnabled проверяет сборку pipeline с включённым
+// sidecar-кэшем метаданных (MetadataEnabled + Detector).
+func TestBuildWithMetadataEnabled(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(testConfigYAML))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	cfg, httpCfg := rc.Pipeline, rc.HTTP
+
+	sources := newMemSourceStore()
+	sources.data["img.png"] = []byte("RAWIMAGE")
+	results := newMemResultStore()
+
+	app, err := Build(context.Background(), AppOptions{
+		Config:          cfg,
+		HTTP:            httpCfg,
+		Processor:       fakeProcessor{},
+		Sources:         sources,
+		Results:         results,
+		MetadataEnabled: true,
+		Detector:        fakeDetector{},
+	})
+	if err != nil {
+		t.Fatalf("Build with metadata enabled: %v", err)
+	}
+	if app.Handler == nil || app.Service == nil {
+		t.Fatal("Build returned nil handler/service")
+	}
+}
+
+// TestBuildMetadataDisabledNoDetector проверяет, что без детектора
+// metadata-кэш не создаётся (best-effort, сборка не падает).
+func TestBuildMetadataDisabledNoDetector(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(testConfigYAML))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	cfg, httpCfg := rc.Pipeline, rc.HTTP
+
+	app, err := Build(context.Background(), AppOptions{
+		Config:          cfg,
+		HTTP:            httpCfg,
+		Processor:       fakeProcessor{},
+		Sources:         newMemSourceStore(),
+		Results:         newMemResultStore(),
+		MetadataEnabled: true,
+		Detector:        nil,
+	})
+	if err != nil {
+		t.Fatalf("Build with metadata enabled but no detector: %v", err)
+	}
+	if app.Handler == nil || app.Service == nil {
+		t.Fatal("Build returned nil handler/service")
+	}
+}

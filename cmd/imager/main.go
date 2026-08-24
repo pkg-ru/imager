@@ -36,6 +36,7 @@ import (
 	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
 	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
+	"github.com/pkg-ru/imager/internal/application/ports/detector"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 	"github.com/pkg-ru/imager/internal/observability"
@@ -84,15 +85,18 @@ func main() {
 	// 4) Composition root: собирает pipeline (fail-fast на invalid config).
 	// Хранилища, лимиты и адрес — из единого YAML-конфига.
 	app, err := httpapi.Build(context.Background(), httpapi.AppOptions{
-		Config:         rc.Pipeline,
-		HTTP:           rc.HTTP,
-		SourceDir:      rc.SourceDir,
-		ResultDir:      rc.ResultDir,
-		SourceStorage:  rc.Source,
-		ResultStorage:  rc.Result,
-		Processor:      proc,
-		OutputLimit:    rc.OutputLimit,
-		BufferMaxBytes: rc.BufferMaxBytes,
+		Config:          rc.Pipeline,
+		HTTP:            rc.HTTP,
+		SourceDir:       rc.SourceDir,
+		ResultDir:       rc.ResultDir,
+		SourceStorage:   rc.Source,
+		ResultStorage:   rc.Result,
+		Processor:       proc.Processor,
+		OutputLimit:     rc.OutputLimit,
+		BufferMaxBytes:  rc.BufferMaxBytes,
+		MetadataEnabled: rc.MetadataEnabled,
+		MetadataDir:     rc.MetadataDir,
+		Detector:        proc.Detector,
 	})
 	if err != nil {
 		logger.Errorf("imager: build: %v", err)
@@ -120,7 +124,7 @@ func main() {
 	// процессор, пул буферов).
 	rt.AddCloser(app.Sources)
 	rt.AddCloser(app.Results)
-	rt.AddCloser(proc)
+	rt.AddCloser(proc.Processor)
 	rt.AddCloser(app.Pool)
 
 	// У5: периодическая уборка осиротевших temp-файлов публикации.
@@ -205,6 +209,16 @@ type appLogger interface {
 	Errorf(format string, args ...any)
 }
 
+// processorBuild — результат сборки процессоров: маршрутизатор + детектор
+// (для sidecar-кэша моделей на уровне приложения).
+type processorBuild struct {
+	// Processor — маршрутизатор, реализующий processor.Processor и Close.
+	Processor processor.Processor
+	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция
+	// остаётся в процессоре).
+	Detector detector.Detector
+}
+
 // buildProcessor собирает маршрутизатор процессоров:
 //
 //   - primary: libvips (если скомпилирован с тэком "libvips"). libvips
@@ -215,8 +229,8 @@ type appLogger interface {
 //     запускается вовсе.
 //
 // Возвращает процессор, реализующий processor.Processor и Close, закрывающий
-// все созданные движки.
-func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Processor, error) {
+// все созданные движки, а также детектор для sidecar-кэша моделей.
+func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (*processorBuild, error) {
 	var closers []io.Closer
 
 	// Детектор лиц/объектов (face-crop/object-crop). Создаётся всегда из
@@ -228,6 +242,8 @@ func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Proc
 		ConfidenceThreshold: rc.Detection.ConfidenceThreshold,
 		MaxObjects:          rc.Detection.MaxObjects,
 	})
+	// Порт детекции на уровне приложения (для sidecar-кэша моделей).
+	portDet := detection.NewPortDetector(det)
 
 	// libvips доступен только если скомпилирован с тэком "libvips".
 	lvProc, lvErr := libvips.New(libvips.Options{
@@ -259,7 +275,7 @@ func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Proc
 		if err != nil {
 			return nil, fmt.Errorf("libvips routing: %w", err)
 		}
-		return &closedProcessor{Processor: r, closers: closers}, nil
+		return &processorBuild{Processor: &closedProcessor{Processor: r, closers: closers}, Detector: portDet}, nil
 	}
 
 	// libvips недоступен: warning и fallback на ImageMagick как primary.
@@ -286,7 +302,7 @@ func buildProcessor(logger appLogger, rc *httpapi.RuntimeConfig) (processor.Proc
 	if err != nil {
 		return nil, fmt.Errorf("imagemagick routing: %w", err)
 	}
-	return &closedProcessor{Processor: r, closers: closers}, nil
+	return &processorBuild{Processor: &closedProcessor{Processor: r, closers: closers}, Detector: portDet}, nil
 }
 
 // closedProcessor — обёртка над processor.Processor, закрывающая все
