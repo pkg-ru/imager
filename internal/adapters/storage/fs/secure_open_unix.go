@@ -14,7 +14,7 @@ import (
 // (openat). Это закрывает TOCTOU-окно для последнего компонента атомарно:
 // root открывается один раз как каталог, затем файл открывается по имени
 // внутри него. Промежуточные каталоги root открываются через unix.Open с
-// следованием symlink (best-effort, как раньше).
+// следованием symlink (best-effort).
 //
 // На Linux используется более строгая реализация openat2 с
 // RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS (см. secure_open_linux.go), которая

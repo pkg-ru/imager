@@ -197,7 +197,7 @@ func TestResultStoreDeleteAndStats(t *testing.T) {
 
 // TestResultStoreMetaSegmentIsolated — публичные операции ResultStore
 // отклоняют ключи с зарезервированным сегментом ".meta" (изоляция sidecar-
-// метаданных от пространства ассетов, раздел 7.2 дизайн-дока).
+// метаданных от пространства ассетов).
 func TestResultStoreMetaSegmentIsolated(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewResultStore(t.TempDir())

@@ -51,13 +51,11 @@ type AppOptions struct {
 	BufferMaxBytes int64
 
 	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset
-	// (docs/METADATA_STORE.md, раздел 9).
 	MetadataEnabled bool
 	// MetadataDir — КОРЕНЬ sidecar-хранилища метаданных (metadata.dir):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
 	// source/result. Пусто = дефолт `<эффективный локальный
-	// result-каталог>/.meta` (обратно совместимо; docs/METADATA_STORE.md,
-	// раздел 9). Применяется, только если MetadataEnabled и Detector задан.
+	// result-каталог>/.meta`. Применяется, только если MetadataEnabled и Detector задан.
 	MetadataDir string
 	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция остаётся в процессоре).
 	Detector detector.Detector
@@ -114,7 +112,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		return nil, fmt.Errorf("httpapi: build: processor is required (ImageMagick adapter or fake)")
 	}
 
-	// Sidecar-кэш метаданных (docs/METADATA_STORE.md, раздел 9).
+	// Sidecar-кэш метаданных
 	//
 	// metaRoot задаётся metadata.dir (ЯВНЫЙ локальный путь, независимый от
 	// хранилищ source/result); если не задан — дефолт

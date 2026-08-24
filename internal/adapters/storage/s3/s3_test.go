@@ -539,8 +539,7 @@ func (r *nonThreadSafeReader) Read(p []byte) (int, error) {
 // TestS3MultipartNoRace verifies that publishMultipart reads the shared
 // (non-thread-safe) source serially: parts are sliced by a single producer
 // goroutine, uploaded concurrently, and the assembled object matches the
-// original payload byte-for-byte. With the previous code (concurrent reads of
-// one reader) this test would fail with corrupted data.
+// original payload byte-for-byte.
 func TestS3MultipartPublish(t *testing.T) {
 	f := newFakeS3Handler()
 	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})

@@ -56,15 +56,14 @@ type RuntimeConfig struct {
 	// такими операциями вернёт понятную ошибку).
 	Detection DetectionConfig
 	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset
-	// (docs/METADATA_STORE.md, раздел 9). Дефолт: true. false = поведение
+	// Дефолт: true. false = поведение
 	// идентично текущему (кэш моделей отключён).
 	MetadataEnabled bool
 	// MetadataDir — КОРЕНЬ sidecar-хранилища metаданных (metadata.dir):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
 	// source/result (fs/S3/SFTP/FTP/HTTP). Метаданные ВСЕГДА хранятся
 	// локально по этому пути. Пусто = дефолт `<эффективный локальный
-	// result-каталог>/.meta` (обратно совместимо; docs/METADATA_STORE.md,
-	// раздел 9).
+	// result-каталог>/.meta`.
 	MetadataDir string
 	// OutputLimit — application-level лимит размера выхода (0 = нет).
 	OutputLimit int64
@@ -193,7 +192,7 @@ type RuntimeConfigFile struct {
 	Application ApplicationYAML `yaml:"application"`
 	// Observability — логирование и метрики.
 	Observability ObservabilityYAML `yaml:"observability"`
-	// Metadata — sidecar-кэш моделей и largest_ai_asset (раздел 9).
+	// Metadata — sidecar-кэш моделей и largest_ai_asset.
 	Metadata MetadataYAML `yaml:"metadata"`
 }
 
@@ -392,7 +391,6 @@ type ObservabilityYAML struct {
 }
 
 // MetadataYAML — конфигурация sidecar-кэша моделей и largest_ai_asset
-// (docs/METADATA_STORE.md, раздел 9).
 //
 // Дир расположения НАСТРАИВАЕТСЯ отдельным ключом metadata.dir — явный
 // локальный путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ source/result.
@@ -589,7 +587,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		logLevel = "info"
 	}
 
-	// Metadata: sidecar-кэш моделей и largest_ai_asset (раздел 9).
+	// Metadata: sidecar-кэш моделей и largest_ai_asset.
 	// Дефолт enabled = true. metadata.dir — ЯВНЫЙ локальный корень
 	// sidecar-хранилища (НЕЗАВИСИМ от хранилищ source/result); пусто =
 	// дефолт `<эффективный локальный result-каталог>/.meta` (обратно

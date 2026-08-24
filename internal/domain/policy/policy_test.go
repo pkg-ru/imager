@@ -271,8 +271,8 @@ func TestAuthorizePathDPRRange23(t *testing.T) {
 	}
 }
 
-// TestAuthorizePathCrop проверяет ограничение crop (историческая форма
-// crop=true → белый список {c, ct}).
+// TestAuthorizePathCrop проверяет ограничение crop (crop=true → белый список
+// {c, ct}).
 func TestAuthorizePathCrop(t *testing.T) {
 	p := &Policy{
 		Global: GlobalPolicy{Authorization: AuthUnsafe},

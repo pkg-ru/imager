@@ -59,7 +59,7 @@ func TestNewMetadataStoreUsesExplicitRoot(t *testing.T) {
 }
 
 // TestMetadataLoadLazyCreation — Load отсутствующего файла возвращает
-// (nil, nil) и НЕ создаёт ни каталог .meta, ни файл (ленивое создание T4).
+// (nil, nil) и НЕ создаёт ни каталог .meta, ни файл (ленивое создание).
 func TestMetadataLoadLazyCreation(t *testing.T) {
 	ctx := context.Background()
 	s, resultRoot := newTestMetaStore(t)
@@ -419,8 +419,7 @@ func TestInvalidDomainRejectedOnSave(t *testing.T) {
 }
 
 // TestJanitorKeepsSidecarsAndCleansMetaTemps — janitor не удаляет
-// .meta/**/*.json, но убирает осиротевшие .tmp-meta-* внутри .meta
-// (раздел 7.1 дизайн-дока).
+// .meta/**/*.json, но убирает осиротевшие .tmp-meta-* внутри .meta.
 func TestJanitorKeepsSidecarsAndCleansMetaTemps(t *testing.T) {
 	resultRoot := t.TempDir()
 
@@ -461,7 +460,7 @@ func TestJanitorKeepsSidecarsAndCleansMetaTemps(t *testing.T) {
 }
 
 // TestWarmCacheSkipsMetaDirectory — warmCache не индексирует содержимое
-// .meta: sidecar не попадают в LRU-таблицу квоты/eviction (R9).
+// .meta: sidecar не попадают в LRU-таблицу квоты/eviction.
 func TestWarmCacheSkipsMetaDirectory(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

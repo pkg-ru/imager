@@ -8,7 +8,7 @@ import (
 )
 
 // TestAdmissionControlAllowsUnderLimit проверяет, что при свободном семафоре
-// запрос проходит к нижележащему handler (В11).
+// запрос проходит к нижележащему handler.
 func TestAdmissionControlAllowsUnderLimit(t *testing.T) {
 	ac := NewAdmissionControl(1)
 	var called int
@@ -32,7 +32,7 @@ func TestAdmissionControlAllowsUnderLimit(t *testing.T) {
 
 // TestAdmissionControlRejectsOverLimit проверяет, что при переполнении
 // семафора возвращается HTTP 503 + Retry-After, а следующий handler не
-// вызывается (В11).
+// вызывается.
 func TestAdmissionControlRejectsOverLimit(t *testing.T) {
 	// Семафор ёмкостью 1: первый запрос занимает слот, второй отклоняется.
 	ac := NewAdmissionControl(1)

@@ -28,7 +28,7 @@ func (h *Health) LivenessHandler() http.Handler {
 }
 
 // ReadinessHandler — readiness endpoint (false при shutdown).
-// П.5: дополнительно проверяет готовность ключевых зависимостей (хранилища/
+// Дополнительно проверяет готовность ключевых зависимостей (хранилища/
 // процессора) с кэшированием результата и коротким таймаутом, чтобы не
 // блокировать health-эндпоинт.
 func (h *Health) ReadinessHandler() http.Handler {
@@ -47,7 +47,7 @@ func writeHealth(w http.ResponseWriter, r *http.Request, status int, state strin
 	body, _ := json.Marshal(map[string]string{"status": state})
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	// П.16: для HEAD пишем только заголовки (Content-Length), без тела.
+	// Для HEAD пишем только заголовки (Content-Length), без тела.
 	if r != nil && r.Method == http.MethodHead {
 		return
 	}

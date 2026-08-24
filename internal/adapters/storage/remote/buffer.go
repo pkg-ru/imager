@@ -7,8 +7,8 @@
 // работает до закрытия.
 //
 // Buffer удовлетворяет io.Reader, io.Seeker и io.Closer, поэтому может
-// использоваться там, где раньше использовался Spool (временный файл),
-// без изменения контрактов Artifact/Processor.
+// использоваться в контрактах Artifact/Processor как spillable-замена
+// временного файла.
 package remote
 
 import (
@@ -240,7 +240,7 @@ func (b *Buffer) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Seek реализует io.Seeker (для совместимости; позиция буфера).
+// Seek реализует io.Seeker (позиция буфера).
 func (b *Buffer) Seek(offset int64, whence int) (int64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

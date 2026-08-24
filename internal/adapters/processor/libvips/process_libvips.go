@@ -77,7 +77,7 @@ func (b *libvipsBackend) close() error {
 
 // process загружает изображение из данных, применяет план и экспортирует в
 // требуемый формат. detectionsReady/boxes — готовые боксы детекции из
-// sidecar-кэша (docs/METADATA_STORE.md, раздел 8.3): при true процессор НЕ
+// sidecar-кэша: при true процессор НЕ
 // вызывает ИИ-модель, а использует переданные боксы (в координатах
 // оригинала; для fct/oct транслируются на trim-offset).
 func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error) {
@@ -164,7 +164,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 
 // prepareRGB извлекает RGB-пиксели источника в размерах ОРИГИНАЛА (без
 // trim) для детекции на уровне приложения (ensureDetections). Реализует
-// backend.prepareRGB; код вынесен из applyDetectionCrop (дизайн 8.3).
+// backend.prepareRGB.
 func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processor.RGBFrame, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -219,8 +219,8 @@ func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processo
 
 // load загружает изображение из памяти. FailOnError всегда включён;
 // AutoRotate (EXIF orientation) управляется планом: nil-спецификация =
-// включён (историческое поведение). Для анимированных входов/выходов
-// (включая APNG) загружаются все кадры (NumPages=-1).
+// включён. Для анимированных входов/выходов (включая APNG) загружаются
+// все кадры (NumPages=-1).
 func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	params := vips.NewImportParams()
 	params.AutoRotate.Set(plan.Orientation == nil || plan.Orientation.AutoOrient)
@@ -550,7 +550,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	if detectionsReady {
 		detBoxes = translateBoxes(boxes, W, H)
 	} else {
-		// Self-detection: прежнее поведение (модель вызывается здесь).
+		// Self-detection: модель вызывается здесь.
 		det := b.opts.Detector
 		if det == nil || !det.Available() {
 			return fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)

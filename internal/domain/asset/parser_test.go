@@ -217,9 +217,9 @@ func TestParseInvalid(t *testing.T) {
 		"/",                               // empty
 		"/photos/photo-1-jpg/c-120x80@2",  // missing output format
 		"/photos/photo-1-jpg/c-120x80@2.", // empty output format
-		// Старая дефисная грамматика канонического URL не поддерживается.
+		// Дефисная грамматика канонического URL не поддерживается.
 		"/photos/photo-1-jpg-c-120x80@2.webp",
-		// Старый дефисный preset не поддерживается.
+		// Дефисный preset не поддерживается.
 		"/photos/photo-1-jpg-thumb.webp",
 		// invalid transform
 		"/photos/photo-1-jpg/tc-120x80@2.webp",                 // tc недопустим
@@ -287,8 +287,8 @@ func TestParseRejectsControlChars(t *testing.T) {
 }
 
 func TestParseRejectsInvalidChars(t *testing.T) {
-	// Пробел теперь РАЗРЕШЁН в имени исходника (см. NewSourceName),
-	// поэтому из старого списка остался только реально недопустимый кейс.
+	// Пробел разрешён в имени исходника (см. NewSourceName); проверяется
+	// реально недопустимый control-символ.
 	urls := []string{
 		"/photos/photo\x01-jpg/c-120x80@2.webp", // control char in source name
 	}
@@ -341,7 +341,7 @@ func TestParseAcceptsUnicodeSourceNames(t *testing.T) {
 }
 
 // TestParseRejectsUnsafeSourceNames проверяет, что опасные имена исходников
-// по-прежнему отклоняются: traversal, разделители пути, control-символы.
+// отклоняются: traversal, разделители пути, control-символы.
 func TestParseRejectsUnsafeSourceNames(t *testing.T) {
 	urls := []string{
 		"/../etc/passwd-jpg/c-120x80@2.webp",     // path traversal
@@ -400,8 +400,8 @@ func TestParseRejectsTooLong(t *testing.T) {
 }
 
 func TestParsePresetWithNameContainingX(t *testing.T) {
-	// Регрессия: имя пресета, содержащее строчную "x" (например "max"),
-	// раньше ошибочно разбиралось как размер и отклонялось с 400.
+	// Имя пресета со строчной "x" (например "max") не должно разбираться
+	// как размер.
 	req, err := Parse("/photos/photo-1-jpg/max.webp")
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)

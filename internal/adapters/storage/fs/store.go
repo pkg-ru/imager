@@ -155,8 +155,7 @@ func (r *ResultStore) warmCache() {
 		}
 		// Каталог метаданных sidecar-файлов пропускается ЦЕЛИКОМ
 		// (filepath.SkipDir): meta-файлы не должны попадать в LRU-таблицу
-		// квоты и становиться целями eviction (R9 дизайн-дока). Ранее
-		// "return nil" пропускал только сам каталог, но не его содержимое.
+		// квоты и становиться целями eviction.
 		if info.IsDir() {
 			if info.Name() == reservedSegment {
 				return filepath.SkipDir
@@ -324,7 +323,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		if qErr := quotaErr(err); qErr != nil {
 			return qErr
 		}
-		// В4: отмена контекста во время копирования — возвращаем как есть.
+		// Отмена контекста во время копирования — возвращаем как есть.
 		if ctx != nil {
 			if cErr := ctx.Err(); cErr != nil {
 				return cErr
@@ -371,7 +370,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		}
 		_ = os.Remove(tmpName)
 		if err := fsyncDir(dir); err != nil {
-			// У10: fsync каталога не удался — запись может быть не durable.
+			// fsync каталога не удался — запись может быть не durable.
 			// Возвращаем ошибку, чтобы вызывающий знал о риске потери.
 			r.cache.releaseBytes(written)
 			return fmt.Errorf("fs: fsync dir: %w", err)
@@ -389,7 +388,7 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		return fmt.Errorf("fs: rename temp: %w", err)
 	}
 	if err := fsyncDir(dir); err != nil {
-		// У10: fsync каталога не удался — запись может быть не durable.
+		// fsync каталога не удался — запись может быть не durable.
 		r.cache.releaseBytes(written)
 		return fmt.Errorf("fs: fsync dir: %w", err)
 	}
@@ -450,7 +449,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		return err
 	}
 	if err := fsyncDir(filepath.Dir(full)); err != nil {
-		// У10: fsync каталога не удался — удаление может быть не durable.
+		// fsync каталога не удался — удаление может быть не durable.
 		return fmt.Errorf("fs: fsync dir: %w", err)
 	}
 	r.cache.remove(key)

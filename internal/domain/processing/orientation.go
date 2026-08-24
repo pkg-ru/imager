@@ -131,8 +131,7 @@ func NewOrientationSpec(autoOrient bool, rotate Rotation, flip FlipMode) (*Orien
 	return &OrientationSpec{AutoOrient: autoOrient, Rotate: rotate, Flip: flip}, nil
 }
 
-// DefaultOrientation — спецификация по умолчанию: только EXIF auto-orient
-// (соответствует историческому поведению движков до появления настроек).
+// DefaultOrientation — спецификация по умолчанию: только EXIF auto-orient.
 func DefaultOrientation() *OrientationSpec {
 	return &OrientationSpec{AutoOrient: true}
 }

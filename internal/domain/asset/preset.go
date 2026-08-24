@@ -229,8 +229,7 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 	}
 	// Имя пресета из URL: сначала ищем полное имя (в т.ч. с @dpr-суффиксом,
 	// например "thumb@2"). Если полное имя не найдено, но оно разбивается на
-	// base + @dpr (например "thumb@2" → "thumb" + 2), ищем base — обратная
-	// совместимость: пресет "thumb" с явным @dpr-суффиксом URL.
+	// base + @dpr, ищем base и применяем DPR-суффикс к имени пресета.
 	presetName := req.presetName.String()
 	p, ok := s.byName[presetName]
 	var nameDPR DPR

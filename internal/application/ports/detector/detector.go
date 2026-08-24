@@ -1,5 +1,5 @@
 // Package detector defines the application-level port for AI face/object
-// detection (docs/METADATA_STORE.md, sections 6.2/8.1).
+// detection.
 //
 // The port mirrors internal/adapters/processor/detection.Detector contract
 // but operates on domain types filemeta.FaceInfo/ObjectInfo, so the

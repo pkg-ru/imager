@@ -137,7 +137,7 @@ type backend interface {
 	// process выполняет загрузку, обработку по плану и экспорт. Возвращает
 	// байты результата и размеры. Ошибки контекста/лимитов — через ctx и
 	// LimitError. detectionsReady/boxes — готовые боксы детекции из
-	// sidecar-кэша (docs/METADATA_STORE.md, раздел 8.3): при true процессор
+	// sidecar-кэша: при true процессор
 	// НЕ вызывает ИИ-модель, а использует переданные боксы (в координатах
 	// оригинала).
 	process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error)

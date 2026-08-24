@@ -72,15 +72,15 @@ type Processor struct {
 	policyDir  string
 	policyOnce sync.Once
 	policyErr  error
-	// sem — bounded очередь слотов конкурентности (I3). Вместо простого
-	// канала используем очередь с лимитом ожидающих; при переполнении —
+	// sem — bounded очередь слотов конкурентности. Вместо простого канала
+	// используем очередь с лимитом ожидающих; при переполнении —
 	// быстрый отказ (ErrTooManyConcurrency).
 	sem *shared.Semaphore
-	// baseEnv — кэшированное базовое окружение (I13): os.Environ() +
-	// модульные пути binary. Инвариантно на экземпляр; policyDir добавляется
+	// baseEnv — кэшированное базовое окружение: os.Environ() + модульные пути
+	// binary. Инвариантно на экземпляр; policyDir добавляется
 	// отдельно при каждом запуске.
 	baseEnv []string
-	// metrics — опциональные метрики ожидания слота и запуска (N5).
+	// metrics — опциональные метрики ожидания слота и запуска.
 	metrics *procMetrics
 	closed  bool
 	closeMu sync.Mutex
@@ -88,7 +88,7 @@ type Processor struct {
 
 var _ processor.Processor = (*Processor)(nil)
 
-// ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота (I3).
+// ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота.
 var ErrTooManyConcurrency = errors.New("imagemagick: too many concurrent requests waiting for a slot")
 
 // New создаёт Processor. Если DetectCapabilities включён, обнаруживает
@@ -115,14 +115,14 @@ func New(opts Options) (*Processor, error) {
 		runner:  r,
 		metrics: newProcMetrics(),
 	}
-	// Bounded очередь слотов (I3): лимит ожидающих = concurrency (или 16,
-	// если concurrency не задан). При переполнении — быстрый отказ.
+	// Bounded очередь слотов: лимит ожидающих = concurrency (или 16, если
+	// concurrency не задан). При переполнении — быстрый отказ.
 	conc := opts.Limits.Concurrency
 	if conc <= 0 {
 		conc = 16
 	}
 	p.sem = shared.NewSemaphore(conc, 0, ErrTooManyConcurrency)
-	// Кэшируем базовое окружение один раз (I13).
+	// Кэшируем базовое окружение один раз.
 	p.baseEnv = envForBinary(binary, nil)
 	if opts.Capabilities != nil {
 		p.caps = opts.Capabilities
@@ -144,7 +144,7 @@ func (p *Processor) Capabilities() *Capabilities { return p.caps }
 // Binary возвращает путь к бинарю.
 func (p *Processor) Binary() string { return p.binary }
 
-// Close освобождает ресурсы: удаляет временный каталог policy.xml (I8).
+// Close освобождает ресурсы: удаляет временный каталог policy.xml.
 // Идемпотентен.
 func (p *Processor) Close() error {
 	p.closeMu.Lock()
@@ -193,9 +193,9 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 		return nil, fmt.Errorf("imagemagick: nil plan")
 	}
 
-	// Ожидание слота конкурентности с bounded очередью (I3). При переполнении
+	// Ожидание слота конкурентности с bounded очередью. При переполнении
 	// очереди — быстрый отказ (ErrTooManyConcurrency), а не бесконечное
-	// ожидание. Метрика времени ожидания слота (N5).
+	// ожидание. Метрика времени ожидания слота.
 	slotStart := time.Now()
 	if err := p.sem.Acquire(ctx); err != nil {
 		return nil, err
@@ -216,8 +216,8 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 	defer cancel()
 
-	// Окружение subprocess: базовое окружение кэшировано (I13), добавляем
-	// только policyDir в MAGICK_CONFIGURE_PATH.
+	// Окружение subprocess: базовое окружение кэшировано, добавляем только
+	// policyDir в MAGICK_CONFIGURE_PATH.
 	var env []string
 	policyDir := ""
 	if dir, err := p.ensurePolicy(); err != nil {
@@ -268,7 +268,7 @@ func envWithPolicyDir(base []string, policyDir string) []string {
 	return upsertEnv(base, envConfigurePath, policyDir)
 }
 
-// procMetrics — метрики ожидания слота и запуска (N5).
+// procMetrics — метрики ожидания слота и запуска.
 type procMetrics struct {
 	mu        sync.Mutex
 	slotWaits []time.Duration

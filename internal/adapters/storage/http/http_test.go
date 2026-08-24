@@ -330,7 +330,7 @@ func TestSourceStoreSeekable(t *testing.T) {
 }
 
 // TestRetryBackoffJitter проверяет, что backoff растёт экспоненциально и
-// содержит случайный джиттер (У1): задержка не должна быть детерминированной.
+// содержит случайный джиттер: задержка не должна быть детерминированной.
 func TestRetryBackoffJitter(t *testing.T) {
 	// Первая попытка: base*1 + jitter ∈ [100ms, 200ms).
 	d0 := retryBackoff(0)

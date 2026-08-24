@@ -102,8 +102,8 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 	}
 	args = append(args, src)
 
-	// Ориентация: EXIF auto-orient (nil-спецификация = включён, историческое
-	// поведение) и ручные rotate/flip. Порядок важен: -auto-orient ДО -strip
+	// Ориентация: EXIF auto-orient (nil-спецификация = включён) и ручные
+	// rotate/flip. Порядок важен: -auto-orient ДО -strip
 	// (иначе EXIF Orientation удаляется раньше, чем применяется поворот), а
 	// rotate/flip — ДО -trim/-thumbnail, чтобы поворот/отражение не искажали
 	// геометрию последующих операций.
@@ -140,7 +140,7 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		"-gravity", "center",
 	)
 
-	// Настраиваемые параметры сжатия (I5): webp:method и png:compression-level.
+	// Настраиваемые параметры сжатия: webp:method и png:compression-level.
 	if limits.WebPMethod > 0 {
 		args = append(args, "-define", fmt.Sprintf("webp:method=%d", limits.WebPMethod))
 	}
@@ -148,20 +148,20 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		args = append(args, "-define", fmt.Sprintf("png:compression-level=%d", limits.PNGCompressionLevel))
 	}
 
-	// PNG: исключаем только метаданные-чанки, сохраняя tRNS (прозрачность),
-	// gAMA/cHRM/iCCP (цвет) (I9).
+	// PNG: исключаем только метаданные-чанки, сохраняя tRNS (прозрачность)
+	// и gAMA/cHRM/iCCP (цвет).
 	args = append(args, "-define", "png:exclude-chunk=tEXt,zTXt,eXIf,tIME")
 
 	// Цветовое пространство: полагаемся на автоматическое преобразование
-	// ImageMagick (I10). Принудительный -colorspace sRGB без -profile искажает
+	// ImageMagick. Принудительный -colorspace sRGB без -profile искажает
 	// цвета CMYK-изображений; -strip уже удаляет ICC-профиль.
-	// Для JPEG добавляем sampling-factor (N14).
+	// Для JPEG добавляем sampling-factor.
 	if strings.EqualFold(string(plan.OutputFormat), "jpeg") {
 		args = append(args, "-sampling-factor", "4:2:0")
 	}
 
 	// Анимация: -coalesce/-layers OptimizePlus применяются только для
-	// анимированных форматов (I6).
+	// анимированных форматов.
 	if plan.OutputFormat.Animated() {
 		args = append(args, "-layers", "OptimizePlus")
 		args = append(args, "-coalesce")
@@ -217,11 +217,11 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 			plan.Operation == processing.OpObjectCrop
 		resize := resizeString(plan.Size.Width, plan.Size.Height, crop)
 		args = append(args, "-thumbnail", resize)
-		// -extent применяется только для crop-операций (I7): для OpResize
+		// -extent применяется только для crop-операций: для OpResize
 		// letterboxing нежелателен, т.к. добавляет поля с фоном по умолчанию.
 		if crop {
-			// Явный фон для extent (N12): none = прозрачный для PNG/WebP/GIF,
-			// для JPEG прозрачность невозможна — используем белый.
+			// Явный фон для extent: none = прозрачный для PNG/WebP/GIF, для
+			// JPEG прозрачность невозможна — используем белый.
 			bg := "none"
 			if strings.EqualFold(string(plan.OutputFormat), "jpeg") {
 				bg = "white"
@@ -231,8 +231,8 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		}
 	}
 
-	// Draft-декодирование (I11): при уменьшении изображения декодируем
-	// только необходимое разрешение (jpeg:size). Применяется только когда
+	// Draft-декодирование: при уменьшении изображения декодируем только
+	// необходимое разрешение (jpeg:size). Применяется только когда
 	// обе стороны целевого размера заданы и меньше потенциального источника.
 	// При повороте на 90/270 стороны меняются местами: jpeg:size задаёт
 	// разрешение ДО поворота, поэтому ширина/высота свапаются.

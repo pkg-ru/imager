@@ -16,14 +16,14 @@ import (
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
 
-// Ограничения sidecar-хранилища (docs/METADATA_STORE.md, раздел 5):
+// Ограничения sidecar-хранилища:
 // максимум элементов на срез проверяется в filemeta.Validate, здесь —
 // лимит размера файла при чтении (защита от аномальных/подменённых файлов).
 const (
 	// maxMetaFileBytes — максимальный размер sidecar-файла при чтении (256 KiB).
 	maxMetaFileBytes = 256 << 10
 	// metaTempPrefix — префикс temp-файлов записи; попадает под уборку
-	// существующего janitor (префикс ".tmp-", раздел 7.1 дизайн-дока).
+	// существующего janitor (префикс ".tmp-").
 	metaTempPrefix = ".tmp-meta-"
 	// metaFileExt — суффикс sidecar-файла.
 	metaFileExt = ".json"
@@ -33,7 +33,7 @@ const (
 
 // MetadataStore — filesystem-реализация metadata.Store: локальное
 // sidecar-хранилище метаданных родительских файлов
-// (`<metaRoot>/<srcKey>.json`, docs/METADATA_STORE.md, разделы 4 и 7).
+// (`<metaRoot>/<srcKey>.json`.
 //
 // metaRoot — корень sidecar-хранилища, задаётся ЯВНО (metadata.dir из
 // конфигурации, либо по умолчанию `<локальный result-каталог>/.meta`).
@@ -61,7 +61,7 @@ type MetadataStore struct {
 var _ metadata.Store = (*MetadataStore)(nil)
 
 // NewMetadataStore создаёт MetadataStore с корнем метаданных metaRoot.
-// Каталог создаётся лениво при первой записи (ленивое создание T4).
+// Каталог создаётся лениво при первой записи.
 func NewMetadataStore(metaRoot string) (*MetadataStore, error) {
 	if metaRoot == "" {
 		return nil, fmt.Errorf("fs: metadata store: empty meta root")
@@ -89,7 +89,7 @@ func (s *MetadataStore) metaPath(srcKey string) (string, error) {
 		return "", err
 	}
 	// Суффикс .json не может породить ".." или завершающую точку
-	// (последний символ имени — всегда 'n'), см. раздел 4 дизайн-дока.
+	// (последний символ имени — всегда 'n').
 	full := filepath.Join(s.metaRoot, rel+metaFileExt)
 	if !within(s.metaRoot, full) {
 		return "", errUnsafeContainment()
@@ -222,7 +222,7 @@ func (s *MetadataStore) Save(_ context.Context, srcKey string, m *filemeta.FileM
 		return fmt.Errorf("fs: metadata rename temp: %w", err)
 	}
 	if err = fsyncDir(dir); err != nil {
-		// У10: fsync каталога не удался — запись может быть не durable.
+		// fsync каталога не удался — запись может быть не durable.
 		return fmt.Errorf("fs: metadata fsync dir: %w", err)
 	}
 	return nil
@@ -248,7 +248,7 @@ func (s *MetadataStore) updateLocked(ctx context.Context, srcKey string, fn meta
 	current, err := s.Load(ctx, srcKey)
 	if err != nil {
 		// ErrSchemaTooNew не трогаем: чужие данные более новой версии
-		// перезаписывать запрещено (раздел 5 дизайн-дока).
+		// перезаписывать запрещено.
 		return err
 	}
 	if current == nil {
@@ -267,7 +267,7 @@ func (s *MetadataStore) updateLocked(ctx context.Context, srcKey string, fn meta
 		// Ленивое создание: писать нечего — файл не создаётся.
 		return nil
 	}
-	// Семантика updated_at: момент последней успешной записи (раздел 5);
+	// Семантика updated_at: момент последней успешной записи;
 	// CreatedAt сохраняется из загруженного файла.
 	current.UpdatedAt = time.Now().UTC()
 	return s.Save(ctx, srcKey, current)

@@ -8,10 +8,9 @@ import (
 	"github.com/pkg-ru/imager/internal/observability"
 )
 
-// MetricsAuthConfig — конфигурация защиты /metrics endpoint (п.17).
-// По умолчанию выключена (для совместимости). При включении /metrics
-// доступен только при наличии валидного токена (X-Metrics-Token) или с
-// разрешённого IP.
+// MetricsAuthConfig — конфигурация защиты /metrics endpoint.
+// По умолчанию выключена. При включении /metrics доступен только при наличии
+// валидного токена (X-Metrics-Token) или с разрешённого IP.
 type MetricsAuthConfig struct {
 	// Token — bearer-токен для доступа к /metrics (пусто = не требуется).
 	Token string
@@ -20,8 +19,8 @@ type MetricsAuthConfig struct {
 }
 
 // NewMuxWithAdmission собирает корневой http.Handler с опциональной защитой
-// /metrics (п.17) и admission control (В11). maxConcurrent — максимальное
-// число одновременно обрабатываемых asset-запросов (0 = без ограничения).
+// /metrics и admission control. maxConcurrent — максимальное число
+// одновременно обрабатываемых asset-запросов (0 = без ограничения).
 // Admission применяется ТОЛЬКО к asset handler ("/"), не к health/metrics,
 // чтобы liveness/readiness оставались доступными при перегрузке.
 func NewMuxWithAdmission(h *Handler, health *Health, metrics observability.Metrics, auth MetricsAuthConfig, maxConcurrent int) http.Handler {
@@ -31,7 +30,7 @@ func NewMuxWithAdmission(h *Handler, health *Health, metrics observability.Metri
 	mux.Handle("/metrics", protectMetrics(observability.MetricsHandler(), auth))
 	// Корневой путь и всё остальное — через handler (asset URL, fallback/404).
 	// Admission control ограничивает число одновременно обрабатываемых
-	// asset-запросов (В11): при переполнении семафора — HTTP 503 + Retry-After.
+	// asset-запросов: при переполнении семафора — HTTP 503 + Retry-After.
 	var assetHandler http.Handler = h
 	if maxConcurrent > 0 {
 		assetHandler = NewAdmissionControl(maxConcurrent).Wrap(h)
@@ -39,7 +38,7 @@ func NewMuxWithAdmission(h *Handler, health *Health, metrics observability.Metri
 	mux.Handle("/", assetHandler)
 
 	// Observability middleware поверх всего mux (request ID + request metrics).
-	// gzip (У2) применяется к JSON-ответам (error envelope) при поддержке
+	// gzip применяется к JSON-ответам (error envelope) при поддержке
 	// клиентом Accept-Encoding: gzip.
 	return observability.NewMiddleware(metrics, gzipHandler(mux))
 }

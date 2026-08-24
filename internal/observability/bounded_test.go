@@ -59,8 +59,8 @@ func TestNewStdMetricsIdempotent(t *testing.T) {
 	m1 := NewStdMetrics()
 	m1.IncRequests(Status2xx)
 
-	// Повторный вызов не должен паниковать (раньше падал с "Reuse of
-	// exported var name").
+	// Повторный вызов не должен паниковать из-за дублирующейся регистрации
+	// expvar-переменных.
 	m2 := NewStdMetrics()
 	m2.IncRequests(Status2xx)
 

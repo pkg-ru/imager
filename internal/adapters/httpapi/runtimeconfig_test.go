@@ -189,9 +189,9 @@ metadata:
 	}
 }
 
-// TestParseRuntimeConfigMetadataDirAccepted проверяет, что metadata.dir теперь
-// ПОДДЕРЖИВАЕТСЯ: явный локальный корень sidecar-хранилища, независимый от
-// хранилищ source/result. Пусто = дефолт (пустая строка → деривация в DI).
+// TestParseRuntimeConfigMetadataDirAccepted проверяет, что metadata.dir задаёт
+// явный локальный корень sidecar-хранилища, независимый от хранилищ
+// source/result. Пусто = дефолт (пустая строка → деривация в DI).
 func TestParseRuntimeConfigMetadataDir(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"

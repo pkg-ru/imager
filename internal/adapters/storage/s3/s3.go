@@ -183,9 +183,9 @@ func (o Options) key(key object.ObjectKey) (string, error) {
 
 // metadataCache — потокобезопасный in-memory TTL-кэш метаданных объектов.
 // Ключ — полный S3-ключ, значение — метаданные + время записи.
-// Ограничен по числу ключей (LRU, В3), чтобы не расти безгранично при шквале
+// Ограничен по числу ключей (LRU), чтобы не расти безгранично при шквале
 // уникальных ключей. LRU-поведение (touch/evict) делегировано generic-пакету
-// adapters/lru; TTL-логика осталась тонкой обёрткой поверх него.
+// adapters/lru; TTL-логика реализована тонкой обёрткой поверх него.
 type metadataCache struct {
 	ttl time.Duration
 	lru *lru.Cache[string, cacheEntry]

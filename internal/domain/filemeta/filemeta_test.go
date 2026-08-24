@@ -171,8 +171,8 @@ func TestClone(t *testing.T) {
 	}
 }
 
-// TestJSONRoundTrip проверяет соответствие JSON-схеме из дизайн-дока:
-// snake_case-теги, omitempty для отсутствующих данных.
+// TestJSONRoundTrip проверяет JSON-схему: snake_case-теги, omitempty для
+// отсутствующих данных.
 func TestJSONRoundTrip(t *testing.T) {
 	src := &FileMetadata{
 		SchemaVersion:  CurrentSchemaVersion,

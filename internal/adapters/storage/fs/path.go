@@ -10,9 +10,6 @@
 //     (см. secure_open_*.go). Эта проверка best-effort: между проверкой и
 //     операцией возможен TOCTOU, поэтому на Unix файлы открываются с
 //     O_NOFOLLOW, а на Windows используется запрет reparse points.
-//
-// FTP-адаптер в будущем реализует только SourceStore; S3/external disk —
-// те же storage.ResultStore/SourceStore контракты.
 package fs
 
 import (

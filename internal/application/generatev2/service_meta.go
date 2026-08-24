@@ -12,7 +12,7 @@ import (
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
-// metaFlightPrefix — префикс singleflight-ключей метаданных (дизайн 8.2).
+// metaFlightPrefix — префикс singleflight-ключей метаданных.
 const metaFlightPrefix = "meta:"
 
 // detectionsResult — результат ensureDetections: готовые боксы в координатах
@@ -22,7 +22,7 @@ type detectionsResult struct {
 	boxes []filemeta.PixelBox
 }
 
-// metaFlightKey строит singleflight-ключ "meta:"+srcKey (дизайн 8.2).
+// metaFlightKey строит singleflight-ключ "meta:"+srcKey.
 func metaFlightKey(srcKey object.ObjectKey) object.ObjectKey {
 	return object.ObjectKey(metaFlightPrefix + string(srcKey))
 }
@@ -62,10 +62,10 @@ func planNeedsObjects(plan *processing.ProcessingPlan) bool {
 //   - кэш/детектор отключён или план не требует детекции → (false, nil);
 //   - sidecar-кэш дал боксы                              → (true, боксы оригинала);
 //   - сбой любой стадии                                  → лог + (false, nil):
-//     процессор работает по прежней схеме (self-detection, деградация 8.2).
+//     процессор работает в режиме self-detection (деградация 8.2).
 //
 // Модель вызывается ровно один раз на родителя под keyed singleflight
-// "meta:"+srcKey; sidecar создаётся лениво (T4: только при реальных данных).
+// "meta:"+srcKey; sidecar создаётся лениво (только при реальных данных).
 func (s *Service) ensureDetections(
 	ctx context.Context,
 	srcKey object.ObjectKey,
@@ -110,7 +110,7 @@ func (s *Service) ensureDetections(
 //     «проверено, пусто» (non-nil, len==0) не вызывает модель повторно;
 //  3. Save результатов под уже удерживаемой блокировкой "meta:"+srcKey
 //     (одна операция на parent; повторного Load не происходит);
-//  4. итоговые боксы в координатах ОРИГИНАЛА (дизайн 8.3).
+//  4. итоговые боксы в координатах ОРИГИНАЛА.
 func (s *Service) ensureDetectionsLocked(
 	ctx context.Context,
 	srcKey object.ObjectKey,
@@ -177,7 +177,7 @@ func (s *Service) ensureDetectionsLocked(
 		}
 	}
 
-	// Исходные боксы в координатах ОРИГИНАЛА (дизайн 8.3, 8.2).
+	// Исходные боксы в координатах ОРИГИНАЛА.
 	boxes := make([]filemeta.PixelBox, 0, len(m.Faces)+len(m.Objects))
 	if needFaces {
 		for _, f := range m.Faces {
@@ -193,14 +193,13 @@ func (s *Service) ensureDetectionsLocked(
 }
 
 // updateLargestAIAsset — best-effort обновление largest_ai_asset после
-// успешной публикации ассета (дизайн 8.4). Ошибки логируются и не влияют
-// на ответ клиенту.
+// успешной публикации ассета. Ошибки логируются и не влияют на ответ клиенту.
 //
-// ЛЕНИВОСТЬ (пункт 3): вызывающий код выполняет проверку критерия кандидата
+// Вызывающий код выполняет проверку критерия кандидата
 // (filemeta.ShouldTrackAsAIAsset) ДО вызова, поэтому обычные resize/watermark
 // вообще не входят сюда и не входят в Coordinator.Do. Здесь остаётся только
 // страховочный guard: nil-store или не-кандидат → возврат без записи.
-// При нулевых SourceWidth/SourceHeight шаг пропускается (дизайн 8.3/8.4).
+// При нулевых SourceWidth/SourceHeight шаг пропускается.
 func (s *Service) updateLargestAIAsset(
 	ctx context.Context,
 	srcKey, assetKey object.ObjectKey,

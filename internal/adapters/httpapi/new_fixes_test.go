@@ -13,7 +13,7 @@ import (
 	"github.com/pkg-ru/imager/internal/domain/asset"
 )
 
-// TestHealthHeadNoBody проверяет п.16: для HEAD health-эндпоинты пишут только
+// TestHealthHeadNoBody проверяет, что для HEAD health-эндпоинты пишут только
 // заголовки (Content-Length), без тела.
 func TestHealthHeadNoBody(t *testing.T) {
 	requireLocalhostTCP(t)
@@ -55,7 +55,7 @@ func (panicGenerator) Generate(context.Context, *asset.Request) (*generatev2.Res
 	panic("boom")
 }
 
-// TestHandlerPanicReturns500 проверяет п.2: паника в генераторе не роняет
+// TestHandlerPanicReturns500 проверяет, что паника в генераторе не роняет
 // процесс, а возвращает 500.
 func TestHandlerPanicReturns500(t *testing.T) {
 	h := newTestHandler(t, panicGenerator{}, baseConfig())
@@ -69,7 +69,7 @@ func TestHandlerPanicReturns500(t *testing.T) {
 	}
 }
 
-// TestHandlerGenerateTimeout проверяет п.18: превышение GenerateTimeout
+// TestHandlerGenerateTimeout проверяет, что превышение GenerateTimeout
 // маппится в 504 (OutcomeCanceled).
 func TestHandlerGenerateTimeout(t *testing.T) {
 	cfg := baseConfig()
@@ -89,7 +89,7 @@ func TestHandlerGenerateTimeout(t *testing.T) {
 	}
 }
 
-// TestETagCached проверяет п.15: ETag стабилен и кэшируется (одинаков для
+// TestETagCached проверяет, что ETag стабилен и кэшируется (одинаков для
 // повторных запросов).
 func TestETagCached(t *testing.T) {
 	gen := newFakeGenerator()
@@ -115,7 +115,7 @@ func TestETagCached(t *testing.T) {
 	}
 }
 
-// TestMetricsAuthToken проверяет п.17: /metrics защищён токеном.
+// TestMetricsAuthToken проверяет, что /metrics защищён токеном.
 func TestMetricsAuthToken(t *testing.T) {
 	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
@@ -146,7 +146,7 @@ func TestMetricsAuthToken(t *testing.T) {
 	}
 }
 
-// TestRuntimeMaxBodyBytes проверяет п.7: лимит тела запроса.
+// TestRuntimeMaxBodyBytes проверяет лимит тела запроса.
 func TestRuntimeMaxBodyBytes(t *testing.T) {
 	requireLocalhostTCP(t)
 	rt, err := NewRuntime(RuntimeOptions{

@@ -8,9 +8,9 @@ import (
 )
 
 // gzipWriter — обёртка ResponseWriter, сжимающая ответ gzip, если клиент
-// поддерживает Accept-Encoding: gzip и Content-Type — application/json
-// (У2). Сжатие применяется только к JSON-ответам (error envelope), чтобы
-// не тратить CPU на уже сжатые изображения.
+// поддерживает Accept-Encoding: gzip и Content-Type — application/json.
+// Сжатие применяется только к JSON-ответам (error envelope), чтобы не тратить
+// CPU на уже сжатые изображения.
 type gzipWriter struct {
 	http.ResponseWriter
 	// acceptEncoding — значение Accept-Encoding из запроса.

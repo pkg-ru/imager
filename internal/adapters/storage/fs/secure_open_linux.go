@@ -21,10 +21,10 @@ import (
 // открывается один раз как каталог, затем весь относительный путь
 // резолвится ядром в одном системном вызове относительно rootFd.
 //
-// Если openat2 недоступен (старое ядро: ENOSYS/EINVAL), выполняется fallback
-// на openat(2) с O_NOFOLLOW: он атомарно защищает последний компонент и
-// привязывает путь к rootFd (промежуточные каталоги — best-effort, как
-// раньше).
+// Если openat2 недоступен (ядро без его поддержки: ENOSYS/EINVAL),
+// выполняется fallback на openat(2) с O_NOFOLLOW: он атомарно защищает
+// последний компонент и привязывает путь к rootFd (промежуточные каталоги —
+// best-effort).
 func secureOpenFile(root string, rel string, flag int, perm os.FileMode) (*os.File, error) {
 	full := filepath.Join(root, rel)
 	rootFd, err := unix.Open(root, unix.O_DIRECTORY|unix.O_RDONLY|unix.O_CLOEXEC, 0)

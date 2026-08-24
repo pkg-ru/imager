@@ -1,8 +1,7 @@
-// Command imager — composition root нового production pipeline.
+// Command imager — composition root production pipeline.
 //
-// Собирает новый HTTP adapter/runtime (internal/adapters/httpapi) поверх
+// Собирает HTTP adapter/runtime (internal/adapters/httpapi) поверх
 // application/generatev2, domain/asset, policy/config и storage-адаптеров.
-// НЕ подключает legacy server, legacy handler или legacy config.
 //
 // Конфигурация: полностью из YAML-файлов в каталоге, заданном единственной
 // env-переменной IMAGER_CONFIG_DIR (${dir}/setting.yaml + опциональный
@@ -120,14 +119,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// П.6: регистрируем ресурсы для закрытия при Shutdown (хранилища,
-	// процессор, пул буферов).
+	// Регистрируем ресурсы для закрытия при Shutdown (хранилища, процессор,
+	// пул буферов).
 	rt.AddCloser(app.Sources)
 	rt.AddCloser(app.Results)
 	rt.AddCloser(proc.Processor)
 	rt.AddCloser(app.Pool)
 
-	// У5: периодическая уборка осиротевших temp-файлов публикации.
+	// Периодическая уборка осиротевших temp-файлов публикации.
 	// Запускаем janitor для каталога результатов (каждые 5 минут, файлы
 	// старше 1 часа). Останавливается при shutdown через rt.AddCloser.
 	janitor, jErr := fs.NewJanitor(rc.ResultDir, fs.JanitorOptions{
@@ -146,14 +145,14 @@ func main() {
 
 	// 6) Health (readiness + liveness) + metrics привязаны к runtime.
 	health := httpapi.NewHealth(rt)
-	// Admission control (В11): ограничиваем число одновременно обрабатываемых
+	// Admission control: ограничиваем число одновременно обрабатываемых
 	// asset-запросов лимитом из конфигурации (http.max-concurrent-requests).
 	rt.SetHandler(httpapi.NewMuxWithAdmission(app.Handler, health, metrics,
 		httpapi.MetricsAuthConfig{}, rc.HTTP.MaxConcurrentRequests))
 
 	logger.Infof("imager: listening on %s", rt.Addr())
 
-	// 7) Запуск сервера в фоне. П.2: воркер защищён от паники.
+	// 7) Запуск сервера в фоне; воркер защищён от паники.
 	serveErr := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -382,7 +381,7 @@ func slogLevel(s string) slog.Level {
 }
 
 // janitorCloser адаптирует *fs.Janitor к io.Closer для rt.AddCloser:
-// при shutdown останавливает периодическую уборку (У5).
+// при shutdown останавливает периодическую уборку.
 type janitorCloser struct {
 	j *fs.Janitor
 }

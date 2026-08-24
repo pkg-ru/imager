@@ -201,7 +201,7 @@ func (s *SourceStore) do(ctx context.Context, method, u string) (*http.Response,
 		if ctx.Err() != nil {
 			break
 		}
-		// Экспоненциальный backoff с джиттером (У1): при синхронных сбоях
+		// Экспоненциальный backoff с джиттером: при синхронных сбоях
 		// множество клиентов бьют в источник одновременно (thundering herd),
 		// поэтому к экспоненциальной задержке добавляем случайный разброс.
 		backoff := retryBackoff(i)

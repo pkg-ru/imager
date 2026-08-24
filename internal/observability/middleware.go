@@ -42,7 +42,7 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := WithRequestID(r.Context(), id)
 	w.Header().Set(RequestIDHeader, id)
 
-	// Gauge http_inflight (У8): инкрементируем на время обработки запроса.
+	// Gauge http_inflight: инкрементируем на время обработки запроса.
 	// Используем type-assert, чтобы не расширять публичный интерфейс Metrics.
 	if sm, ok := m.metrics.(*StdMetrics); ok {
 		sm.SetHttpInflight(sm.httpInflight.Value() + 1)
@@ -69,7 +69,7 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // statusWriter захватывает код статуса ответа.
 //
-// П.14: переопределяет Write и Flush, чтобы гарантировать корректный захват
+// Переопределяет Write и Flush, чтобы гарантировать корректный захват
 // статуса, даже если handler пишет body без явного WriteHeader (тогда
 // неявный статус 200 должен быть зафиксирован).
 type statusWriter struct {

@@ -95,8 +95,8 @@ func NopMetrics() Metrics { return nopMetrics{} }
 
 // histogram — простая гистограмма с фиксированными границами бакетов.
 //
-// П.12: реализация lock-free — счётчики бакетов, сумма и число наблюдений
-// хранятся в atomic-переменных, без мьютекса в горячем пути (observe).
+// Реализация lock-free: счётчики бакетов, сумма и число наблюдений хранятся
+// в atomic-переменных, без мьютекса в горячем пути (observe).
 // Агрегация (String/вывод) читает атомарно.
 //
 // Доп.: сумма хранится в наносекундах (int64), чтобы не терять точность
@@ -142,12 +142,12 @@ type StdMetrics struct {
 	procError   *expvar.Int
 	procDur     *histogram
 	storageOps  *expvar.Map // op -> success/error counters
-	// storageDur — bounded registry гистограмм длительности storage ops
-	// (п.11). Ключ — фиксированный набор "op_success"/"op_error". sync.Map
+	// storageDur — bounded registry гистограмм длительности storage ops.
+	// Ключ — фиксированный набор "op_success"/"op_error". sync.Map
 	// даёт lock-free чтение (LoadOrStore) без глобального мьютекса.
 	storageDur sync.Map // string -> *histogram
 
-	// Gauges (У8): текущие значения, а не накопительные счётчики.
+	// Gauges: текущие значения, а не накопительные счётчики.
 	httpInflight     *expvar.Int // число обрабатываемых HTTP-запросов
 	singleflightKeys *expvar.Int // число ключей в singleflight
 	bufferPoolBytes  *expvar.Int // занятый бюджет buffer pool (байты)
@@ -172,7 +172,7 @@ func NewStdMetrics() *StdMetrics {
 		procDur:     getOrNewHistogram("imager_processor_duration_seconds"),
 		storageOps:  getOrNewMap("imager_storage_ops"),
 
-		// Gauges (У8): публикуем как expvar-переменные.
+		// Gauges публикуются как expvar-переменные.
 		httpInflight:     getOrNewInt("imager_http_inflight"),
 		singleflightKeys: getOrNewInt("imager_singleflight_keys"),
 		bufferPoolBytes:  getOrNewInt("imager_buffer_pool_bytes"),
@@ -281,8 +281,8 @@ func (m *StdMetrics) ObserveStorageDuration(op StorageOp, err bool, d time.Durat
 }
 
 func (m *StdMetrics) storageDurFor(key string) *histogram {
-	// П.11: sync.Map даёт lock-free чтение (LoadOrStore) без глобального
-	// мьютекса. Кардинальность ограничена фиксированным набором op.
+	// sync.Map даёт lock-free чтение (LoadOrStore) без глобального мьютекса.
+	// Кардинальность ограничена фиксированным набором op.
 	if v, ok := m.storageDur.Load(key); ok {
 		return v.(*histogram)
 	}
@@ -292,7 +292,7 @@ func (m *StdMetrics) storageDurFor(key string) *histogram {
 	return actual.(*histogram)
 }
 
-// Gauges (У8): методы обновления текущих значений. Используются адаптерами
+// Gauges: методы обновления текущих значений. Используются адаптерами
 // (middleware, singleflight, buffer pool, cache) для публикации текущего
 // состояния, а не накопительных счётчиков.
 

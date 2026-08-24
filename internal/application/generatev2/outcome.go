@@ -1,8 +1,8 @@
 // Package generatev2 реализует production application use case "GenerateAsset"
-// поверх новых domain packages (asset, policy, processing, object) и узких
-// портов (storage.SourceStore/ResultStore, coordinator.Keyed, processor).
+// поверх domain packages (asset, policy, processing, object) и узких портов
+// (storage.SourceStore/ResultStore, coordinator.Keyed, processor).
 //
-// В отличие от legacy generate, сервис:
+// Сервис:
 //   - принимает уже parsed/validated asset.Request и скомпилированную policy;
 //   - выполняет cache lookup без гонки Exists+Open (только Lookup/Open);
 //   - выполняет policy decision, source lookup, keyed singleflight/coordinator

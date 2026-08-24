@@ -87,8 +87,8 @@ func withRetryPolicy[T any](ctx context.Context, s *store, policy func(error) bo
 }
 
 // neverRetry — политика повтора Publish: ни одна ошибка не ретраится,
-// операция выполняется ровно одной попыткой (историческое поведение
-// метода: внутренние ошибки возвращаются сразу).
+// операция выполняется ровно одной попыткой (внутренние ошибки возвращаются
+// сразу).
 func neverRetry(error) bool { return false }
 
 // withRetry — retry-каркас операций: acquire -> needDiscard defer -> op ->

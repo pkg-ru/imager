@@ -430,8 +430,7 @@ func (r *ResultStore) publishAttempt(full string, key object.ObjectKey, src io.R
 		dst, err := cl.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
 			if isExistErr(err) {
-				// Историческое поведение: бизнес-отказ не закрывает
-				// соединение каркасом.
+				// Бизнес-отказ не закрывает соединение каркасом.
 				cl.detach()
 				return remote.Conflict(key)
 			}

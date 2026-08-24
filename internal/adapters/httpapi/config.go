@@ -1,6 +1,5 @@
-// Package httpapi реализует новый production HTTP-адаптер поверх
-// application/generatev2 и domain/asset. Это изолированный adapter/runtime
-// пакет: он НЕ подключает legacy handler, legacy server или legacy config.
+// Package httpapi реализует production HTTP-адаптер поверх
+// application/generatev2 и domain/asset.
 //
 // Адаптер реализует URL grammar, GET/HEAD/OPTIONS,
 // реальные HTTP-статусы с типизированным error envelope, ETag/conditional
@@ -72,8 +71,8 @@ type Config struct {
 	Metrics observability.Metrics
 
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
-	// HTTP-запросов (admission control, В11). 0 = без ограничения. При
-	// превышении лимита возвращается HTTP 503 + Retry-After: 1.
+	// HTTP-запросов (admission control). 0 = без ограничения. При превышении
+	// лимита возвращается HTTP 503 + Retry-After: 1.
 	MaxConcurrentRequests int
 }
 

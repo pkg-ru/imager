@@ -32,13 +32,13 @@ var errOutputLimit = errors.New("output exceeds limit")
 var errLimitExceeded = errors.New("policy limit exceeded")
 
 // publishRetryBase — начальная задержка экспоненциального backoff при
-// retry публикации (I4).
+// retry публикации.
 const publishRetryBase = 50 * time.Millisecond
 
-// publishRetryMax — максимальная задержка backoff при retry публикации (I4).
+// publishRetryMax — максимальная задержка backoff при retry публикации.
 const publishRetryMax = 2 * time.Second
 
-// publishRetryAttempts — максимальное число попыток публикации (I4).
+// publishRetryAttempts — максимальное число попыток публикации.
 const publishRetryAttempts = 3
 
 // Deps — зависимости use case.
@@ -70,7 +70,7 @@ type Deps struct {
 	// DefaultOrientation — ориентация по умолчанию (EXIF auto-orient +
 	// ручной rotate/flip из processing.default-*). Используется для запросов
 	// без ориентации в пресете. Приоритет: пресет → default. nil =
-	// {AutoOrient: true} (историческое поведение движков).
+	// {AutoOrient: true}.
 	DefaultOrientation *processing.OrientationSpec
 	// DefaultTrim — настройки независимого фильтра trim по умолчанию
 	// (режим auto/color + tolerance из processing.default-trim-*). nil =
@@ -83,8 +83,7 @@ type Deps struct {
 	Metrics observability.Metrics
 	// Metadata — локальное sidecar-хранилище метаданных родительских
 	// файлов (кэш результатов ИИ-моделей + largest_ai_asset).
-	// nil = кэш моделей отключён, поведение идентично прежнему.
-	// docs/METADATA_STORE.md, раздел 8.1.
+	// nil = кэш моделей отключён.
 	Metadata metadata.Store
 	// Detector — ИИ-детекция лиц/объектов на уровне приложения.
 	// nil = детекция остаётся в процессоре (self-detection).
@@ -302,7 +301,7 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	// загружаются из sidecar или добываются детектором ОДИН раз на
 	// родителя (keyed singleflight по "meta:"+srcKey). best-effort:
 	// при любом сбое возвращается (false, nil) — процессор работает
-	// по прежней схеме (self-detection).
+	// в режиме self-detection.
 	in := processor.Input{Source: src, Plan: plan, SourceKey: srcKey}
 	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, srcKey, plan, src)
 
@@ -395,7 +394,7 @@ func (s *Service) resolveWatermark(req *asset.Request) *processing.WatermarkSpec
 //  2. глобальный дефолт Deps.DefaultOrientation (processing.default-*).
 //
 // Результат никогда не nil: при отсутствии настроек возвращается
-// {AutoOrient: true} (историческое поведение движков).
+// {AutoOrient: true}.
 func (s *Service) resolveOrientation(req *asset.Request) *processing.OrientationSpec {
 	if o := req.Orientation(); o != nil {
 		return o
@@ -581,8 +580,8 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		return nil, outcome(OutcomeForbidden, "policy limit: "+check.ExceededLimit, errLimitExceeded)
 	}
 
-	// Публикация в remote после завершения записи в буфер. I4: transient
-	// ошибки (ErrUnavailable) ретраятся с экспоненциальным backoff.
+	// Публикация в remote после завершения записи в буфер. Transient-ошибки
+	// (ErrUnavailable) ретраятся с экспоненциальным backoff.
 	pubStart := time.Now()
 	pubErr := s.publishFromBuffer(ctx, key, buf)
 	if pubErr != nil {
@@ -623,9 +622,9 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 // publishFromBuffer публикует содержимое буфера в remote. Читает из буфера
 // по мере записи процессором (параллельно), ограничивая размер OutputLimit.
 //
-// I4: transient-ошибки (ErrUnavailable) ретраятся с экспоненциальным backoff.
-// I12: boundedReader не читает лишний байт — лимит проверяется ДО чтения,
-// поэтому при превышении в remote не попадает битый объект.
+// Transient-ошибки (ErrUnavailable) ретраятся с экспоненциальным backoff.
+// boundedReader не читает лишний байт — лимит проверяется ДО чтения, поэтому
+// при превышении в remote не попадает битый объект.
 func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, buf buffer.Buffer) error {
 	reader, err := buf.NewReader()
 	if err != nil {
@@ -683,8 +682,8 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 
 // boundedReader ограничивает чтение max байт и сигнализирует о превышении
 // через errOutputLimit. Лимит проверяется ДО передачи данных дальше: лишний
-// байт не читается в p и не передаётся в Publish (I12), поэтому при
-// превышении в remote не попадает битый объект.
+// байт не читается в p и не передаётся в Publish, поэтому при превышении
+// в remote не попадает битый объект.
 //
 // Граничный случай: вывод ровно max байт допустим. Когда прочитано ровно
 // max, выполняется пробное чтение одного байта: если данных больше нет —
@@ -776,7 +775,7 @@ func (s *Service) mapPublishError(ctx context.Context, err error) error {
 // Уже типизированные OutcomeError (например, из generateLocked) пробрасываются
 // как есть.
 //
-// N8: ErrTooManyKeys/ErrKeyTooLong — перегрузка координатора (429/503 с
+// ErrTooManyKeys/ErrKeyTooLong — перегрузка координатора (429/503 с
 // Retry-After), а не "unavailable". Маппятся в OutcomeUnavailable с явной
 // причиной, чтобы HTTP-слой мог вернуть Retry-After.
 func (s *Service) mapCoordinatorError(ctx context.Context, err error) error {

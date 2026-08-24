@@ -1,6 +1,6 @@
 // Package filemeta определяет доменную модель sidecar-метаданных
 // родительского файла (результаты ИИ-детекции и информация о крупнейшем
-// «ИИ-ассете»). Схема и семантика описаны в docs/METADATA_STORE.md (v2).
+// «ИИ-ассете»).
 //
 // Пакет не зависит от адаптеров: он содержит только типы, инварианты
 // (Validate) и sentinel-ошибки, общие для порта metadata.Store и его
@@ -26,7 +26,7 @@ import (
 const CurrentSchemaVersion = 1
 
 // MaxItemsPerSlice — максимум элементов в каждом из срезов Faces/Objects
-// (защита от аномальных/подменённых файлов, см. раздел 5 дизайн-дока).
+// (защита от аномальных/подменённых файлов).
 const MaxItemsPerSlice = 1000
 
 // Sentinel-ошибки домена.
@@ -44,7 +44,7 @@ var (
 // PixelBox — бокс детекции в пикселях оригинального изображения.
 // Зеркало detection.Box из адаптера, но без зависимости домена от адаптеров.
 //
-// JSON-теги соответствуют схеме из дизайн-дока: x, y, w, h.
+// JSON-теги: x, y, w, h.
 type PixelBox struct {
 	// X — координата левого верхнего угла по горизонтали (px), >= 0.
 	X int `json:"x"`
@@ -57,8 +57,7 @@ type PixelBox struct {
 }
 
 // FaceInfo — результат детекции одного лица.
-// Встроенный PixelBox сериализуется «плоско» (x/y/w/h рядом с confidence),
-// как задано схемой JSON в дизайн-доке.
+// Встроенный PixelBox сериализуется «плоско» (x/y/w/h рядом с confidence).
 type FaceInfo struct {
 	PixelBox
 	// Confidence — уверенность детектора, [0,1].
@@ -231,20 +230,18 @@ func (m *FileMetadata) UnmarshalJSON(data []byte) error {
 
 // maxAspectDeviation — максимальное относительное отклонение пропорций
 // ассета от пропорций родителя, при котором ассет считается кандидатом
-// на largest_ai_asset (docs/METADATA_STORE.md, раздел 8.4: ≤1%).
+// на largest_ai_asset.
 const maxAspectDeviation = 0.01
 
-// ShouldTrackAsAIAsset проверяет критерий кандидата на largest_ai_asset
-// из дизайн-дока (раздел 8.4): ассет больше родителя по обеим сторонам
-// ИЛИ по площади, а пропорции совпадают с родительскими с отклонением
-// ≤1%.
+// ShouldTrackAsAIAsset проверяет критерий кандидата на largest_ai_asset:
+// ассет больше родителя по обеим сторонам ИЛИ по площади, а пропорции
+// совпадают с родительскими с отклонением ≤1%.
 //
 //	кандидат ⇔ outW >= srcW ∧ outH >= srcH ∧ outW*outH > srcW*srcH
 //	           ∧ |outW/outH − srcW/srcH| / (srcW/srcH) ≤ 0.01
 //
 // Нулевые/неположительные размеры или неизвестная площадь родителя
-// возвращают false (шаг пропускается; дизайн-док: "при нулевых
-// SourceWidth/Height обновление largest_ai_asset просто пропускается").
+// возвращают false (обновление largest_ai_asset пропускается).
 func ShouldTrackAsAIAsset(parentW, parentH, assetW, assetH int) bool {
 	if parentW <= 0 || parentH <= 0 || assetW <= 0 || assetH <= 0 {
 		return false

@@ -46,7 +46,7 @@ func isExist(err error) bool {
 	return errors.Is(err, os.ErrExist)
 }
 
-// ctxReader — обёртка reader, проверяющая ctx на каждом чтении (В4).
+// ctxReader — обёртка reader, проверяющая ctx на каждом чтении.
 // Позволяет прервать копирование в temp-файл при отмене контекста
 // (GenerateTimeout/shutdown), не дожидаясь завершения медленного источника.
 type ctxReader struct {
@@ -63,7 +63,7 @@ func (c ctxReader) Read(p []byte) (int, error) {
 }
 
 // writeTemp копирует src в dst и возвращает число записанных байт.
-// Если ctx != nil, копирование прерывается при отмене контекста (В4).
+// Если ctx != nil, копирование прерывается при отмене контекста.
 func writeTemp(tmp *os.File, src io.Reader, ctx context.Context) (int64, error) {
 	bufp := copyBufPool.Get().(*[]byte)
 	defer copyBufPool.Put(bufp)

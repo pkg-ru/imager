@@ -481,8 +481,8 @@ func TestProcess_ConcurrencyCancel(t *testing.T) {
 }
 
 // TestProcess_ConcurrencyQueueOverflow проверяет, что при переполнении
-// bounded очереди ожидания слота возвращается быстрый отказ (I3), а не
-// бесконечное ожидание.
+// bounded очереди ожидания слота возвращается быстрый отказ, а не бесконечное
+// ожидание.
 func TestProcess_ConcurrencyQueueOverflow(t *testing.T) {
 	fr := &fakeRunner{}
 	// concurrency=1, maxWait=1: один активный + один ожидающий.

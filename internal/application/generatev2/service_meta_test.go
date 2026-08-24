@@ -284,8 +284,8 @@ func TestGenerateResizeNoMetadataTouch(t *testing.T) {
 // TestGenerateLargestAIAssetOnlyForAIAsset — largest_ai_asset обновляется
 // ТОЛЬКО при реальном ИИ-ассете (выход больше родителя, те же пропорции).
 // Запрос c resize-форматом, но ИИ-размерами результата → sidecar пишется с
-// largest_ai_asset (при этом Load для детекции ПО-прежнему не вызывается —
-// план не требует детекции).
+// largest_ai_asset (Load для детекции не вызывается — план не требует
+// детекции).
 func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	metaS := newFakeMetadataStore()
 	det := newFakeDetector()

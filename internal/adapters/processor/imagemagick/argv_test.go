@@ -32,7 +32,7 @@ func TestBuildArgv_ValidResize(t *testing.T) {
 	if !strings.Contains(joined, "-thumbnail 800x600") {
 		t.Errorf("missing thumbnail, got: %s", joined)
 	}
-	// I7: -extent применяется только для crop-операций (не для OpResize).
+	// -extent применяется только для crop-операций (не для OpResize).
 	if strings.Contains(joined, "-extent") {
 		t.Errorf("resize should not use -extent (letterbox), got: %s", joined)
 	}
@@ -53,7 +53,7 @@ func TestBuildArgv_ValidResize(t *testing.T) {
 	if strings.Index(joined, "-auto-orient") > strings.Index(joined, "-strip") {
 		t.Errorf("-auto-orient must come before -strip, got: %s", joined)
 	}
-	// N14: sampling-factor только для JPEG-выхода.
+	// sampling-factor применяется только для JPEG-выхода.
 	if strings.Contains(joined, "-sampling-factor") {
 		t.Errorf("sampling-factor should only be added for JPEG output, got: %s", joined)
 	}
@@ -95,7 +95,7 @@ func TestBuildArgv_ValidTrim(t *testing.T) {
 	if !strings.Contains(joined, "-trim") {
 		t.Errorf("trim should include -trim, got: %s", joined)
 	}
-	// N15: trim-bounds — IM7-only. Без снимка capabilities (major=0) считаем
+	// trim-bounds — IM7-only. Без снимка capabilities (major=0) считаем
 	// IM7-совместимым.
 	if !strings.Contains(joined, "trim-bounds") {
 		t.Errorf("trim should include trim-bounds (IM7), got: %s", joined)
@@ -309,7 +309,7 @@ func TestBuildArgv_CropUsesExtent(t *testing.T) {
 	if !strings.Contains(joined, "-extent 400x300") {
 		t.Errorf("crop should use -extent, got: %s", joined)
 	}
-	// N12: явный фон для extent.
+	// Явный фон для extent.
 	if !strings.Contains(joined, "-background none") {
 		t.Errorf("crop PNG should set -background none, got: %s", joined)
 	}

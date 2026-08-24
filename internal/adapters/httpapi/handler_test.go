@@ -529,8 +529,8 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 	}
 }
 
-// TestEtagCacheLRUEviction проверяет, что etagCache ограничен по числу ключей
-// (В2): при превышении max вытесняется наименее недавно использованный ключ.
+// TestEtagCacheLRUEviction проверяет, что etagCache ограничен по числу ключей:
+// при превышении max вытесняется наименее недавно использованный ключ.
 func TestEtagCacheLRUEviction(t *testing.T) {
 	c := newEtagCache(3)
 
@@ -556,7 +556,7 @@ func TestEtagCacheLRUEviction(t *testing.T) {
 }
 
 // TestGzipJSONResponse проверяет, что JSON-ответ (error envelope) сжимается
-// gzip при Accept-Encoding: gzip (У2).
+// gzip при Accept-Encoding: gzip.
 func TestGzipJSONResponse(t *testing.T) {
 	gen := newFakeGenerator()
 	h := newTestHandler(t, gen, baseConfig())
@@ -600,8 +600,8 @@ func TestGzipJSONResponse(t *testing.T) {
 	}
 }
 
-// TestGzipNotAppliedToImages проверяет, что изображения не сжимаются (У2:
-// gzip только для JSON).
+// TestGzipNotAppliedToImages проверяет, что изображения не сжимаются
+// (gzip только для JSON).
 func TestGzipNotAppliedToImages(t *testing.T) {
 	gen := newFakeGenerator()
 	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)

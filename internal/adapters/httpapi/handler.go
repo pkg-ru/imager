@@ -42,8 +42,8 @@ type Handler struct {
 	format map[string]string // output format -> content-type
 
 	// etagCache — bounded LRU-кэш вычисленных ETag по identity
-	// (canonical URL + size), чтобы не пересчитывать SHA-256 на каждый запрос
-	// (п.15). Ограничен по числу ключей (В2), чтобы не расти безгранично.
+	// (canonical URL + size), чтобы не пересчитывать SHA-256 на каждый запрос.
+	// Ограничен по числу ключей, чтобы не расти безгранично.
 	etagCache *lru.Cache[string, string]
 
 	// copyPool — sync.Pool буферов копирования (64 KiB), чтобы не аллоцировать
@@ -99,17 +99,16 @@ func buildFormatMap() map[string]string {
 	return m
 }
 
-// newEtagCache создаёт bounded LRU-кэш ETag по identity (В2) с лимитом max
-// записей; поведение (Get-with-touch, Set-with-evict) вынесено в generic
-// пакет adapters/lru.
+// newEtagCache создаёт bounded LRU-кэш ETag по identity с лимитом max записей
+// (generic-реализация из пакета adapters/lru).
 func newEtagCache(max int) *lru.Cache[string, string] {
 	return lru.New[string, string](max)
 }
 
 // ServeHTTP обрабатывает запрос.
 //
-// П.2: тело обёрнуто в try/catch — паника в генераторе или при копировании
-// ответа не должна ронять процесс. Если ответ ещё не начат, пишем 500.
+// Тело обёрнуто в recover — паника в генераторе или при копировании ответа
+// не должна ронять процесс. Если ответ ещё не начат, пишем 500.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Security headers применяются ко всем ответам.
 	h.applySecurityHeaders(w)
@@ -187,7 +186,7 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// П.18: явный deadline для генерации, связанный с GenerateTimeout.
+	// Явный deadline для генерации, связанный с GenerateTimeout.
 	// Превышение маппится в 504 (OutcomeCanceled) через mapError.
 	genCtx := r.Context()
 	if h.cfg.GenerateTimeout > 0 {
@@ -243,7 +242,7 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 	if r.Method == http.MethodHead {
 		return
 	}
-	// П.7: буферизованное копирование (64 KiB) вместо дефолтных 8 KiB.
+	// Буферизованное копирование (64 KiB) вместо дефолтных 8 KiB.
 	// Буфер берём из sync.Pool, чтобы не аллоцировать на каждый запрос.
 	buf := h.copyPool.Get().([]byte)
 	defer h.copyPool.Put(buf)
@@ -251,7 +250,7 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 }
 
 // etagFor вычисляет стабильный ETag из metadata/content identity.
-// П.15: результат кэшируется по identity (canonical URL + size), чтобы не
+// Результат кэшируется по identity (canonical URL + size), чтобы не
 // пересчитывать SHA-256 на каждый запрос.
 func (h *Handler) etagFor(meta object.ObjectMetadata, result *generatev2.Result) string {
 	// Если metadata предоставляет ETag, используем его. Нормализуем:
@@ -288,7 +287,7 @@ func ifNoneMatch(header, etag string) bool {
 
 // mapError маппит типизированную ошибку use case в HTTP-статус.
 func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error) {
-	// П.18: отмена контекста (таймаут генерации) → 504.
+	// Отмена контекста (таймаут генерации) → 504.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		h.log.Warnf("httpapi: canceled: %v", err)
 		h.writeError(w, r, http.StatusGatewayTimeout, "canceled", "request canceled")
@@ -426,7 +425,7 @@ func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file
 	if r.Method == http.MethodHead {
 		return
 	}
-	// П.7: буферизованное копирование (64 KiB).
+	// Буферизованное копирование (64 KiB).
 	_, _ = io.CopyBuffer(w, f, make([]byte, 64*1024))
 }
 

@@ -197,7 +197,7 @@ type Compiled struct {
 	DefaultWatermark *processing.WatermarkSpec
 	// DefaultOrientation — ориентация по умолчанию (EXIF auto-orient +
 	// ручной rotate/flip). Никогда не nil: при отсутствии настроек содержит
-	// {AutoOrient: true} (историческое поведение движков).
+	// {AutoOrient: true}.
 	DefaultOrientation *processing.OrientationSpec
 	// DefaultTrim — настройки независимого фильтра trim по умолчанию
 	// (режим auto/color + tolerance из processing.default-trim-*). Никогда
