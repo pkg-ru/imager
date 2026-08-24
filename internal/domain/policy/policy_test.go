@@ -288,7 +288,7 @@ func TestAuthorizePathCrop(t *testing.T) {
 	// transform "ct" — crop присутствует, разрешён.
 	d = p.Authorize(mustReq(t, "/users/users-png/ct-280x280.webp"))
 	if !d.Allowed {
-		t.Errorf("expected allowed for crop-trim, got %+v", d)
+		t.Errorf("expected allowed for crop+trim, got %+v", d)
 	}
 	// transform "" (resize) — crop отсутствует, отклонён.
 	d = p.Authorize(mustReq(t, "/users/users-png/280x280.webp"))
@@ -522,7 +522,7 @@ func TestAuthorizePathTrim(t *testing.T) {
 	// transform "ct" — trim присутствует, разрешён.
 	d = p.Authorize(mustReq(t, "/users/gift/users-png/ct-280x280.webp"))
 	if !d.Allowed {
-		t.Errorf("expected allowed for crop-trim, got %+v", d)
+		t.Errorf("expected allowed for crop+trim, got %+v", d)
 	}
 	// transform "c" — trim отсутствует, отклонён.
 	d = p.Authorize(mustReq(t, "/users/gift/users-png/c-280x280.webp"))

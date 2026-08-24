@@ -28,14 +28,14 @@ func metaFlightKey(srcKey object.ObjectKey) object.ObjectKey {
 }
 
 // planNeedsDetections возвращает true, если план требует ИИ-детекции
-// (fc/oc/fct/oct — операции на лицах/объектах).
+// (face-crop/object-crop — операции на лицах/объектах). Trim — независимый
+// фильтр и не влияет на необходимость детекции.
 func planNeedsDetections(plan *processing.ProcessingPlan) bool {
 	if plan == nil {
 		return false
 	}
 	switch plan.Operation {
-	case processing.OpFaceCrop, processing.OpObjectCrop,
-		processing.OpFaceCropTrim, processing.OpObjectCropTrim:
+	case processing.OpFaceCrop, processing.OpObjectCrop:
 		return true
 	}
 	return false
@@ -46,11 +46,7 @@ func planNeedsFaces(plan *processing.ProcessingPlan) bool {
 	if plan == nil {
 		return false
 	}
-	switch plan.Operation {
-	case processing.OpFaceCrop, processing.OpFaceCropTrim:
-		return true
-	}
-	return false
+	return plan.Operation == processing.OpFaceCrop
 }
 
 // planNeedsObjects возвращает true, если плану нужны боксы объектов.
@@ -58,11 +54,7 @@ func planNeedsObjects(plan *processing.ProcessingPlan) bool {
 	if plan == nil {
 		return false
 	}
-	switch plan.Operation {
-	case processing.OpObjectCrop, processing.OpObjectCropTrim:
-		return true
-	}
-	return false
+	return plan.Operation == processing.OpObjectCrop
 }
 
 // ensureDetections — best-effort источник боксов детекции для плана:

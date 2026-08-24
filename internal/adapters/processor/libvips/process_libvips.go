@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/davidbyttow/govips/v2/vips"
@@ -410,15 +411,26 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 }
 
 // applyOperation применяет операцию из плана к изображению.
+//
+// Trim — независимый фильтр: если plan.Trim установлен, он применяется
+// СТРОГО первым (сначала trim, затем основная операция кропа/ресайза).
 // detectionsReady/boxes — готовые боксы из sidecar-кэша (координаты
-// оригинала); для fct/oct транслируются на trim-offset внутри
+// оригинала); при trim они транслируются на trim-offset внутри
 // applyDetectionCrop.
 func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	// Size.Original (size=x): размер не меняем.
+	// Trim-first: независимый фильтр обрезки однотонных полей применяется
+	// до основной операции (кропа/ресайза).
+	if plan.Trim {
+		if err := applyTrim(img, plan.TrimSpec); err != nil {
+			return err
+		}
+	}
+
+	// Size.Original (size=x): размер не меняем (после trim).
 	if plan.Size.Original {
 		return nil
 	}
@@ -450,41 +462,6 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes); err != nil {
 			return err
 		}
-	case processing.OpTrim:
-		if err := applyTrim(img, "trim"); err != nil {
-			return err
-		}
-	case processing.OpCropTrim:
-		// Сначала trim, затем crop.
-		if err := applyTrim(img, "crop-trim"); err != nil {
-			return err
-		}
-		if err := img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeForce); err != nil {
-			return fmt.Errorf("libvips: crop-trim: crop: %w", err)
-		}
-	case processing.OpSmartCropTrim:
-		// Сначала trim, затем smart-crop: внимание (attention) применяется
-		// уже к подрезанному изображению.
-		if err := applyTrim(img, "smart-crop-trim"); err != nil {
-			return err
-		}
-		if err := img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeForce); err != nil {
-			return fmt.Errorf("libvips: smart-crop-trim: smart-crop: %w", err)
-		}
-	case processing.OpFaceCropTrim:
-		fallthrough
-	case processing.OpObjectCropTrim:
-		// Сначала trim, затем детекторная обрезка. Детекция выполняется на
-		// УЖЕ подрезанном изображении, поэтому координаты боксов детектора
-		// относятся к подрезанному изображению. При готовых боксах из кэша
-		// (координаты оригинала) они транслируются на trim-offset внутри
-		// applyDetectionCrop.
-		if err := applyTrim(img, string(plan.Operation)); err != nil {
-			return err
-		}
-		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes); err != nil {
-			return err
-		}
 	default:
 		return fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
 	}
@@ -492,19 +469,49 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 }
 
 // applyTrim выполняет обрезку однотонных/пустых краёв изображения по контенту
-// (vips_find_trim + ExtractArea). Возвращает ошибку, если область трима пуста.
-func applyTrim(img *vips.ImageRef, op string) error {
-	left, top, tw, th, err := img.FindTrim(0.0, nil)
+// (vips_find_trim + ExtractArea). spec — настройки trim (режим auto/color +
+// tolerance); nil = по умолчанию ({auto, 0}). Возвращает ошибку, если область
+// трима пуста.
+func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) error {
+	if spec == nil {
+		spec = processing.DefaultTrimSpec()
+	}
+	// Режим color: фиксированный цвет фона. Режим auto: nil (автоопределение
+	// по краевому пикселю).
+	var bg *vips.Color
+	if spec.Mode == processing.TrimModeColor {
+		bg = hexToColor(spec.Color)
+	}
+	left, top, tw, th, err := img.FindTrim(spec.Tolerance, bg)
 	if err != nil {
-		return fmt.Errorf("libvips: %s: find-trim: %w", op, err)
+		return fmt.Errorf("libvips: trim: find-trim: %w", err)
 	}
 	if tw <= 0 || th <= 0 {
-		return fmt.Errorf("libvips: %s: empty trim area (%dx%d)", op, tw, th)
+		return fmt.Errorf("libvips: trim: empty trim area (%dx%d)", tw, th)
 	}
 	if err := img.ExtractArea(left, top, tw, th); err != nil {
-		return fmt.Errorf("libvips: %s: trim: %w", op, err)
+		return fmt.Errorf("libvips: trim: %w", err)
 	}
 	return nil
+}
+
+// hexToColor преобразует hex-цвет "#RRGGBB" в vips.Color.
+func hexToColor(hex string) *vips.Color {
+	if len(hex) != 7 || hex[0] != '#' {
+		return nil
+	}
+	parse := func(s string) uint8 {
+		v, err := strconv.ParseUint(s, 16, 8)
+		if err != nil {
+			return 0
+		}
+		return uint8(v)
+	}
+	return &vips.Color{
+		R: parse(hex[1:3]),
+		G: parse(hex[3:5]),
+		B: parse(hex[5:7]),
+	}
 }
 
 // applyDetectionCrop выполняет детекторную обрезку (face-crop/object-crop).
@@ -535,10 +542,10 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		H = ph
 	}
 
-	// Готовые боксы из sidecar-кэша (координаты ОРИГИНАЛА). Для trim-вариантов
-	// (fct/oct) изображение уже подрезано (applyTrim выполнен до вызова), поэтому
-	// боксы транслируются на trim-offset. Для fc/oc изображение не менялось —
-	// боксы используются напрямую.
+	// Готовые боксы из sidecar-кэша (координаты ОРИГИНАЛА). Если trim включён
+	// (plan.Trim), изображение уже подрезано (applyTrim выполнен до вызова),
+	// поэтому боксы транслируются на trim-offset. Без trim кадр совпадает с
+	// оригиналом — боксы используются напрямую.
 	var detBoxes []detection.Box
 	if detectionsReady {
 		detBoxes = translateBoxes(boxes, W, H)
@@ -578,12 +585,13 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 			return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
 		}
 
-		// Детекция.
+		// Детекция. Trim — независимый фильтр и не влияет на тип детекции:
+		// face-crop всегда ищет лица, object-crop — объекты.
 		var err2 error
 		switch plan.Operation {
-		case processing.OpFaceCrop, processing.OpFaceCropTrim:
+		case processing.OpFaceCrop:
 			detBoxes, err2 = det.DetectFaces(ctx, rgb, W, H)
-		case processing.OpObjectCrop, processing.OpObjectCropTrim:
+		case processing.OpObjectCrop:
 			detBoxes, err2 = det.DetectObjects(ctx, rgb, W, H)
 		}
 		if err2 != nil {
@@ -603,10 +611,10 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 }
 
 // translateBoxes транслирует боксы из координат ОРИГИНАЛА в координаты
-// текущего кадра (после trim). Для fc/oc (без trim) кадр совпадает с
-// оригиналом — боксы используются как есть. Для fct/oct кадр уже подрезан
-// (applyTrim выполнен), поэтому боксы сдвигаются на trim-offset и
-// зажимаются в кадр (clamp идентичен fitRect из detection.box.go).
+// текущего кадра (после trim). Без trim кадр совпадает с оригиналом —
+// боксы используются как есть. С trim кадр уже подрезан (applyTrim
+// выполнен), поэтому боксы сдвигаются на trim-offset и зажимаются в кадр
+// (clamp идентичен fitRect из detection.box.go).
 func translateBoxes(boxes []filemeta.PixelBox, W, H int) []detection.Box {
 	out := make([]detection.Box, 0, len(boxes))
 	for _, b := range boxes {

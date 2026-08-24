@@ -118,10 +118,11 @@ func TestWatermarkAppliedToEveryFrame(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeGif(t), plan)
+	res, err := b.process(context.Background(), makeGif(t), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 
 	// Анимация сохранена: 2 кадра в выходе.
 	if n := countFrames(t, out); n != 2 {
@@ -160,10 +161,11 @@ func TestWatermarkNoWatermark(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeGif(t), plan)
+	res, err := b.process(context.Background(), makeGif(t), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	// Анимация сохранена: 2 кадра в выходе.
 	if n := countFrames(t, out); n != 2 {
 		t.Fatalf("output has %d frames, want 2", n)

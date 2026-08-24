@@ -287,13 +287,107 @@ func TestParseRejectsControlChars(t *testing.T) {
 }
 
 func TestParseRejectsInvalidChars(t *testing.T) {
+	// Пробел теперь РАЗРЕШЁН в имени исходника (см. NewSourceName),
+	// поэтому из старого списка остался только реально недопустимый кейс.
 	urls := []string{
-		"/photos/photo name-jpg/c-120x80@2.webp", // space in source name
-		"/photos/photo!-jpg/c-120x80@2.webp",     // invalid char
+		"/photos/photo\x01-jpg/c-120x80@2.webp", // control char in source name
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
 			t.Errorf("Parse(%q) expected invalid char error", u)
+		}
+	}
+}
+
+// TestParseAcceptsUnicodeSourceNames проверяет, что имя исходника может
+// содержать любые Unicode-символы: кириллицу, CJK, пробелы и т.д.
+func TestParseAcceptsUnicodeSourceNames(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want string // ожидаемый канонический URL (без /)
+	}{
+		{
+			name: "cyrillic source name",
+			url:  "/photos/изображение-png/c-120x80@2.webp",
+			want: "photos/изображение-png/c-120x80@2.webp",
+		},
+		{
+			name: "chinese source name",
+			url:  "/photos/图片-jpg/c-120x80@2.webp",
+			want: "photos/图片-jpg/c-120x80@2.webp",
+		},
+		{
+			name: "source name with space",
+			url:  "/photos/my photo-png/c-120x80@2.webp",
+			want: "photos/my photo-png/c-120x80@2.webp",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := Parse(tt.url)
+			if err != nil {
+				t.Fatalf("Parse(%q) error: %v", tt.url, err)
+			}
+			got, err := req.Build()
+			if err != nil {
+				t.Fatalf("Build() error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Build() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseRejectsUnsafeSourceNames проверяет, что опасные имена исходников
+// по-прежнему отклоняются: traversal, разделители пути, control-символы.
+func TestParseRejectsUnsafeSourceNames(t *testing.T) {
+	urls := []string{
+		"/../etc/passwd-jpg/c-120x80@2.webp",     // path traversal
+		"/photos/a\\b.png-jpg/c-120x80@2.webp",   // '\' в имени исходника
+		"/photos/a\x00b-jpg/c-120x80@2.webp",     // нулевой байт
+		"/photos/a\x1f-jpg/c-120x80@2.webp",      // управляющий символ
+		"/photos/photo..old-jpg/c-120x80@2.webp", // ".." внутри имени
+	}
+	for _, u := range urls {
+		if _, err := Parse(u); err == nil {
+			t.Errorf("Parse(%q) expected unsafe source name error", u)
+		}
+	}
+}
+
+// TestNewSourceNameValidation проверяет валидацию имени исходника напрямую:
+// разрешены любые Unicode-символы и пробелы, запрещены разделители пути,
+// traversal, нулевой байт, управляющие символы, пустое и слишком длинное имя.
+func TestNewSourceNameValidation(t *testing.T) {
+	valid := []string{
+		"изображение.png",
+		"图片.jpg",
+		"my photo.png",
+		"photo-1_v2.tar.gz",
+		"emoji😀name",
+		"a",
+	}
+	for _, s := range valid {
+		if _, err := NewSourceName(s); err != nil {
+			t.Errorf("NewSourceName(%q) unexpected error: %v", s, err)
+		}
+	}
+
+	invalid := []string{
+		"",                                      // пустое имя
+		"../etc/passwd",                         // path traversal
+		"a/b.png",                               // '/' — разделитель пути
+		"a\\b.png",                              // '\' — разделитель пути
+		"a\x00b.png",                            // нулевой байт
+		"a\x01b.png",                            // управляющий символ
+		"a\x7fb.png",                            // DEL
+		strings.Repeat("ф", MaxSourceNameLen+1), // слишком длинное имя
+	}
+	for _, s := range invalid {
+		if _, err := NewSourceName(s); err == nil {
+			t.Errorf("NewSourceName(%q) expected error, got nil", s)
 		}
 	}
 }

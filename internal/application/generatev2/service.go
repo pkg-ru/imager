@@ -72,6 +72,10 @@ type Deps struct {
 	// без ориентации в пресете. Приоритет: пресет → default. nil =
 	// {AutoOrient: true} (историческое поведение движков).
 	DefaultOrientation *processing.OrientationSpec
+	// DefaultTrim — настройки независимого фильтра trim по умолчанию
+	// (режим auto/color + tolerance из processing.default-trim-*). nil =
+	// {Mode: auto, Tolerance: 0}. Используется для планов с Trim=true.
+	DefaultTrim *processing.TrimSpec
 	// Logger — опциональный логгер.
 	Logger Logger
 	// Metrics — опциональные метрики (request/cache/processor/storage).
@@ -410,29 +414,11 @@ func (s *Service) resolveOrientation(req *asset.Request) *processing.Orientation
 // Ватермарка: пресет → path-policy → default (см. resolveWatermark).
 // Ориентация: пресет → default (см. resolveOrientation).
 func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, error) {
-	var op processing.Operation
-	switch req.Transform() {
-	case asset.TransformCrop:
-		op = processing.OpCrop
-	case asset.TransformTrim:
-		op = processing.OpTrim
-	case asset.TransformCropTrim:
-		op = processing.OpCropTrim
-	case asset.TransformSmartCrop:
-		op = processing.OpSmartCrop
-	case asset.TransformFaceCrop:
-		op = processing.OpFaceCrop
-	case asset.TransformObjectCrop:
-		op = processing.OpObjectCrop
-	case asset.TransformSmartCropTrim:
-		op = processing.OpSmartCropTrim
-	case asset.TransformFaceCropTrim:
-		op = processing.OpFaceCropTrim
-	case asset.TransformObjectCropTrim:
-		op = processing.OpObjectCropTrim
-	default:
-		op = processing.OpResize
-	}
+	// Кроп и trim — НЕЗАВИСИМЫЕ фильтры. Transform URL — код вида
+	// "c"/"t"/"ct"/"sc"/"fc"/"oc"/"sct"/"fct"/"oct": trim в коде всегда
+	// последний ("t"-суффикс). Операция плана — только режим кропа/ресайза,
+	// trim выделяется в отдельное булево поле (применяется первым).
+	op, trim := transformFromPlan(req.Transform())
 	srcFmt, err := processing.ParseFormat(req.SourceFormat().String())
 	if err != nil {
 		return nil, err
@@ -470,6 +456,8 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 		}
 		plan.Watermark = wm
 		plan.Orientation = or
+		plan.Trim = trim
+		plan.TrimSpec = s.resolveTrim()
 		return plan, nil
 	}
 	if dw := req.Size().Width(); dw != nil {
@@ -488,7 +476,58 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 	}
 	plan.Watermark = wm
 	plan.Orientation = or
+	plan.Trim = trim
+	plan.TrimSpec = s.resolveTrim()
 	return plan, nil
+}
+
+// resolveTrim определяет настройки независимого фильтра trim. Trim — не
+// URL-параметр: настройки (режим auto/color + tolerance) приходят из
+// глобального конфига processing.default-trim-*. nil = спецификация по
+// умолчанию ({auto, 0}).
+func (s *Service) resolveTrim() *processing.TrimSpec {
+	if t := s.deps.DefaultTrim; t != nil {
+		return t
+	}
+	return processing.DefaultTrimSpec()
+}
+
+// transformFromPlan маппит Transform URL-код в операцию кропа/ресайза и
+// независимый булев trim:
+//
+//	""   → resize,      trim=false
+//	"c"  → crop,        trim=false
+//	"t"  → resize,      trim=true   (только trim, без кропа)
+//	"ct" → crop,        trim=true   (сначала trim, затем центрированный кроп)
+//	"sc" → smart-crop,  trim=false
+//	"sct"→ smart-crop,  trim=true
+//	"fc" → face-crop,   trim=false
+//	"fct"→ face-crop,   trim=true
+//	"oc" → object-crop, trim=false
+//	"oct"→ object-crop, trim=true
+func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
+	switch t {
+	case asset.TransformCrop:
+		return processing.OpCrop, false
+	case asset.TransformCropTrim:
+		return processing.OpCrop, true
+	case asset.TransformSmartCrop:
+		return processing.OpSmartCrop, false
+	case asset.TransformSmartCropTrim:
+		return processing.OpSmartCrop, true
+	case asset.TransformFaceCrop:
+		return processing.OpFaceCrop, false
+	case asset.TransformFaceCropTrim:
+		return processing.OpFaceCrop, true
+	case asset.TransformObjectCrop:
+		return processing.OpObjectCrop, false
+	case asset.TransformObjectCropTrim:
+		return processing.OpObjectCrop, true
+	case asset.TransformTrim:
+		return processing.OpResize, true
+	default:
+		return processing.OpResize, false
+	}
 }
 
 // processAndPublish запускает процессор, который пишет результат в

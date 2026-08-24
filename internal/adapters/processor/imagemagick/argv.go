@@ -12,12 +12,15 @@ import (
 // командной строки не допускаются: план маппится в фиксированный набор
 // аргументов через строгие allowlists.
 
-// allowedOps — допустимые операции.
+// allowedOps — допустимые операции кропа/ресайза. Trim — независимый булев
+// фильтр (ProcessingPlan.Trim), а не операция: trim-only выражается как
+// OpResize + Trim=true.
 var allowedOps = map[processing.Operation]bool{
-	processing.OpResize:   true,
-	processing.OpCrop:     true,
-	processing.OpTrim:     true,
-	processing.OpCropTrim: true,
+	processing.OpResize:     true,
+	processing.OpCrop:       true,
+	processing.OpSmartCrop:  true,
+	processing.OpFaceCrop:   true,
+	processing.OpObjectCrop: true,
 }
 
 // allowedFormats — допустимые выходные форматы (нижний регистр).
@@ -195,8 +198,9 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 		args = append(args, "-limit", "time", strconv.Itoa(secs))
 	}
 
-	// Trim (для OpTrim — standalone, для OpCropTrim — до crop).
-	if plan.Operation == processing.OpTrim || plan.Operation == processing.OpCropTrim {
+	// Trim — независимый фильтр обрезки однотонных полей. Применяется
+	// СТРОГО до основной операции (сначала trim, затем кроп/ресайз).
+	if plan.Trim {
 		args = append(args, "-trim")
 		if im7 {
 			args = append(args, "-layers", "trim-bounds")
@@ -204,11 +208,13 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 	}
 
 	// Размер: пропорциональный resize + extent до целевого размера.
-	// Для OpCropTrim применяется centre-crop (как для OpCrop) после trim.
 	// При Original (size=x) resize/extent не применяются — сохраняется
-	// исходный размер изображения.
+	// исходный размер изображения (после trim).
 	if !plan.Size.Original && (plan.Size.Width > 0 || plan.Size.Height > 0) {
-		crop := plan.Operation == processing.OpCrop || plan.Operation == processing.OpCropTrim
+		crop := plan.Operation == processing.OpCrop ||
+			plan.Operation == processing.OpSmartCrop ||
+			plan.Operation == processing.OpFaceCrop ||
+			plan.Operation == processing.OpObjectCrop
 		resize := resizeString(plan.Size.Width, plan.Size.Height, crop)
 		args = append(args, "-thumbnail", resize)
 		// -extent применяется только для crop-операций (I7): для OpResize

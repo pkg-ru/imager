@@ -4,13 +4,14 @@
 // реальный govips-движок. Компилируются ТОЛЬКО с тэком "libvips" (требует
 // libvips + cgo-окружение, см. docs/PRODUCTION.md).
 //
-// Проверяют семантику "сначала trim, затем crop":
-//   - OpSmartCropTrim: trim убирает однотонные края, затем smart-crop
+// Проверяют семантику "сначала trim, затем crop". Trim — независимый булев
+// фильтр (plan.Trim=true), а не отдельная операция: операция плана — только
+// режим кропа (smart-crop/face-crop/object-crop), trim применяется первым.
+//   - smart-crop + trim: trim убирает однотонные края, затем smart-crop
 //     (attention) применяется к подрезанному изображению;
-//   - OpFaceCropTrim / OpObjectCropTrim: детекция выполняется на УЖЕ
-//     подрезанном изображении — детектор получает размеры trim-области,
-//     а не исходного холста (координаты боксов относятся к подрезанному
-//     изображению).
+//   - face-crop/object-crop + trim: детекция выполняется на УЖЕ подрезанном
+//     изображении — детектор получает размеры trim-области, а не исходного
+//     холста (координаты боксов относятся к подрезанному изображению).
 package libvips
 
 import (
@@ -105,22 +106,24 @@ func (f *fakeDetector) DetectObjects(_ context.Context, _ []byte, width, height 
 // белые края 120x80 -> 60x40, затем attention-crop масштабирует до 100x50.
 func TestOpSmartCropTrim(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
-		processing.OpSmartCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpSmartCrop, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 100, Height: 50}, 1, 0, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
 	}
+	plan.Trim = true
 
 	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
 	if err != nil {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	w, h := decodePngSize(t, out)
 	if w != 100 || h != 50 {
 		t.Errorf("output size = %dx%d, want 100x50", w, h)
@@ -136,22 +139,24 @@ func TestOpSmartCropTrim(t *testing.T) {
 func TestOpFaceCropTrimUsesTrimmedDimensions(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
-		processing.OpFaceCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
 	}
+	plan.Trim = true
 
 	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
 	if err != nil {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	if det.lastW != 60 || det.lastH != 40 {
 		t.Errorf("detector got frame %dx%d, want 60x40 (trimmed), not 120x80", det.lastW, det.lastH)
 	}
@@ -169,22 +174,24 @@ func TestOpFaceCropTrimUsesTrimmedDimensions(t *testing.T) {
 func TestOpObjectCropTrimUsesTrimmedDimensions(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
-		processing.OpObjectCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpObjectCrop, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
 	}
+	plan.Trim = true
 
 	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
 	if err != nil {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	if det.lastW != 60 || det.lastH != 40 {
 		t.Errorf("detector got frame %dx%d, want 60x40 (trimmed), not 120x80", det.lastW, det.lastH)
 	}
@@ -218,10 +225,11 @@ func TestOpFaceCropWithReadyBoxes(t *testing.T) {
 	// Красный прямоугольник [20,20)x[80,60) на холсте 120x80. Бокс в
 	// координатах оригинала совпадает с ним.
 	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	if det.calls != 0 {
 		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
 	}
@@ -240,12 +248,13 @@ func TestOpFaceCropWithReadyBoxes(t *testing.T) {
 func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
-		processing.OpFaceCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
 	}
+	plan.Trim = true
 
 	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
 	if err != nil {
@@ -254,10 +263,11 @@ func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
 
 	// Бокс в координатах оригинала: весь красный прямоугольник.
 	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
-	out, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
+	out := res.data
 	if det.calls != 0 {
 		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
 	}

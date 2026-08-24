@@ -16,41 +16,31 @@ import (
 	"strings"
 )
 
-// Operation — допустимая enum операций обработки.
+// Operation — допустимая enum операций обработки кропа/ресайза.
+//
+// Trim — НЕ операция enum: это независимый булев фильтр обрезки однотонных
+// полей (ProcessingPlan.Trim), применяемый первым к любому типу обработки
+// (сначала trim, затем основная операция). Отдельная операция OpTrim не
+// существует: trim-only выражается как OpResize + Trim=true.
 type Operation string
 
 const (
-	// OpResize — изменение размера с сохранением пропорций.
+	// OpResize — изменение размера с сохранением пропорций (без кропа).
 	OpResize Operation = "resize"
-	// OpCrop — изменение размера (centre-crop) до целевого размера.
+	// OpCrop — центрированный кроп до целевого размера.
 	OpCrop Operation = "crop"
-	// OpTrim — обрезка по краям (trim).
-	OpTrim Operation = "trim"
-	// OpCropTrim — последовательное применение trim и crop (сначала trim).
-	OpCropTrim Operation = "crop-trim"
 	// OpSmartCrop — «умная» обрезка по значимой области (attention libvips).
 	OpSmartCrop Operation = "smart-crop"
 	// OpFaceCrop — обрезка по обнаруженным лицам (ONNX YuNet).
 	OpFaceCrop Operation = "face-crop"
 	// OpObjectCrop — обрезка по обнаруженным объектам (ONNX SSD/YOLO).
 	OpObjectCrop Operation = "object-crop"
-	// OpSmartCropTrim — последовательное применение trim и smart-crop
-	// (сначала trim).
-	OpSmartCropTrim Operation = "smart-crop-trim"
-	// OpFaceCropTrim — последовательное применение trim и face-crop
-	// (сначала trim).
-	OpFaceCropTrim Operation = "face-crop-trim"
-	// OpObjectCropTrim — последовательное применение trim и object-crop
-	// (сначала trim).
-	OpObjectCropTrim Operation = "object-crop-trim"
 )
 
 // ValidOperation проверяет, что op является допустимой операцией.
 func ValidOperation(op Operation) bool {
 	switch op {
-	case OpResize, OpCrop, OpTrim, OpCropTrim,
-		OpSmartCrop, OpFaceCrop, OpObjectCrop,
-		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim:
+	case OpResize, OpCrop, OpSmartCrop, OpFaceCrop, OpObjectCrop:
 		return true
 	default:
 		return false
@@ -145,13 +135,92 @@ func (s Size) Valid() error {
 	return nil
 }
 
+// TrimMode — режим определения цвета однотонного поля для обрезки trim.
+type TrimMode string
+
+const (
+	// TrimModeAuto — автоматическое определение цвета фона (по краевому
+	// пикселю). Режим по умолчанию.
+	TrimModeAuto TrimMode = "auto"
+	// TrimModeColor — фиксированный цвет фона (задаётся TrimSpec.Color).
+	TrimModeColor TrimMode = "color"
+)
+
+// ValidTrimMode проверяет допустимость режима trim.
+func ValidTrimMode(m TrimMode) bool {
+	return m == TrimModeAuto || m == TrimModeColor
+}
+
+// TrimSpec — настройки независимого фильтра trim (обрезка однотонных
+// полей). Применяется к ЛЮБОЙ основной операции (resize/crop/smart-crop/
+// face-crop/object-crop) СТРОГО до неё (сначала trim, затем кроп/ресайз).
+type TrimSpec struct {
+	// Mode — режим определения цвета фона: auto (авто, по краю) или
+	// color (фиксированный цвет). Default: auto.
+	Mode TrimMode
+	// Color — фиксированный цвет фона в hex-форме "#RRGGBB" (только для
+	// Mode=color). Примеры: "#ffffff", "#000000".
+	Color string
+	// Tolerance — допуск сравнения пикселей с фоновым цветом в диапазоне
+	// [0,1]: 0 — точное совпадение, 1 — любые пиксели считаются фоном.
+	// Default: 0.0.
+	Tolerance float64
+}
+
+// DefaultTrimSpec возвращает спецификацию trim по умолчанию
+// ({Mode: auto, Tolerance: 0}).
+func DefaultTrimSpec() *TrimSpec {
+	return &TrimSpec{Mode: TrimModeAuto, Tolerance: 0}
+}
+
+// Validate проверяет корректность спецификации trim.
+func (t *TrimSpec) Validate() error {
+	if t == nil {
+		return nil
+	}
+	if !ValidTrimMode(t.Mode) {
+		return fmt.Errorf("invalid trim mode %q, must be auto or color", t.Mode)
+	}
+	if t.Mode == TrimModeColor && t.Color == "" {
+		return fmt.Errorf("trim color mode requires a color")
+	}
+	if t.Color != "" && !isHexColor(t.Color) {
+		return fmt.Errorf("trim color %q must be in #RRGGBB form", t.Color)
+	}
+	if t.Tolerance < 0 || t.Tolerance > 1 {
+		return fmt.Errorf("trim tolerance must be in [0,1], got %v", t.Tolerance)
+	}
+	return nil
+}
+
+// isHexColor проверяет формат "#RRGGBB".
+func isHexColor(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // ProcessingPlan — immutable валидируемый план обработки.
 //
 // План не содержит ImageMagick-специфичных аргументов: только доменные
 // операции, форматы и размеры. Исполнитель маппит план в команды.
 type ProcessingPlan struct {
-	// Operation — операция обработки.
+	// Operation — операция обработки кропа/ресайза (без trim).
 	Operation Operation
+	// Trim — независимый булев фильтр обрезки однотонных полей (false =
+	// не применять). Применяется процессорами СТРОГО до Operation
+	// (сначала trim, затем кроп/ресайз).
+	Trim bool
+	// TrimSpec — настройки trim (режим auto/color + tolerance). nil =
+	// спецификация по умолчанию ({auto, 0}).
+	TrimSpec *TrimSpec
 	// SourceFormat — формат исходного файла.
 	SourceFormat Format
 	// OutputFormat — результирующий формат.
@@ -175,10 +244,9 @@ type ProcessingPlan struct {
 	// доверенного конфига и маппится процессорами через allowlists.
 	Watermark *WatermarkSpec
 	// Orientation — спецификация ориентационных операций (EXIF auto-orient,
-	// ручной поворот 90/180/270, отражение horizontal/vertical). nil =
-	// поведение по умолчанию (только EXIF auto-orient включён). Заполняется
-	// из конфигурации (пресет → processing.default-*); НЕ является частью
-	// URL-грамматики. Применяется процессорами СТРОГО до resize/crop/trim.
+	// поворот, отражение). nil = поведение по умолчанию. Заполняется
+	// из конфигурации (прет → processing.default-*); НЕ является частью
+	// URL-грамматики. Применяется процессорами СТРОГО до кропа.
 	Orientation *OrientationSpec
 }
 
@@ -261,6 +329,9 @@ func (p *ProcessingPlan) Validate() error {
 		if !ValidWatermarkRepeat(wm.Repeat) {
 			return fmt.Errorf("processing plan: invalid watermark repeat %q", wm.Repeat)
 		}
+	}
+	if err := p.TrimSpec.Validate(); err != nil {
+		return fmt.Errorf("processing plan: trim: %w", err)
 	}
 	if err := p.Orientation.Validate(); err != nil {
 		return fmt.Errorf("processing plan: %w", err)

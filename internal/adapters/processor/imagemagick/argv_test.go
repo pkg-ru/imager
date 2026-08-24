@@ -78,13 +78,15 @@ func TestBuildArgv_ValidCrop(t *testing.T) {
 }
 
 func TestBuildArgv_ValidTrim(t *testing.T) {
+	// Trim — независимый фильтр: trim-only выражается как OpResize + Trim=true.
 	plan, err := processing.NewProcessingPlan(
-		processing.OpTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	plan.Trim = true
 	args, err := buildArgv(plan, nil, Limits{})
 	if err != nil {
 		t.Fatalf("buildArgv: %v", err)
@@ -102,12 +104,13 @@ func TestBuildArgv_ValidTrim(t *testing.T) {
 
 func TestBuildArgv_TrimIM6NoTrimBounds(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
-		processing.OpTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	plan.Trim = true
 	caps := &Capabilities{Major: 6}
 	args, err := buildArgv(plan, caps, Limits{})
 	if err != nil {
@@ -313,26 +316,27 @@ func TestBuildArgv_CropUsesExtent(t *testing.T) {
 }
 
 func TestBuildArgv_CropTrimOrder(t *testing.T) {
-	// Для OpCropTrim порядок операций: сначала trim, затем crop.
-	// В ImageMagick операции применяются слева направо, поэтому -trim должен
-	// предшествовать -thumbnail/-extent.
+	// Trim — независимый фильтр: plan.Trim=true + OpCrop. Порядок операций:
+	// сначала trim, затем crop. В ImageMagick операции применяются слева
+	// направо, поэтому -trim должен предшествовать -thumbnail/-extent.
 	plan, err := processing.NewProcessingPlan(
-		processing.OpCropTrim, processing.FormatPNG, processing.FormatPNG,
+		processing.OpCrop, processing.FormatPNG, processing.FormatPNG,
 		processing.Size{Width: 400, Height: 300}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	plan.Trim = true
 	args, err := buildArgv(plan, nil, Limits{})
 	if err != nil {
 		t.Fatalf("buildArgv: %v", err)
 	}
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-trim") {
-		t.Fatalf("crop-trim should include -trim, got: %s", joined)
+		t.Fatalf("crop+trim should include -trim, got: %s", joined)
 	}
 	if !strings.Contains(joined, "-thumbnail 400x300^") {
-		t.Fatalf("crop-trim should include crop thumbnail, got: %s", joined)
+		t.Fatalf("crop+trim should include crop thumbnail, got: %s", joined)
 	}
 	// -trim должен идти ДО -thumbnail (trim выполняется первым).
 	if strings.Index(joined, "-trim") > strings.Index(joined, "-thumbnail") {
@@ -398,14 +402,16 @@ func TestBuildArgv_AutoOrientDisabled(t *testing.T) {
 }
 
 func TestBuildArgv_RotateFlipOrder(t *testing.T) {
-	// rotate/flip вставляются ДО -trim/-thumbnail.
+	// rotate/flip вставляются ДО -trim/-thumbnail. Trim — независимый фильтр
+	// (plan.Trim=true + OpCrop).
 	plan, err := processing.NewProcessingPlan(
-		processing.OpCropTrim, processing.FormatJPEG, processing.FormatPNG,
+		processing.OpCrop, processing.FormatJPEG, processing.FormatPNG,
 		processing.Size{Width: 400, Height: 300}, 1, 80, nil, 0, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
+	plan.Trim = true
 	plan.Orientation = &processing.OrientationSpec{
 		AutoOrient: true,
 		Rotate:     processing.Rotation90,

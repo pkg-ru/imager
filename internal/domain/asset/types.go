@@ -55,8 +55,6 @@ const (
 
 // Допустимые символы компонентов.
 const (
-	// nameChars — символы, допустимые в имени исходника.
-	nameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 	// presetNameChars — символы, допустимые в имени пресета. Дефисы
 	// запрещены, чтобы имя пресета в URL
 	// {source_name}-{source_format}/{preset_name}.{output_format} можно было
@@ -68,46 +66,64 @@ const (
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
-// Transform определяет режим обработки изображения.
+// Transform определяет режим кропа (и наличие trim) в URL-грамматике.
+//
+// Кроп и trim — НЕЗАВИСИМЫЕ фильтры: кроп выбирает режим обработки
+// (center/smart/face/object), trim — обрезка однотонных полей. В
+// каноническом URL они сериализуются одним кодом: trim-код "t" всегда
+// стоит ПОСЛЕДНИМ в коде ("c", "t", "ct", "sc", "sct", ...), при этом
+// фактическое применение всегда сначала trim, затем crop.
 type Transform string
 
 const (
-	// TransformCrop — обрезка (crop).
+	// TransformCrop — центрированная обрезка (crop).
 	TransformCrop Transform = "c"
-	// TransformTrim — обрезка по краям (trim).
+	// TransformTrim — только обрезка однотонных полей (trim), без кропа.
 	TransformTrim Transform = "t"
-	// TransformCropTrim — последовательное применение trim и crop (сначала trim).
+	// TransformCropTrim — trim + центрированный кроп (код "ct": trim в коде
+	// последний; применяется сначала trim, затем центрированный кроп).
 	TransformCropTrim Transform = "ct"
-	// TransformSmartCrop — «умная» обрезка по значимой области (attention).
+	// TransformSmartCrop — умная обрезка (smart-crop).
 	TransformSmartCrop Transform = "sc"
 	// TransformFaceCrop — обрезка по обнаруженным лицам.
 	TransformFaceCrop Transform = "fc"
 	// TransformObjectCrop — обрезка по обнаруженным объектам.
 	TransformObjectCrop Transform = "oc"
-	// TransformSmartCropTrim — trim, затем smart-crop (сначала trim).
+	// TransformSmartCropTrim — trim + smart-crop (код "sct": применяется
+	// сначала trim, затем smart-crop).
 	TransformSmartCropTrim Transform = "sct"
-	// TransformFaceCropTrim — trim, затем face-crop (сначала trim).
+	// TransformFaceCropTrim — trim + face-crop (код "fct").
 	TransformFaceCropTrim Transform = "fct"
-	// TransformObjectCropTrim — trim, затем object-crop (сначала trim).
+	// TransformObjectCropTrim — trim + object-crop (код "oct").
 	TransformObjectCropTrim Transform = "oct"
 )
 
 // ValidTransform проверяет, что transform является допустимым.
-// Разрешены ровно "c", "t", "ct", "sc", "fc", "oc", "sct", "fct" и "oct";
-// любые другие комбинации (включая "tc") отклоняются. Пустой transform
-// допустим (означает resize).
+// Разрешены: "", "c", "t", "ct", "sc", "fc", "oc", "sct", "fct", "oct".
+// Trim-код допустим только последним в коде ("tc" и прочие комбинации
+// отклоняются).
 func ValidTransform(t Transform) bool {
-	return t == TransformCrop || t == TransformTrim || t == TransformCropTrim ||
-		t == TransformSmartCrop || t == TransformFaceCrop || t == TransformObjectCrop ||
-		t == TransformSmartCropTrim || t == TransformFaceCropTrim || t == TransformObjectCropTrim
+	switch t {
+	case TransformCrop, TransformTrim, TransformCropTrim,
+		TransformSmartCrop, TransformFaceCrop, TransformObjectCrop,
+		TransformSmartCropTrim, TransformFaceCropTrim, TransformObjectCropTrim:
+		return true
+	}
+	return false
 }
 
 // SourceName — каноническое имя исходного файла.
 type SourceName string
 
-// NewSourceName создаёт SourceName с валидацией длины и символов.
+// NewSourceName создаёт SourceName с валидацией безопасности и длины.
+//
+// Имя исходника может содержать ЛЮБЫЕ Unicode-символы, допустимые в имени
+// файла (буквы любых алфавитов, цифры, пробелы, дефис, подчёркивание,
+// точка и т.д.). Запрещены только опасные для файловой системы/безопасности
+// вещи: разделители пути ("/", "\\"), traversal-последовательность "..",
+// нулевой байт и управляющие символы. Валидация выполняется по рунам (utf8).
 func NewSourceName(s string) (SourceName, error) {
-	if err := validateComponent("source name", s, nameChars, MaxSourceNameLen); err != nil {
+	if err := validateSourceName("source name", s, MaxSourceNameLen); err != nil {
 		return "", err
 	}
 	return SourceName(s), nil
@@ -257,6 +273,31 @@ func validateComponent(what, s, allowed string, maxLen int) error {
 	for _, r := range s {
 		if !strings.ContainsRune(allowed, r) {
 			return fmt.Errorf("%s contains invalid character %q", what, r)
+		}
+	}
+	return nil
+}
+
+// validateSourceName проверяет имя исходного файла: длина, отсутствие
+// разделителей пути, traversal-сегментов, нулевого байта и управляющих
+// символов. Остальные Unicode-символы разрешены.
+func validateSourceName(what, s string, maxLen int) error {
+	if s == "" {
+		return fmt.Errorf("%s is empty", what)
+	}
+	if len(s) > maxLen {
+		return fmt.Errorf("%s length %d exceeds maximum %d", what, len(s), maxLen)
+	}
+	if strings.Contains(s, "..") {
+		return fmt.Errorf("%s contains traversal segment \"..\"", what)
+	}
+	for _, r := range s {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			// Управляющие символы, включая нулевой байт (\x00).
+			return fmt.Errorf("%s contains control character %q", what, r)
+		case r == '/' || r == '\\':
+			return fmt.Errorf("%s contains path separator %q", what, r)
 		}
 	}
 	return nil

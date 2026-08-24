@@ -405,10 +405,10 @@ policy:
   path-policies:
     - path: "/"
       dpr: "0-1"
-      crop: false
+      crop: none
     - path: "/users"
       dpr: "2-3"
-      crop: true
+      crop: center
       trim: false
     - path: "basket/products"
       dpr: "0-1"
@@ -445,9 +445,10 @@ policy:
 	}
 }
 
-// TestParseRuntimeConfigPathPolicyCropModes проверяет декодирование новых
-// форм поля crop в path-policies: булево, строка-режим, список режимов,
-// "none" — и их компиляцию в доменные правила.
+// TestParseRuntimeConfigPathPolicyCropModes проверяет декодирование форм
+// поля crop в path-policies: строка-режим, список режимов, "none" — и их
+// компиляцию в доменные правила. Булевы значения crop запрещены (crop —
+// только строка).
 func TestParseRuntimeConfigPathPolicyCropModes(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
@@ -455,10 +456,10 @@ policy:
   global:
     authorization: unsafe
   path-policies:
-    - path: "/bool"
-      crop: true
+    - path: "/center"
+      crop: center
     - path: "/deny"
-      crop: false
+      crop: none
     - path: "/smart"
       crop: smart
     - path: "/list"
@@ -483,14 +484,15 @@ policy:
 		transform asset.Transform
 		allowed   bool
 	}{
-		// crop: true → разрешены только c/ct.
-		{"/bool", asset.TransformCrop, true},
-		{"/bool", asset.TransformCropTrim, true},
-		{"/bool", asset.TransformSmartCrop, false},
-		// crop: false → c/ct запрещены, остальное разрешено.
+		// crop: center → разрешены только c/ct.
+		{"/center", asset.TransformCrop, true},
+		{"/center", asset.TransformCropTrim, true},
+		{"/center", asset.TransformSmartCrop, false},
+		// crop: none → все crop-режимы запрещены, остальное разрешено.
 		{"/deny", asset.TransformCrop, false},
 		{"/deny", asset.TransformCropTrim, false},
-		{"/deny", asset.TransformSmartCrop, true},
+		{"/deny", asset.TransformSmartCrop, false},
+		{"/deny", asset.TransformObjectCropTrim, false},
 		{"/deny", "", true},
 		// crop: smart → sc/sct.
 		{"/smart", asset.TransformSmartCrop, true},
@@ -581,6 +583,41 @@ processing:
 	}
 	if or.AutoOrient || or.Rotate != processing.Rotation90 || or.Flip != processing.FlipHorizontal {
 		t.Errorf("preset orientation = %v, want auto-orient off, rotate 90, flip horizontal", or)
+	}
+}
+
+// TestParseRuntimeConfigTrimKeys проверяет, что глобальные ключи trim
+// (processing.default-trim-mode/color/tolerance) принимаются строгим
+// YAML-парсером и попадают в скомпилированный DefaultTrim.
+func TestParseRuntimeConfigTrimKeys(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+  presets:
+    - name: thumb
+      crop: center
+      size: 120x80
+      output-format: webp
+processing:
+  default-trim-mode: color
+  default-trim-color: "#f0f0f0"
+  default-trim-tolerance: 0.1
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	compiled, err := rc.Pipeline.Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	ts := compiled.DefaultTrim
+	if ts == nil {
+		t.Fatal("expected DefaultTrim")
+	}
+	if ts.Mode != processing.TrimModeColor || ts.Color != "#f0f0f0" || ts.Tolerance != 0.1 {
+		t.Errorf("DefaultTrim = %+v, want {color, #f0f0f0, 0.1}", ts)
 	}
 }
 

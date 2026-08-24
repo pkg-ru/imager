@@ -571,27 +571,31 @@ func TestBuildPlanOrientationFallbackDefault(t *testing.T) {
 }
 
 // TestBuildPlanTrimDetectionTransforms проверяет маппинг trim-вариантов
-// transform-кодов (sct/fct/oct) в операции (сначала trim, затем crop).
+// transform-кодов (sct/fct/oct): trim — независимый булев фильтр, а не
+// отдельная операция. Операция плана — только режим кропа, trim выделяется
+// в plan.Trim (применяется первым).
 func TestBuildPlanTrimDetectionTransforms(t *testing.T) {
 	env := newTestEnv(t)
 
 	cases := []struct {
-		tr   asset.Transform
-		want processing.Operation
+		tr asset.Transform
+		op processing.Operation
 	}{
-		{asset.TransformSmartCropTrim, processing.OpSmartCropTrim},
-		{asset.TransformFaceCropTrim, processing.OpFaceCropTrim},
-		{asset.TransformObjectCropTrim, processing.OpObjectCropTrim},
+		{asset.TransformSmartCropTrim, processing.OpSmartCrop},
+		{asset.TransformFaceCropTrim, processing.OpFaceCrop},
+		{asset.TransformObjectCropTrim, processing.OpObjectCrop},
 	}
 	for _, c := range cases {
 		t.Run(string(c.tr), func(t *testing.T) {
-			req := mustReq(t, "", "photo", "png", c.tr, "100x100", 1, "webp")
-			plan, err := env.svc.buildPlan(req)
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", c.tr, "100x100", 1, "webp"))
 			if err != nil {
 				t.Fatalf("buildPlan(%q) error: %v", c.tr, err)
 			}
-			if plan.Operation != c.want {
-				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.tr, plan.Operation, c.want)
+			if plan.Operation != c.op {
+				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.tr, plan.Operation, c.op)
+			}
+			if !plan.Trim {
+				t.Errorf("buildPlan(%q).Trim = false, want true", c.tr)
 			}
 		})
 	}

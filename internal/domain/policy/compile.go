@@ -37,13 +37,12 @@ type PathPolicyConfig struct {
 	// Например "0-1" (только dpr=1) или "2-3" (dpr 2 или 3).
 	DPR string `yaml:"dpr"`
 	// Crop — правило допустимых crop-режимов (nil = не задано/неважно).
-	// Принимает три YAML-формы (см. CropRuleConfig):
-	//   - bool: true = crop обязателен, false = crop запрещён;
-	//   - строка: имя режима ("center"/"smart"/"face"/"object") или "none";
-	//   - список имён режимов: разрешены ТОЛЬКО перечисленные режимы.
+	// ТОЛЬКО строковые формы (см. CropRuleConfig): имя режима
+	// ("center"/"smart"/"face"/"object"), "none" (запрет любого кропа) или
+	// список имён режимов. БОЛЕВЫЕ значения запрещены.
 	Crop *CropRuleConfig `yaml:"crop"`
-	// Trim — требование к trim (nil = не задано/неважно). true = trim
-	// обязан присутствовать в transform, false = trim запрещён.
+	// Trim — требование к trim (nil = не задано/неважно). true = trim обязан
+	// присутствовать (код с trim), false = trim запрещён.
 	Trim *bool `yaml:"trim"`
 	// Watermark — имя ватермарки (ссылка на элемент секции watermarks;
 	// пусто = не задана). Разрешается в спецификацию при компиляции:
@@ -59,15 +58,19 @@ type PathPolicyConfig struct {
 // Имя пресета может содержать фиксированный @dpr-суффикс (например
 // "thumb@2"). Поле dpr (если задано) имеет приоритет над @dpr в имени.
 //
-// crop — строковый режим кропа:
-//   - ""        — кроп не используется (только resize)
-//   - "center"  — центрированный кроп (transform c)
+// crop — ТОЛЬКО строковый параметр, дефолт "" (кроп не используется):
+//   - ""        — resize (только изменение размера)
+//   - "center"  — центрированный кроп (transform c) — дефолт
 //   - "smart"   — умный кроп (sc)
 //   - "face"    — кроп по лицу (fc)
 //   - "object"  — кроп по объекту (oc)
 //
-// trim — булев флаг обрезки однотонных полей. Комбинация crop+trim маппится
-// в операцию: при trim=true — t/ct/sct/fct/oct, иначе — ""/c/sc/fc/oc.
+// trim — булев флаг независимого фильтра обрезки однотонных полей (false =
+// не применять). Комбинация crop+trim кодируется в transform код URL:
+// при trim=true — "t"/"ct"/"sct"/"fct"/"oct" (trim последним в коде), иначе —
+// ""/"c"/"sc"/"fc"/"oc". Фактическое применение — сначала trim, затем кроп.
+// Настройки trim (режим auto/color + tolerance) — глобальные
+// (processing.default-trim-*), не per-preset.
 type PresetConfig struct {
 	Name         string `yaml:"name"`
 	Crop         string `yaml:"crop"`
@@ -104,49 +107,30 @@ type PresetConfig struct {
 	Flip string `yaml:"flip"`
 }
 
-// denyMarker — внутренний маркер deny-формы правила crop (bool=false или
-// "none") внутри CropRuleConfig. Значение выбрано так, что оно не может
-// совпасть с именем режима.
-const denyMarker = "!"
-
 // CropRuleConfig — YAML-представление правила crop для path-policy.
 //
-// Допустимые формы значения поля crop:
+// crop — ТОЛЬКО строковый параметр (или список строк); булевы значения
+// (true/false) ЗАПРЕЩЕНЫ. Допустимые формы значения поля crop:
 //
-//	crop: true              # crop обязателен (любой из c/ct)
-//	crop: false             # crop запрещён (c и ct)
-//	crop: center            # разрешён ТОЛЬКО центрированный кроп (c/ct)
-//	crop: smart             # разрешён ТОЛЬКО умный кроп (sc/sct)
-//	crop: face              # разрешён ТОЛЬКО кроп по лицу (fc/fct)
-//	crop: object            # разрешён ТОЛЬКО кроп по объекту (oc/oct)
-//	crop: none              # любой crop-режим запрещён (эквивалент false)
+//	crop: center            # разрешён ТОЛЬКО центрированный кроп (c)
+//	crop: smart             # разрешён ТОЛЬКО умный кроп (sc)
+//	crop: face              # разрешён ТОЛЬКО кроп по лицу (fc)
+//	crop: object            # разрешён ТОЛЬКО кроп по объекту (oc)
+//	crop: none              # любой crop-режим запрещён (эквивалент "")
 //	crop: [smart, face]     # разрешены только перечисленные режимы
+//	crop: ""                # не задано (nil) — неважно
 //
-// Режим разворачивается в пару transform-кодов (обычный + trim-вариант),
-// поэтому trim-варианты (ct/sct/fct/oct) отдельно указывать не нужно:
-// комбинация crop-режима с trim:true покрыта автоматически. Пустой список
-// невалиден (используйте false/none для запрета). Неизвестное значение —
-// ошибка компиляции конфигурации.
+// Режим маппится в код URL "c"/"sc"/"fc"/"oc". Trim — отдельный булев
+// параметр path-policy (Trim), не являющийся частью CropRuleConfig.
+// Пустой список невалиден (используйте none для запрета). Неизвестное
+// значение — ошибка компиляции конфигурации.
 type CropRuleConfig []string
 
-// UnmarshalYAML реализует гибкое декодирование поля crop: булево значение,
-// скалярная строка или список строк сводятся к единому представлению —
-// списку имён режимов. Отсутствие значения (null) не вызывает unmarshaler:
-// поле остаётся nil («не ограничено»).
+// UnmarshalYAML реализует гибкое декодирование поля crop: скалярная строка
+// или список строк сводятся к единому представлению — списку имён режимов.
+// БУЛЕВЫЕ значения НЕ ПРИНИМАЮТСЯ: crop — только строка. Отсутствие значения
+// (null) не вызывает unmarshaler: поле остаётся nil («не ограничено»).
 func (c *CropRuleConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var b bool
-	if err := unmarshal(&b); err == nil {
-		if b {
-			// Историческая форма true: crop обязателен (центрированный
-			// кроп или его trim-вариант).
-			*c = []string{"center"}
-		} else {
-			// Историческая форма false: deny-форма с маркером (запрет
-			// только c/ct — прежняя семантика булева поля).
-			*c = []string{denyMarker}
-		}
-		return nil
-	}
 	var s string
 	if err := unmarshal(&s); err == nil {
 		if s == "" {
@@ -158,7 +142,7 @@ func (c *CropRuleConfig) UnmarshalYAML(unmarshal func(interface{}) error) error 
 	}
 	var list []string
 	if err := unmarshal(&list); err != nil {
-		return fmt.Errorf("crop must be a boolean, a mode name or a list of mode names")
+		return fmt.Errorf("crop must be a mode name or a list of mode names (boolean values are not supported)")
 	}
 	*c = list
 	return nil
@@ -168,11 +152,12 @@ func (c *CropRuleConfig) UnmarshalYAML(unmarshal func(interface{}) error) error 
 //
 // Формы:
 //   - nil (поле не задано / пустая строка) → nil (без ограничения);
-//   - ["!"] — маркер deny-формы (bool=false): чёрный список {c, ct};
 //   - ["none"] — явный запрет любого crop-режима: чёрный список всех
-//     crop-кодов;
-//   - список режимов → белый список кодов (режим → пара кодов c/ct,
-//     sc/sct, fc/fct, oc/oct).
+//     crop-кодов (включая trim-варианты);
+//   - список режимов → белый список кодов. Режим КРОПА автоматически
+//     покрывает свой trim-вариант (например "center" → c и ct): trim —
+//     независимый фильтр, а не отдельный режим кропа, поэтому отдельно
+//     указывать "center+t" не нужно.
 func compileCropRule(cfg CropRuleConfig) (*CropRule, error) {
 	if cfg == nil {
 		return nil, nil
@@ -180,11 +165,7 @@ func compileCropRule(cfg CropRuleConfig) (*CropRule, error) {
 	if len(cfg) == 0 {
 		return nil, fmt.Errorf("policy: crop rule is empty")
 	}
-	// Маркер deny-формы: bool=false кодируется спецэлементом "!".
-	if len(cfg) == 1 && cfg[0] == denyMarker {
-		return NewCropDenyList(asset.TransformCrop, asset.TransformCropTrim), nil
-	}
-	codes := make([]asset.Transform, 0, len(cfg))
+	codes := make([]asset.Transform, 0, len(cfg)*2)
 	for _, name := range cfg {
 		switch name {
 		case "center":
@@ -196,7 +177,7 @@ func compileCropRule(cfg CropRuleConfig) (*CropRule, error) {
 		case "object":
 			codes = append(codes, asset.TransformObjectCrop, asset.TransformObjectCropTrim)
 		case "none":
-			// Явный запрет любого crop-режима (включая trim-варианты).
+			// Явный запрет любого crop-режима (и его trim-вариантов).
 			return NewCropDenyList(
 				asset.TransformCrop, asset.TransformCropTrim,
 				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
@@ -469,18 +450,21 @@ func Compile(cfg *Config, watermarks map[string]*processing.WatermarkSpec, defau
 }
 
 // transformFromCropTrim маппит строковый режим crop и булев флаг trim
-// в Transform:
+// (независимые фильтры) в трансформационный код URL:
 //
-//	crop="",        trim=false → resize (пустой transform)
-//	crop="center",  trim=false → crop (c)
-//	crop="smart",   trim=false → smart-crop (sc)
-//	crop="face",    trim=false → face-crop (fc)
-//	crop="object",  trim=false → object-crop (oc)
-//	crop="",        trim=true  → trim (t)
-//	crop="center",  trim=true  → crop-trim (ct)
-//	crop="smart",   trim=true  → smart-crop-trim (sct)
-//	crop="face",    trim=true  → face-crop-trim (fct)
-//	crop="object",  trim=true  → object-crop-trim (oct)
+//	crop="",        trim=false → ""            (resize, без кропа)
+//	crop="center",  trim=false → "c"           (центрированный кроп)
+//	crop="smart",   trim=false → "sc" (smart-crop)
+//	crop="face",    trim=false → "fc" (face-crop)
+//	crop="object",  trim=false → "oc" (object-crop)
+//	crop="",        trim=true  → "t" (только trim)
+//	crop="center",  trim=true  → "ct" (c + trim; применяется trim, затем кроп)
+//	crop="smart",   trim=true  → "sct"
+//	crop="face",    trim=true  → "fct"
+//	crop="object",  trim=true  → "oct"
+//
+// Trim в коде всегда стоит ПОСЛЕДНИМ; фактическое применение — сначала trim,
+// затем кроп.
 func transformFromCropTrim(crop string, trim bool) asset.Transform {
 	switch crop {
 	case "center":

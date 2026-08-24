@@ -74,6 +74,16 @@ type ProcessingConfig struct {
 	// vertical = сверху-вниз. Применяется, если в пресете flip не задан
 	// явно.
 	DefaultFlip string `yaml:"default-flip"`
+	// DefaultTrimMode — режим определения цвета однотонного поля для
+	// независимого фильтра trim: "auto" (авто, по краевому пикселю) или
+	// "color" (фиксированный цвет DefaultTrimColor). Дефолт: "auto".
+	DefaultTrimMode string `yaml:"default-trim-mode"`
+	// DefaultTrimColor — фиксированный цвет фона для trim в hex-форме
+	// "#RRGGBB" (только при default-trim-mode: color). Дефолт: "".
+	DefaultTrimColor string `yaml:"default-trim-color"`
+	// DefaultTrimTolerance — допуск сравнения пикселей с фоновым цветом
+	// для trim в диапазоне [0,1] (0 — точное совпадение). Дефолт: 0.
+	DefaultTrimTolerance float64 `yaml:"default-trim-tolerance"`
 }
 
 // SupportedVersion — поддерживаемая версия конфигурации.
@@ -95,6 +105,11 @@ func (c *Config) Validate() error {
 	}
 	if _, err := processing.ParseFlip(c.Processing.DefaultFlip); err != nil {
 		return fmt.Errorf("config: processing.default-flip: %w", err)
+	}
+	// Глобальные настройки trim: режим (auto/color), цвет (для color) и
+	// допуск [0,1]. Валидируются через TrimSpec.
+	if err := c.compileDefaultTrim().Validate(); err != nil {
+		return fmt.Errorf("config: processing.default-trim: %w", err)
 	}
 	// Ватермарки: валидность каждой декларации, уникальность имён.
 	for i, w := range c.Watermarks {
@@ -184,6 +199,24 @@ type Compiled struct {
 	// ручной rotate/flip). Никогда не nil: при отсутствии настроек содержит
 	// {AutoOrient: true} (историческое поведение движков).
 	DefaultOrientation *processing.OrientationSpec
+	// DefaultTrim — настройки независимого фильтра trim по умолчанию
+	// (режим auto/color + tolerance из processing.default-trim-*). Никогда
+	// не nil: при отсутствии настроек содержит {Mode: auto, Tolerance: 0}.
+	DefaultTrim *processing.TrimSpec
+}
+
+// compileDefaultTrim собирает глобальные настройки trim из processing.default-*.
+// Возвращает спецификацию по умолчанию ({auto, 0}), если режим не задан.
+func (c *Config) compileDefaultTrim() *processing.TrimSpec {
+	mode := processing.TrimMode(c.Processing.DefaultTrimMode)
+	if mode == "" {
+		mode = processing.TrimModeAuto
+	}
+	return &processing.TrimSpec{
+		Mode:      mode,
+		Color:     c.Processing.DefaultTrimColor,
+		Tolerance: c.Processing.DefaultTrimTolerance,
+	}
 }
 
 // Compile собирает доменные объекты из валидированного DTO.
@@ -226,5 +259,6 @@ func (c *Config) Compile() (*Compiled, error) {
 		Watermarks:         reg,
 		DefaultWatermark:   defWM,
 		DefaultOrientation: defOr,
+		DefaultTrim:        c.compileDefaultTrim(),
 	}, nil
 }

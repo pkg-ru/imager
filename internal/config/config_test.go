@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/internal/domain/processing"
 )
 
 func wmDecls(names ...string) []WatermarkConfig {
@@ -234,3 +235,74 @@ func TestValidateDefaultOrientationErrors(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestCompileDefaultTrim(t *testing.T) {
+	cfg := &Config{
+		Version:    SupportedVersion,
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{
+			DefaultQuality:       80,
+			DefaultTrimMode:      "color",
+			DefaultTrimColor:     "#ffffff",
+			DefaultTrimTolerance: 0.25,
+		},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ts := compiled.DefaultTrim
+	if ts == nil {
+		t.Fatal("DefaultTrim is nil")
+	}
+	if ts.Mode != processing.TrimModeColor || ts.Color != "#ffffff" || ts.Tolerance != 0.25 {
+		t.Errorf("unexpected default trim spec: %+v", ts)
+	}
+}
+
+func TestCompileDefaultTrimDefaults(t *testing.T) {
+	cfg := &Config{
+		Version:    SupportedVersion,
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{DefaultQuality: 80},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ts := compiled.DefaultTrim
+	if ts == nil {
+		t.Fatal("DefaultTrim is nil")
+	}
+	if ts.Mode != processing.TrimModeAuto || ts.Color != "" || ts.Tolerance != 0 {
+		t.Errorf("expected default {Mode:auto, Tolerance:0}, got %+v", ts)
+	}
+}
+
+func TestValidateDefaultTrimErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*ProcessingConfig)
+	}{
+		{"invalid mode", func(p *ProcessingConfig) { p.DefaultTrimMode = "edge" }},
+		{"color mode without color", func(p *ProcessingConfig) { p.DefaultTrimMode = "color" }},
+		{"invalid color", func(p *ProcessingConfig) { p.DefaultTrimMode = "color"; p.DefaultTrimColor = "white" }},
+		{"tolerance too high", func(p *ProcessingConfig) { p.DefaultTrimTolerance = 1.5 }},
+		{"tolerance negative", func(p *ProcessingConfig) { p.DefaultTrimTolerance = -0.1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Version:    SupportedVersion,
+				Policy:     policyConfigForTest(),
+				Processing: ProcessingConfig{DefaultQuality: 80},
+			}
+			tc.mutate(&cfg.Processing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}

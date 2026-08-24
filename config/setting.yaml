@@ -63,7 +63,7 @@ server:
   # graceful shutdown (SIGINT/SIGTERM).
   # Тип: duration-строка. Дефолт в коде: "15s".
   # По истечении — принудительное закрытие соединений и завершение.
-  shutdown-timeout: "15s"
+  shutdown-timeout: "30s"
 
   # max-header-bytes — максимальный суммарный размер заголовков запроса.
   # Тип: int (байты). Дефолт в коде: 32768 (32 KiB, уменьшено с 1 MiB).
@@ -147,7 +147,7 @@ http:
   # уходит в процессоры/сеть. Применяется только к asset-запросам ("/"),
   # health/metrics остаются доступными при перегрузке.
   # 0 = без ограничения (совместимость с прежним поведением).
-  max-concurrent-requests: 0
+  max-concurrent-requests: 4
 
   # not-found — поведение при отсутствии запрашиваемого ассета (мимо кэша
   # и мимо source). Поля взаимоисключающие по приоритету:
@@ -254,18 +254,20 @@ policy:
   #     "smart"   → smart-crop   (умная обрезка)
   #     "face"    → face-crop    (обрезка по лицу)
   #     "object"  → object-crop  (обрезка по объекту);
-  #   trim (bool; по умолчанию false) — обрезка однотонных полей;
-  #   комбинация crop+trim формирует трансформацию:
+  #   trim (bool; по умолчанию false) — независимый фильтр обрезки
+  #   однотонных полей. crop и trim — НЕЗАВИСИМЫЕ фильтры: сначала trim,
+  #   затем кроп/ресайз. Комбинация кодируется в transform код URL
+  #   (trim последним в коде):
   #     crop=""       trim=false → resize
   #     crop="center" trim=false → crop
   #     crop="smart"  trim=false → smart-crop
   #     crop="face"   trim=false → face-crop
   #     crop="object" trim=false → object-crop
   #     crop=""       trim=true  → trim
-  #     crop="center" trim=true  → crop-trim
-  #     crop="smart"  trim=true  → smart-crop-trim
-  #     crop="face"   trim=true  → face-crop-trim
-  #     crop="object" trim=true  → object-crop-trim
+  #     crop="center" trim=true  → ct
+  #     crop="smart"  trim=true  → sct
+  #     crop="face"   trim=true  → fct
+  #     crop="object" trim=true  → oct
   #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
   #   output-format — jpeg | png | webp | gif | avif | heif | apng | jxl (JPEG XL);
   #   quality — 0-100 (0 = default-quality из `processing`);
@@ -350,13 +352,11 @@ policy:
   #   "/" — fallback: применяется ко всем путям без более специфичного совпадения.
   # Поля (все опциональны):
   #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
-  #   crop  — правило допустимых crop-режимов. Три формы значения:
-  #       bool:   true = crop обязателен в URL (c или ct);
-  #               false = crop запрещён (c и ct отклоняются);
+  #   crop  — правило допустимых crop-режимов:
   #       строка: имя режима — разрешён ТОЛЬКО этот режим:
   #               "center" → c/ct, "smart" → sc/sct,
   #               "face" → fc/fct, "object" → oc/oct;
-  #               "none" = любой crop-режим запрещён (эквивалент false);
+  #               "none" = любой crop-режим запрещён;
   #       список: crop: [smart, face] — разрешены ТОЛЬКО перечисленные режимы.
   #       Режим автоматически покрывает свой trim-вариант (ct/sct/fct/oct),
   #       поэтому отдельно указывать их не нужно. Неизвестное значение —
@@ -373,12 +373,12 @@ policy:
     - path: "/"
     - path: "/thumbs"        # для префикса /thumbs
       dpr: "0-1"
-      crop: true             # crop обязателен (любой crop-режим)
+      crop: center           # разрешён только центрированный кроп (c/ct)
     - path: "/banners"
       dpr: "0-2"
     - path: "/originals"
       dpr: "0-1"
-      crop: false            # crop запрещён
+      crop: none             # любой crop-режим запрещён
       trim: false
     - path: "/admin"
       dpr: "0-1"
@@ -490,6 +490,29 @@ processing:
   # значение полем flip.
   # Пример:
   # default-flip: horizontal
+
+  # default-trim-mode — режим определения цвета однотонного поля для
+  # независимого фильтра trim (обрезка однотонных полей).
+  # Тип: string. Дефолт: "auto".
+  #   "auto"  — автоматическое определение цвета фона (по краевому пикселю);
+  #   "color" — фиксированный цвет фона (default-trim-color).
+  # Применяется к trim-запросам (t/ct/sct/fct/oct), если в пресете trim не
+  # задан. Настройки trim — глобальные (не per-preset).
+  # Пример:
+  # default-trim-mode: auto
+
+  # default-trim-color — фиксированный цвет фона для trim в hex-форме
+  # "#RRGGBB" (только при default-trim-mode: color).
+  # Тип: string. Дефолт: "" (не задан).
+  # Пример:
+  # default-trim-color: "#ffffff"
+
+  # default-trim-tolerance — допуск сравнения пикселей с фоновым цветом
+  # для trim в диапазоне [0,1]: 0 — точное совпадение, 1 — любые пиксели
+  # считаются фоном.
+  # Тип: float. Дефолт: 0.
+  # Пример:
+  # default-trim-tolerance: 0
 
 ########################################
 # source / result — хранилища исходников и результатов.
@@ -636,7 +659,7 @@ libvips:
     # threads — число потоков libvips (vips_concurrency_set). 0 = default
     # govips (1). Для нагруженного процесca рекомендуется число логических
     # ядер (иначе libvips сам распараллелит по ядрам поверх concurrency).
-    threads: 0
+    threads: 4
 
     # max-cache-mem — максимум памяти кэша libvips (байт). 0 = default
     # govips (50 MiB). Уменьшение снижает пиковое потребление памяти.
@@ -841,7 +864,7 @@ application:
   # Тип: int64 (байт). Дефолт: 0 (= нет). При превышении — генерация
   # прерывается; результат не сохраняется.
   # Рекомендуется задавать явно, например 10485760 (10 MiB).
-  output-limit: 0
+  output-limit: 10485760
 
   # buffer-max-bytes — общий бюджет памяти для спиллабл-буфера (source и
   # result вместе). При исчерпании — спул на диск (временный файл) даже

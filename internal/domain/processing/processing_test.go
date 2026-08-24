@@ -3,11 +3,11 @@ package processing
 import "testing"
 
 func TestValidOperation(t *testing.T) {
-	// Полный список допустимых операций зафиксирован явно.
+	// Полный список допустимых операций зафиксирован явно. Trim — НЕ
+	// операция enum: это независимый булев фильтр (ProcessingPlan.Trim),
+	// поэтому комбинированных операций (crop-trim и т.п.) не существует.
 	ops := []Operation{
-		OpResize, OpCrop, OpTrim, OpCropTrim,
-		OpSmartCrop, OpFaceCrop, OpObjectCrop,
-		OpSmartCropTrim, OpFaceCropTrim, OpObjectCropTrim,
+		OpResize, OpCrop, OpSmartCrop, OpFaceCrop, OpObjectCrop,
 	}
 	for _, op := range ops {
 		if !ValidOperation(op) {

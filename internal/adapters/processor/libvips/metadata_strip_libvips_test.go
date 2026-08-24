@@ -123,12 +123,12 @@ func TestProcessStripsMetadataPng(t *testing.T) {
 	}
 
 	src := makePngWithMetadata(t)
-	out, err := b.process(context.Background(), src, plan)
+	out, err := b.process(context.Background(), src, plan, false, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
-	dec, err := vips.NewImageFromBuffer(out)
+	dec, err := vips.NewImageFromBuffer(out.data)
 	if err != nil {
 		t.Fatalf("decode output: %v", err)
 	}
@@ -163,13 +163,14 @@ func TestProcessStripsMetadataHeifJxl(t *testing.T) {
 			t.Fatalf("%s: newLibvipsBackend: %v", c.name, err)
 		}
 
-		out, err := b.process(context.Background(), makePngWithMetadata(t), plan)
+		res, err := b.process(context.Background(), makePngWithMetadata(t), plan, false, nil)
 		if err != nil {
 			// Кодек может отсутствовать в сборке libvips (heif/jxl не
 			// скомпилированы). Это не провал зачистки — пропускаем.
 			t.Skipf("%s codec not available: %v", c.name, err)
 			continue
 		}
+		out := res.data
 
 		dec, err := vips.NewImageFromBuffer(out)
 		if err != nil {

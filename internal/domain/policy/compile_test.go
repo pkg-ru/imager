@@ -78,11 +78,10 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 }
 
 func TestValidateConfigValidPathPolicies(t *testing.T) {
-	cropFalse := false
 	trimFalse := false
 	valid := &Config{
 		PathPolicies: []PathPolicyConfig{
-			{Path: "/", DPR: "0-1", Crop: boolCropRule(cropFalse)},
+			{Path: "/", DPR: "0-1", Crop: strCropRule("none")},
 			{Path: "/users", DPR: "2-3", Crop: strCropRule("smart"), Trim: &trimFalse},
 			{Path: "/users/gift", DPR: "0-1"},
 			{Path: "/basket/users", DPR: "2-3"},
@@ -114,18 +113,8 @@ func TestValidateConfigInvalidPathPolicyCrop(t *testing.T) {
 	}
 }
 
-// boolCropRule / strCropRule / listCropRule — хелперы построения
-// CropRuleConfig для тестов (имитируют результат UnmarshalYAML).
-func boolCropRule(b bool) *CropRuleConfig {
-	c := new(CropRuleConfig)
-	if b {
-		*c = []string{"center"}
-	} else {
-		*c = []string{denyMarker}
-	}
-	return c
-}
-
+// strCropRule / listCropRule — хелперы построения CropRuleConfig для тестов
+// (имитируют результат UnmarshalYAML: crop — только строковые формы).
 func strCropRule(s string) *CropRuleConfig {
 	c := CropRuleConfig{s}
 	return &c
@@ -156,7 +145,7 @@ func TestCompileCropRule(t *testing.T) {
 			},
 		},
 		{
-			name: "bool true = allow c/ct",
+			name: "center allows c/ct",
 			cfg:  []string{"center"},
 			check: func(t *testing.T, r *CropRule) {
 				if !r.Allows(asset.TransformCrop) || !r.Allows(asset.TransformCropTrim) {
@@ -164,18 +153,6 @@ func TestCompileCropRule(t *testing.T) {
 				}
 				if r.Allows("") || r.Allows(asset.TransformSmartCrop) || r.Allows(asset.TransformTrim) {
 					t.Error("non-crop transforms must be denied")
-				}
-			},
-		},
-		{
-			name: "bool false = deny c/ct only",
-			cfg:  []string{denyMarker},
-			check: func(t *testing.T, r *CropRule) {
-				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformCropTrim) {
-					t.Error("c/ct must be denied")
-				}
-				if !r.Allows("") || !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformTrim) {
-					t.Error("other transforms must stay allowed")
 				}
 			},
 		},
@@ -411,7 +388,7 @@ func TestCompile(t *testing.T) {
 func TestCompilePathPolicyNormalization(t *testing.T) {
 	cfg := &Config{
 		PathPolicies: []PathPolicyConfig{
-			{Path: "/", DPR: "0-1", Crop: boolCropRule(false)},
+			{Path: "/", DPR: "0-1", Crop: strCropRule("none")},
 			{Path: "basket/products", DPR: "2-3"},
 			{Path: "/basket/users/", DPR: "0-1"},
 		},
