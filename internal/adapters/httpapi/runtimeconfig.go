@@ -3,7 +3,6 @@ package httpapi
 import (
 	"fmt"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -28,10 +27,6 @@ const DefaultMaxBodyBytes = 4 * 1024
 // ParseRuntimeConfig. Содержит все настройки приложения: pipeline
 // (policy/processing), HTTP-адаптер, HTTP-сервер, хранилища source/result,
 // ImageMagick processor и observability.
-//
-// П.4: для атомарной замены конфига (copy-on-write) используется
-// RuntimeConfigHolder с atomic.Pointer. Поля RuntimeConfig не мутируются
-// после публикации — новый конфиг создаётся целиком и публикуется атомарно.
 type RuntimeConfig struct {
 	// Pipeline — typed конфигурация конвейера (policy/processing).
 	Pipeline *config.Config
@@ -67,34 +62,6 @@ type RuntimeConfig struct {
 	BufferMaxBytes int64
 	// LogLevel — уровень логов (debug/info/warn/error).
 	LogLevel string
-}
-
-// RuntimeConfigHolder — потокобезопасный контейнер для RuntimeConfig с
-// атомарной заменой (copy-on-write). П.4: позволяет публиковать новый
-// конфиг без блокировок на чтение; читатели всегда видят согласованный
-// immutable конфиг.
-type RuntimeConfigHolder struct {
-	ref atomic.Pointer[RuntimeConfig]
-}
-
-// NewRuntimeConfigHolder создаёт holder с начальным конфигом.
-func NewRuntimeConfigHolder(rc *RuntimeConfig) *RuntimeConfigHolder {
-	h := &RuntimeConfigHolder{}
-	h.ref.Store(rc)
-	return h
-}
-
-// Load возвращает текущий конфиг (атомарно).
-func (h *RuntimeConfigHolder) Load() *RuntimeConfig {
-	if h == nil {
-		return nil
-	}
-	return h.ref.Load()
-}
-
-// Store атомарно публикует новый конфиг (copy-on-write).
-func (h *RuntimeConfigHolder) Store(rc *RuntimeConfig) {
-	h.ref.Store(rc)
 }
 
 // ServerConfig — конфигурация HTTP-сервера.

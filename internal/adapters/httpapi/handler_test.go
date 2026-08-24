@@ -550,8 +550,8 @@ func TestEtagCacheLRUEviction(t *testing.T) {
 	if v, ok := c.Get("d"); !ok || v != "4" {
 		t.Fatalf("d = %q ok=%v, want 4", v, ok)
 	}
-	if c.lru.Len() > c.max {
-		t.Fatalf("cache size %d exceeds max %d", c.lru.Len(), c.max)
+	if n := c.Len(); n > 3 {
+		t.Fatalf("cache size %d exceeds max 3", n)
 	}
 }
 

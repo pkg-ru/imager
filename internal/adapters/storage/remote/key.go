@@ -53,9 +53,3 @@ func CanonicalKey(key object.ObjectKey) (string, error) {
 	}
 	return strings.Join(out, "/"), nil
 }
-
-// SafeKey сообщает, является ли key допустимым каноническим ключом.
-func SafeKey(key object.ObjectKey) bool {
-	_, err := CanonicalKey(key)
-	return err == nil
-}

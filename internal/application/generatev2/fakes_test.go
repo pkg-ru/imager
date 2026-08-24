@@ -7,7 +7,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/pkg-ru/imager/internal/application/ports/coordinator"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
@@ -196,11 +195,6 @@ func (r *memResultStore) Stats(_ context.Context) (object.StoreStats, error) {
 }
 
 var _ storage.ResultStore = (*memResultStore)(nil)
-
-// fakeCoordinator — coordinator.Keyed, делегирующий в singleflight.Group.
-type fakeCoordinator struct {
-	coordinator.Keyed
-}
 
 // fakeProcessor — processor.Processor с детерминированным выводом и
 // возможностью эмулировать ошибки/блокировку.

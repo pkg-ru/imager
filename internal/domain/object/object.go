@@ -47,9 +47,6 @@ func IsQuota(err error) bool { return errors.Is(err, ErrQuota) }
 // IsUnavailable сообщает, является ли err типизированной ошибкой ErrUnavailable.
 func IsUnavailable(err error) bool { return errors.Is(err, ErrUnavailable) }
 
-// IsForbidden сообщает, является ли err типизированной ошибкой ErrForbidden.
-func IsForbidden(err error) bool { return errors.Is(err, ErrForbidden) }
-
 // IsUnsafePath сообщает, является ли err типизированной ошибкой ErrUnsafePath
 // (в том числе обёрнутой).
 func IsUnsafePath(err error) bool { return errors.Is(err, ErrUnsafePath) }

@@ -63,11 +63,6 @@ func metricsSnapshot() []byte {
 	return body
 }
 
-// writeMetrics выводит expvar-переменные в Prometheus-подобном формате.
-func writeMetrics(w http.ResponseWriter) {
-	_, _ = w.Write(metricsSnapshot())
-}
-
 // writeExpvarMetric преобразует expvar-значение в текстовые метрики.
 func writeExpvarMetric(b *strings.Builder, name string, v expvar.Var) {
 	switch val := v.(type) {

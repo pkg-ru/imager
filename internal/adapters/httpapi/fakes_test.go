@@ -40,12 +40,6 @@ func (f *fakeGenerator) addResult(url string, data []byte, size int64) {
 	}
 }
 
-func (f *fakeGenerator) addError(url string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.errs[url] = err
-}
-
 func (f *fakeGenerator) setFallback(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

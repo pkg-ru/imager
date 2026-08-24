@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -160,21 +159,6 @@ func (rt *Runtime) Serve() error {
 		return nil
 	}
 	return err
-}
-
-// ServeAsync запускает сервер в фоне и возвращает канал ошибок.
-// П.2: воркер защищён от паники — паника не должна ронять процесс.
-func (rt *Runtime) ServeAsync() <-chan error {
-	ch := make(chan error, 1)
-	go func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				ch <- fmt.Errorf("httpapi: panic in server worker: %v", rec)
-			}
-		}()
-		ch <- rt.Serve()
-	}()
-	return ch
 }
 
 // Ready сообщает, готов ли сервер принимать запросы.

@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,10 +15,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pkg-ru/imager/internal/adapters/lru"
 	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
 	"github.com/pkg-ru/imager/internal/application/generatev2"
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/internal/observability"
 )
 
 // PixelGenerator — генератор прозрачного 1x1 пикселя в заданном формате.
@@ -43,7 +44,7 @@ type Handler struct {
 	// etagCache — bounded LRU-кэш вычисленных ETag по identity
 	// (canonical URL + size), чтобы не пересчитывать SHA-256 на каждый запрос
 	// (п.15). Ограничен по числу ключей (В2), чтобы не расти безгранично.
-	etagCache *etagCache
+	etagCache *lru.Cache[string, string]
 
 	// copyPool — sync.Pool буферов копирования (64 KiB), чтобы не аллоцировать
 	// новый буфер на каждый запрос (оптимизация горячего пути).
@@ -61,7 +62,7 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 	cfg.normalize()
 	log := cfg.Logger
 	if log == nil {
-		log = nopLogger{}
+		log = observability.NopLogger()
 	}
 	return &Handler{
 		gen:       gen,
@@ -98,64 +99,11 @@ func buildFormatMap() map[string]string {
 	return m
 }
 
-// etagCache — bounded LRU-кэш для ETag по identity (В2). Ограничен по числу
-// ключей: при превышении max вытесняется наименее недавно использованный.
-type etagCache struct {
-	mu    sync.Mutex
-	m     map[string]string        // key -> etag
-	elems map[string]*list.Element // key -> элемент списка (для O(1) touch)
-	lru   *list.List               // для eviction (элементы = ключи)
-	max   int
-}
-
-// newEtagCache создаёт bounded LRU-кэш с лимитом max записей.
-func newEtagCache(max int) *etagCache {
-	if max <= 0 {
-		max = 4096
-	}
-	return &etagCache{
-		m:     make(map[string]string),
-		elems: make(map[string]*list.Element),
-		lru:   list.New(),
-		max:   max,
-	}
-}
-
-// Get возвращает etag по ключу и помечает его как недавно использованный.
-func (c *etagCache) Get(key string) (string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.m[key]
-	if ok {
-		// Перемещаем ключ в конец списка (недавно использованный).
-		if n := c.elems[key]; n != nil {
-			c.lru.MoveToBack(n)
-		}
-	}
-	return v, ok
-}
-
-// Set сохраняет etag по ключу. При превышении max вытесняет LRU-запись.
-func (c *etagCache) Set(key, etag string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.m[key]; ok {
-		c.m[key] = etag
-		if n := c.elems[key]; n != nil {
-			c.lru.MoveToBack(n)
-		}
-		return
-	}
-	c.m[key] = etag
-	c.elems[key] = c.lru.PushBack(key)
-	if c.lru.Len() > c.max {
-		if front := c.lru.Front(); front != nil {
-			old := front.Value.(string)
-			c.lru.Remove(front)
-			delete(c.elems, old)
-			delete(c.m, old)
-		}
-	}
+// newEtagCache создаёт bounded LRU-кэш ETag по identity (В2) с лимитом max
+// записей; поведение (Get-with-touch, Set-with-evict) вынесено в generic
+// пакет adapters/lru.
+func newEtagCache(max int) *lru.Cache[string, string] {
+	return lru.New[string, string](max)
 }
 
 // ServeHTTP обрабатывает запрос.

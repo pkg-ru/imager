@@ -77,21 +77,8 @@ type Config struct {
 	MaxConcurrentRequests int
 }
 
-// Logger — минимальный интерфейс логирования.
-type Logger interface {
-	Debugf(format string, args ...any)
-	Infof(format string, args ...any)
-	Warnf(format string, args ...any)
-	Errorf(format string, args ...any)
-}
-
-// nopLogger — заглушка при отсутствии логгера.
-type nopLogger struct{}
-
-func (nopLogger) Debugf(string, ...any) {}
-func (nopLogger) Infof(string, ...any)  {}
-func (nopLogger) Warnf(string, ...any)  {}
-func (nopLogger) Errorf(string, ...any) {}
+// Logger — единый интерфейс логирования из observability.
+type Logger = observability.Logger
 
 // DefaultCacheControl — значение по умолчанию для canonical assets.
 const DefaultCacheControl = "public, max-age=31536000, immutable"

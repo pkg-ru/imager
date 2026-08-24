@@ -349,42 +349,8 @@ func TestFTPPoolConcurrentDial(t *testing.T) {
 	if got != n {
 		t.Fatalf("dials = %d, want %d (dial должен выполняться параллельно)", got, n)
 	}
-	// Возвращаем все соединения в пул и закрываем.
+	// Возвращаем все соединения в пул (discard, т.к. release-цепочка удалена).
 	for _, c := range conns {
-		c.release()
+		c.discard()
 	}
-	pool.close()
-}
-
-// TestFTPPoolReuseIdle проверяет, что после release соединение переиспользуется
-// без повторного dial.
-func TestFTPPoolReuseIdle(t *testing.T) {
-	var mu sync.Mutex
-	dials := 0
-	dial := func(ctx context.Context, addr string, tls bool) (conn, error) {
-		mu.Lock()
-		dials++
-		mu.Unlock()
-		return newFakeConn(), nil
-	}
-	pool := newConnPool(Options{Addr: "localhost:21", User: "u", Dialer: dial, MaxConns: 2})
-
-	ctx := context.Background()
-	c1, err := pool.acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	c1.release()
-	c2, err := pool.acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	c2.release()
-	mu.Lock()
-	got := dials
-	mu.Unlock()
-	if got != 1 {
-		t.Fatalf("dials = %d, want 1 (idle-соединение должно переиспользоваться)", got)
-	}
-	pool.close()
 }

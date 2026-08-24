@@ -174,33 +174,6 @@ func (o Options) key(key object.ObjectKey) (string, error) {
 	return path.Join(o.Root, k), nil
 }
 
-func (o Options) stat(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	full, err := o.key(key)
-	if err != nil {
-		return object.ObjectMetadata{}, err
-	}
-	client, err := o.dial()
-	if err != nil {
-		return object.ObjectMetadata{}, remote.MapError("sftp dial", err)
-	}
-	defer client.Close()
-	info, err := client.Stat(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return object.ObjectMetadata{}, remote.NotFound(key)
-		}
-		return object.ObjectMetadata{}, remote.MapError("sftp stat", err)
-	}
-	if info.IsDir() {
-		return object.ObjectMetadata{}, remote.NotFound(key)
-	}
-	return object.ObjectMetadata{
-		Key:     key,
-		Size:    info.Size(),
-		ModTime: info.ModTime(),
-	}, nil
-}
-
 // statWithClient выполняет Stat с переданным клиентом (из пула). Возвращает
 // сырую ошибку соединения без маппинга, чтобы вызывающий мог отличить
 // client-ошибку (требует retry) от бизнес-ошибки. NotFound для каталога
@@ -224,101 +197,101 @@ func (o Options) statWithClient(ctx context.Context, key object.ObjectKey, cl cl
 	}, nil
 }
 
-// isClientErr отличает ошибки соединения (требуют discard) от
-// бизнес-ошибок (например, ErrNotFound), при которых соединение
-// можно переиспользовать. Все бизнес-ошибки из remote и object
-// мапятся через MapError/NotFound; ошибки соединения — сырые SSH/IO.
+// isClientErr отличает ошибки соединения (требуют discard и повторной
+// попытки) от бизнес-ошибок; общая логика вынесена в remote.IsConnErr.
+// Ошибки соединения — сырые SSH/IO, бизнес-ошибки мапятся через
+// MapError/NotFound.
 func isClientErr(err error) bool {
-	// ErrNotFound и другие object-ошибки — не client-ошибки.
-	if object.IsNotFound(err) || object.IsConflict(err) || object.IsQuota(err) || object.IsUnsafePath(err) || object.IsUnavailable(err) {
-		return false
-	}
-	// Всё остальное (IO, SSH, timeout) — ошибка соединения.
-	return err != nil
+	return remote.IsConnErr(err)
 }
 
 // attempts возвращает число попыток операции (>= 1).
 func (o Options) attempts() int {
-	n := o.MaxAttempts
-	if n < 1 {
-		n = 1
-	}
-	return n
+	return remote.Attempts(o.MaxAttempts)
 }
 
 // withTimeout оборачивает ctx таймаутом операции, если задан ReadTimeout.
 // Возвращает cancel-функцию, которую вызывающий обязан вызвать (defer cancel()).
 func (o Options) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	if o.ReadTimeout <= 0 {
-		return ctx, func() {}
-	}
-	return context.WithTimeout(ctx, o.ReadTimeout)
+	return remote.WithOpTimeout(ctx, o.ReadTimeout)
 }
 
 // SourceStore — SFTP-реализация storage.SourceStore (read-only).
 type SourceStore struct {
-	opts Options
-	pool *connPool
+	store
 }
 
 // NewSourceStore создаёт SFTP SourceStore.
 func NewSourceStore(opts Options) (*SourceStore, error) {
-	if err := opts.validate(); err != nil {
-		return nil, err
-	}
-	var pool *connPool
-	if opts.Client == nil {
-		pool = newConnPool(opts)
-	}
-	return &SourceStore{opts: opts, pool: pool}, nil
-}
-
-// getClient возвращает клиента из пула или opts.Client для тестов.
-func (s *SourceStore) getClient(ctx context.Context) (*pooledClient, error) {
-	if s.pool != nil {
-		return s.pool.acquire(ctx)
-	}
-	// Для тестов с fake client используем прямой вызов.
-	if s.opts.Client != nil {
-		return &pooledClient{client: s.opts.Client}, nil
-	}
-	c, err := s.opts.dial()
+	s, err := newStore(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &pooledClient{client: c}, nil
+	return &SourceStore{store: s}, nil
 }
 
 // Lookup возвращает метаданные исходного объекта. При ошибке соединения
 // выполняется повторная попытка с новым соединением (до MaxAttempts).
 func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	ctx, cancel := s.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := s.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := s.getClient(ctx)
+	return withRetry(ctx, &s.store, func(cl *pooledClient) (object.ObjectMetadata, error, error) {
+		meta, err := s.opts.statWithClient(ctx, key, cl.client)
+		switch {
+		case err == nil:
+			return meta, nil, nil
+		case os.IsNotExist(err):
+			return object.ObjectMetadata{}, nil, remote.NotFound(key)
+		case !isClientErr(err):
+			return object.ObjectMetadata{}, nil, remote.MapError("sftp stat", err)
+		default:
+			return object.ObjectMetadata{}, err, remote.MapError("sftp stat", err)
+		}
+	})
+}
+
+// openBuffered открывает файл по полному пути full и материализует его в
+// spillable буфер. role используется только в тексте ошибки quota
+// ("source"/"result").
+func (s *store) openBuffered(ctx context.Context, full string, key object.ObjectKey, role string) (object.Artifact, error) {
+	return withRetry(ctx, s, func(cl *pooledClient) (object.Artifact, error, error) {
+		f, err := cl.Open(full)
 		if err != nil {
-			return object.ObjectMetadata{}, remote.MapError("sftp dial", err)
+			if os.IsNotExist(err) {
+				return nil, nil, remote.NotFound(key)
+			}
+			return nil, err, remote.MapError("sftp open", err)
 		}
-		meta, err := s.opts.statWithClient(ctx, key, cl)
-		if err == nil {
-			return meta, nil
+		defer f.Close()
+
+		info, err := f.Stat()
+		if err != nil {
+			return nil, nil, remote.MapError("sftp stat", err)
 		}
-		if os.IsNotExist(err) {
-			return object.ObjectMetadata{}, remote.NotFound(key)
+		if info.IsDir() {
+			return nil, nil, remote.NotFound(key)
 		}
-		// Бизнес-ошибка (NotFound и т.п.) — не ретраим.
-		if !isClientErr(err) {
-			return meta, remote.MapError("sftp stat", err)
+
+		buf, err := remote.NewBuffer(remote.BufferOptions{
+			Pool:     s.opts.Pool,
+			Dir:      s.opts.SpoolDir,
+			MaxBytes: s.opts.SpoolMaxBytes,
+		})
+		if err != nil {
+			return nil, nil, remote.MapError("sftp buffer", err)
 		}
-		lastErr = remote.MapError("sftp stat", err)
-		cl.discard()
-		if ctx.Err() != nil {
-			break
+		if _, err := buf.WriteFrom(f, s.opts.SpoolMaxBytes); err != nil {
+			_ = buf.Close()
+			if errors.Is(err, remote.ErrBufferLimit) {
+				return nil, nil, fmt.Errorf("sftp: %s %q exceeds spool limit: %w", role, key, object.ErrQuota)
+			}
+			return nil, nil, remote.MapError("sftp buffer", err)
 		}
-	}
-	return object.ObjectMetadata{}, lastErr
+		if _, err := buf.Seek(0, io.SeekStart); err != nil {
+			_ = buf.Close()
+			return nil, nil, remote.MapError("sftp buffer seek", err)
+		}
+		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
+		return remote.NewBufferArtifact(buf, meta), nil, nil
+	})
 }
 
 // Open открывает поток исходного объекта через spillable буфер. При ошибке
@@ -328,139 +301,41 @@ func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := s.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := s.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := s.getClient(ctx)
-		if err != nil {
-			return nil, remote.MapError("sftp dial", err)
-		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
-			}
-		}()
-
-		f, err := cl.Open(full)
-		if err != nil {
-			if os.IsNotExist(err) {
-				needDiscard = false
-				return nil, remote.NotFound(key)
-			}
-			lastErr = remote.MapError("sftp open", err)
-			if !isClientErr(err) {
-				return nil, lastErr
-			}
-			cl.discard()
-			if ctx.Err() != nil {
-				return nil, lastErr
-			}
-			continue
-		}
-		defer f.Close()
-
-		info, err := f.Stat()
-		if err != nil {
-			return nil, remote.MapError("sftp stat", err)
-		}
-		if info.IsDir() {
-			needDiscard = false
-			return nil, remote.NotFound(key)
-		}
-
-		buf, err := remote.NewBuffer(remote.BufferOptions{
-			Pool:     s.opts.Pool,
-			Dir:      s.opts.SpoolDir,
-			MaxBytes: s.opts.SpoolMaxBytes,
-		})
-		if err != nil {
-			return nil, remote.MapError("sftp buffer", err)
-		}
-		if _, err := buf.WriteFrom(f, s.opts.SpoolMaxBytes); err != nil {
-			_ = buf.Close()
-			if errors.Is(err, remote.ErrBufferLimit) {
-				return nil, fmt.Errorf("sftp: source %q exceeds spool limit: %w", key, object.ErrQuota)
-			}
-			return nil, remote.MapError("sftp buffer", err)
-		}
-		if _, err := buf.Seek(0, io.SeekStart); err != nil {
-			_ = buf.Close()
-			return nil, remote.MapError("sftp buffer seek", err)
-		}
-		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
-		needDiscard = false
-		return remote.NewBufferArtifact(buf, meta), nil
-	}
-	return nil, lastErr
+	return s.openBuffered(ctx, full, key, "source")
 }
 
 var _ storage.SourceStore = (*SourceStore)(nil)
 
 // ResultStore — SFTP-реализация storage.ResultStore.
 type ResultStore struct {
-	opts Options
-	pool *connPool
+	store
 }
 
 // NewResultStore создаёт SFTP ResultStore.
 func NewResultStore(opts Options) (*ResultStore, error) {
-	if err := opts.validate(); err != nil {
-		return nil, err
-	}
-	var pool *connPool
-	if opts.Client == nil {
-		pool = newConnPool(opts)
-	}
-	return &ResultStore{opts: opts, pool: pool}, nil
-}
-
-// getClient возвращает клиента из пула или opts.Client для тестов.
-func (r *ResultStore) getClient(ctx context.Context) (*pooledClient, error) {
-	if r.pool != nil {
-		return r.pool.acquire(ctx)
-	}
-	if r.opts.Client != nil {
-		return &pooledClient{client: r.opts.Client}, nil
-	}
-	c, err := r.opts.dial()
+	s, err := newStore(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &pooledClient{client: c}, nil
+	return &ResultStore{store: s}, nil
 }
 
 // Lookup возвращает метаданные результата. При ошибке соединения выполняется
 // повторная попытка с новым соединением.
 func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
-		if err != nil {
-			return object.ObjectMetadata{}, remote.MapError("sftp dial", err)
+	return withRetry(ctx, &r.store, func(cl *pooledClient) (object.ObjectMetadata, error, error) {
+		meta, err := r.opts.statWithClient(ctx, key, cl.client)
+		switch {
+		case err == nil:
+			return meta, nil, nil
+		case os.IsNotExist(err):
+			return object.ObjectMetadata{}, nil, remote.NotFound(key)
+		case !isClientErr(err):
+			return object.ObjectMetadata{}, nil, remote.MapError("sftp stat", err)
+		default:
+			return object.ObjectMetadata{}, err, remote.MapError("sftp stat", err)
 		}
-		meta, err := r.opts.statWithClient(ctx, key, cl)
-		if err == nil {
-			return meta, nil
-		}
-		if os.IsNotExist(err) {
-			return object.ObjectMetadata{}, remote.NotFound(key)
-		}
-		if !isClientErr(err) {
-			return meta, remote.MapError("sftp stat", err)
-		}
-		lastErr = remote.MapError("sftp stat", err)
-		cl.discard()
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	return object.ObjectMetadata{}, lastErr
+	})
 }
 
 // Open открывает перематываемый поток результата через spillable буфер.
@@ -470,73 +345,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
-		if err != nil {
-			return nil, remote.MapError("sftp dial", err)
-		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
-			}
-		}()
-
-		f, err := cl.Open(full)
-		if err != nil {
-			if os.IsNotExist(err) {
-				needDiscard = false
-				return nil, remote.NotFound(key)
-			}
-			lastErr = remote.MapError("sftp open", err)
-			if !isClientErr(err) {
-				return nil, lastErr
-			}
-			cl.discard()
-			if ctx.Err() != nil {
-				return nil, lastErr
-			}
-			continue
-		}
-		defer f.Close()
-
-		info, err := f.Stat()
-		if err != nil {
-			return nil, remote.MapError("sftp stat", err)
-		}
-		if info.IsDir() {
-			needDiscard = false
-			return nil, remote.NotFound(key)
-		}
-
-		buf, err := remote.NewBuffer(remote.BufferOptions{
-			Pool:     r.opts.Pool,
-			Dir:      r.opts.SpoolDir,
-			MaxBytes: r.opts.SpoolMaxBytes,
-		})
-		if err != nil {
-			return nil, remote.MapError("sftp buffer", err)
-		}
-		if _, err := buf.WriteFrom(f, r.opts.SpoolMaxBytes); err != nil {
-			_ = buf.Close()
-			if errors.Is(err, remote.ErrBufferLimit) {
-				return nil, fmt.Errorf("sftp: result %q exceeds spool limit: %w", key, object.ErrQuota)
-			}
-			return nil, remote.MapError("sftp buffer", err)
-		}
-		if _, err := buf.Seek(0, io.SeekStart); err != nil {
-			_ = buf.Close()
-			return nil, remote.MapError("sftp buffer seek", err)
-		}
-		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
-		needDiscard = false
-		return remote.NewBufferArtifact(buf, meta), nil
-	}
-	return nil, lastErr
+	return r.openBuffered(ctx, full, key, "result")
 }
 
 // ReadStream открывает одноразовый поток результата напрямую из SFTP без
@@ -547,55 +356,28 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
-		if err != nil {
-			return nil, remote.MapError("sftp dial", err)
-		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
-			}
-		}()
-
+	return withRetry(ctx, &r.store, func(cl *pooledClient) (object.Stream, error, error) {
 		f, err := cl.Open(full)
 		if err != nil {
 			if os.IsNotExist(err) {
-				needDiscard = false
-				return nil, remote.NotFound(key)
+				return nil, nil, remote.NotFound(key)
 			}
-			lastErr = remote.MapError("sftp open", err)
-			if !isClientErr(err) {
-				return nil, lastErr
-			}
-			cl.discard()
-			if ctx.Err() != nil {
-				return nil, lastErr
-			}
-			continue
+			return nil, err, remote.MapError("sftp open", err)
 		}
 		info, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
-			return nil, remote.MapError("sftp stat", err)
+			return nil, nil, remote.MapError("sftp stat", err)
 		}
 		if info.IsDir() {
 			_ = f.Close()
-			needDiscard = false
-			return nil, remote.NotFound(key)
+			return nil, nil, remote.NotFound(key)
 		}
 		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
-		needDiscard = false
 		// f закрывается через Stream.Close; соединение возвращается в пул
 		// после закрытия потока (cl.discard вызывается в Close).
-		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, client: cl}, meta), nil
-	}
-	return nil, lastErr
+		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, client: cl}, meta), nil, nil
+	})
 }
 
 // sftpStreamCloser закрывает поток и сбрасывает соединение пула.
@@ -617,6 +399,12 @@ func (c *sftpStreamCloser) Close() error {
 
 // Publish полностью завершает upload до возврата: temp-upload + rename.
 // При ошибке соединения выполняется повторная попытка с новым соединением.
+//
+// Особенность метода: большинство внутренних ошибок (mkdir/create/write/
+// close/rename temp) не ретраятся — как и в исходной реализации, они
+// возвращаются сразу; retry выполняется только для ошибок соединения,
+// пробрасываемых из операций ниже. Метод оставлен вне общего каркаса
+// withRetry из-за этой специфики и работы с src-ридером.
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
 	full, err := r.opts.key(key)
 	if err != nil {
@@ -703,84 +491,37 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
-		if err != nil {
-			return remote.MapError("sftp dial", err)
+	_, err = withRetry(ctx, &r.store, func(cl *pooledClient) (struct{}, error, error) {
+		err := cl.Remove(full)
+		switch {
+		case err == nil:
+			return struct{}{}, nil, nil
+		case os.IsNotExist(err):
+			// Идемпотентность: объекта уже нет.
+			return struct{}{}, nil, nil
+		case !isClientErr(err):
+			return struct{}{}, nil, remote.MapError("sftp remove", err)
+		default:
+			return struct{}{}, err, remote.MapError("sftp remove", err)
 		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
-			}
-		}()
-
-		err = cl.Remove(full)
-		if err != nil {
-			if os.IsNotExist(err) {
-				needDiscard = false
-				return nil
-			}
-			lastErr = remote.MapError("sftp remove", err)
-			if !isClientErr(err) {
-				return lastErr
-			}
-			cl.discard()
-			if ctx.Err() != nil {
-				return lastErr
-			}
-			continue
-		}
-		needDiscard = false
-		return nil
-	}
-	return lastErr
+	})
+	return err
 }
 
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
-	ctx, cancel := r.opts.withTimeout(ctx)
-	defer cancel()
-	attempts := r.opts.attempts()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		cl, err := r.getClient(ctx)
-		if err != nil {
-			return object.StoreStats{}, remote.MapError("sftp dial", err)
-		}
-		needDiscard := true
-		defer func() {
-			if needDiscard {
-				cl.discard()
-			}
-		}()
-
-		root := r.opts.Root
-		if root == "" {
-			root = "."
-		}
-		var stats object.StoreStats
-		err = r.walk(cl, root, &stats)
-		if err != nil {
-			lastErr = remote.MapError("sftp walk", err)
-			if !isClientErr(err) {
-				return object.StoreStats{}, lastErr
-			}
-			cl.discard()
-			if ctx.Err() != nil {
-				return object.StoreStats{}, lastErr
-			}
-			continue
-		}
-		needDiscard = false
-		return stats, nil
+	root := r.opts.Root
+	if root == "" {
+		root = "."
 	}
-	return object.StoreStats{}, lastErr
+	return withRetry(ctx, &r.store, func(cl *pooledClient) (object.StoreStats, error, error) {
+		var stats object.StoreStats
+		if err := r.walk(cl.client, root, &stats); err != nil {
+			return object.StoreStats{}, err, remote.MapError("sftp walk", err)
+		}
+		return stats, nil, nil
+	})
 }
 
 func (r *ResultStore) walk(client client, dir string, stats *object.StoreStats) error {

@@ -8,7 +8,6 @@ package s3
 
 import (
 	"bytes"
-	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -22,15 +21,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/pkg-ru/imager/internal/adapters/lru"
 	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
 	"github.com/pkg-ru/imager/internal/application/ports/storage"
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
-
-// Порог переключения на multipart upload. Объекты больше этого размера
-// загружаются через CreateMultipartUpload → параллельные UploadPart →
-// CompleteMultipartUpload. Меньшие — обычным PutObject с известной длиной.
-const multipartThreshold int64 = 100 * 1024 * 1024 // 100 MiB
 
 // multipartPartSize — размер одной части multipart upload (5 МБ минимум S3).
 const multipartPartSize int64 = 5 * 1024 * 1024
@@ -189,14 +184,11 @@ func (o Options) key(key object.ObjectKey) (string, error) {
 // metadataCache — потокобезопасный in-memory TTL-кэш метаданных объектов.
 // Ключ — полный S3-ключ, значение — метаданные + время записи.
 // Ограничен по числу ключей (LRU, В3), чтобы не расти безгранично при шквале
-// уникальных ключей.
+// уникальных ключей. LRU-поведение (touch/evict) делегировано generic-пакету
+// adapters/lru; TTL-логика осталась тонкой обёрткой поверх него.
 type metadataCache struct {
-	mu    sync.Mutex
-	ttl   time.Duration
-	max   int
-	items map[string]cacheEntry
-	elems map[string]*list.Element // key -> элемент списка (для O(1) touch)
-	lru   *list.List               // для eviction (элементы = ключи)
+	ttl time.Duration
+	lru *lru.Cache[string, cacheEntry]
 }
 
 type cacheEntry struct {
@@ -209,11 +201,8 @@ func newMetadataCache(ttl time.Duration) *metadataCache {
 		return nil
 	}
 	return &metadataCache{
-		ttl:   ttl,
-		max:   10000,
-		items: map[string]cacheEntry{},
-		elems: map[string]*list.Element{},
-		lru:   list.New(),
+		ttl: ttl,
+		lru: lru.New[string, cacheEntry](10000),
 	}
 }
 
@@ -221,23 +210,13 @@ func (c *metadataCache) get(full string) (object.ObjectMetadata, bool) {
 	if c == nil {
 		return object.ObjectMetadata{}, false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.items[full]
+	e, ok := c.lru.Get(full)
 	if !ok {
 		return object.ObjectMetadata{}, false
 	}
 	if time.Since(e.at) > c.ttl {
-		delete(c.items, full)
-		if n := c.elems[full]; n != nil {
-			c.lru.Remove(n)
-			delete(c.elems, full)
-		}
+		c.lru.Delete(full)
 		return object.ObjectMetadata{}, false
-	}
-	// Помечаем как недавно использованный.
-	if n := c.elems[full]; n != nil {
-		c.lru.MoveToBack(n)
 	}
 	return e.meta, true
 }
@@ -246,38 +225,14 @@ func (c *metadataCache) put(full string, meta object.ObjectMetadata) {
 	if c == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.items[full]; ok {
-		c.items[full] = cacheEntry{meta: meta, at: time.Now()}
-		if n := c.elems[full]; n != nil {
-			c.lru.MoveToBack(n)
-		}
-		return
-	}
-	c.items[full] = cacheEntry{meta: meta, at: time.Now()}
-	c.elems[full] = c.lru.PushBack(full)
-	if c.lru.Len() > c.max {
-		if front := c.lru.Front(); front != nil {
-			old := front.Value.(string)
-			c.lru.Remove(front)
-			delete(c.elems, old)
-			delete(c.items, old)
-		}
-	}
+	c.lru.Set(full, cacheEntry{meta: meta, at: time.Now()})
 }
 
 func (c *metadataCache) invalidate(full string) {
 	if c == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.items, full)
-	if n := c.elems[full]; n != nil {
-		c.lru.Remove(n)
-		delete(c.elems, full)
-	}
+	c.lru.Delete(full)
 }
 
 func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {

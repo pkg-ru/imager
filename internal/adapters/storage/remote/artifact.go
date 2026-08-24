@@ -6,34 +6,6 @@ import (
 	"github.com/pkg-ru/imager/internal/domain/object"
 )
 
-// spoolArtifact — object.Artifact поверх временного spool. Инкапсулирует
-// spool, чтобы контракт не зависел от конкретного ресурса.
-type spoolArtifact struct {
-	spool *Spool
-	meta  object.ObjectMetadata
-}
-
-// NewArtifact создаёт object.Artifact поверх spool с метаданными.
-func NewArtifact(spool *Spool, meta object.ObjectMetadata) object.Artifact {
-	return &spoolArtifact{spool: spool, meta: meta}
-}
-
-// Read реализует io.Reader.
-func (a *spoolArtifact) Read(p []byte) (int, error) { return a.spool.Read(p) }
-
-// Seek реализует io.Seeker.
-func (a *spoolArtifact) Seek(offset int64, whence int) (int64, error) {
-	return a.spool.Seek(offset, whence)
-}
-
-// Close освобождает spool.
-func (a *spoolArtifact) Close() error { return a.spool.Close() }
-
-// Metadata возвращает метаданные открытого объекта.
-func (a *spoolArtifact) Metadata() object.ObjectMetadata { return a.meta }
-
-var _ object.Artifact = (*spoolArtifact)(nil)
-
 // bufferArtifact — object.Artifact поверх spillable Buffer. Инкапсулирует
 // Buffer, чтобы контракт не зависел от конкретного ресурса.
 type bufferArtifact struct {

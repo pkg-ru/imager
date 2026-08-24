@@ -81,11 +81,6 @@ func (c *Canonicalizer) CanonicalPath(p string) (string, error) {
 	return joined, nil
 }
 
-// CanonicalFormat нормализует формат в нижний регистр.
-func (c *Canonicalizer) CanonicalFormat(f Format) Format {
-	return Format(strings.ToLower(string(f)))
-}
-
 // CanonicalizeURL собирает канонический URL из компонентов запроса.
 // Возвращает каноническую форму (без ведущего "/") и CanonicalID.
 func (c *Canonicalizer) CanonicalizeURL(req *Request) (string, CanonicalID, error) {

@@ -2,184 +2,51 @@ package ftp
 
 import (
 	"context"
-	"fmt"
-	"sync"
-	"sync/atomic"
-	"time"
+
+	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
 )
 
-// pooledConn оборачивает соединение и делает Quit() no-op, потому что
-// жизненным циклом соединения управляет пул (release/discard).
+// pooledConn — соединение, выданное пулом. Жизненным циклом соединения
+// управляет пул: Quit() обёртке не нужен, закрытие выполняется через
+// discard -> remote.Entry.Discard -> close-колбэк пула.
 type pooledConn struct {
 	conn
-	pool     *connPool
-	released atomic.Bool
-	// lastUsed — время последнего возврата в пул (UnixNano) для проверки
-	// IdleConnTimeout при повторном acquire.
-	lastUsed int64
+	entry *remote.Entry[conn]
 }
 
-func (p *pooledConn) Quit() error {
-	return nil // пул управляет закрытием
-}
-
-// release возвращает соединение в пул. Идемпотентно.
-func (p *pooledConn) release() {
-	if p == nil || p.released.Swap(true) {
-		return
-	}
-	if p.pool == nil {
-		_ = p.conn.Quit()
-		return
-	}
-	p.pool.put(p)
-}
-
-// discard закрывает соединение, позволяя пулу dial-ить новое. Идемпотентно.
+// discard закрывает соединение и освобождает слот пула. Идемпотентно.
+// Для соединений вне пула (тестовый Dialer) закрывает напрямую.
 func (p *pooledConn) discard() {
-	if p == nil || p.released.Swap(true) {
+	if p == nil {
 		return
 	}
-	if p.pool == nil {
-		_ = p.conn.Quit()
+	if p.entry != nil {
+		p.entry.Discard()
 		return
 	}
-	p.pool.discard(p)
+	_ = p.conn.Quit()
 }
 
-// connPool — пул FTP/FTPS-соединений с dial() вне блокировки.
-//
-// Держит до MaxConns одновременных соединений (минимум 2). Idle-соединения
-// хранятся в буферизованном канале; конкурентные операции могут выполняться
-// параллельно, а медленный/упавший dial не блокирует другие ключи.
-//
-// Параметры пула:
-//   - MaxConns — максимальное число одновременных соединений (0 = 2).
-//   - MaxIdleConns — сохранён для совместимости конфигурации; управлял
-//     числом idle-соединений в старой реализации и больше не применяется
-//     напрямую (число idle ограничено MaxConns).
-//   - IdleConnTimeout > 0 — закрывать простаивающее соединение, если оно
-//     не использовалось дольше таймаута.
+// connPool — тонкая обёртка над generic-пулом remote.Pool, ограничивающая
+// число одновременных FTP/FTPS-соединений значением MaxConns (минимум 2).
+// Соединения не переиспользуются: после каждой операции они закрываются через
+// discard, а пул лишь следит за лимитом одновременных соединений.
+// MaxIdleConns сохранён в Options для совместимости конфигурации и больше не
+// применяется напрямую.
 type connPool struct {
-	opts   Options
-	max    int
-	idle   chan *pooledConn
-	cur    atomic.Int32
-	closed atomic.Bool
-	// closeMu сериализует put/close, устраняя гонку: без него соединение,
-	// прошедшее проверку closed в put до close(), могло быть добавлено в
-	// idle после осушения канала и утечь (не закрыто, cur не уменьшен).
-	closeMu sync.Mutex
+	pool *remote.Pool[conn]
 }
 
 func newConnPool(opts Options) *connPool {
-	max := opts.MaxConns
-	if max < 2 {
-		max = 2
-	}
-	return &connPool{
-		opts: opts,
-		max:  max,
-		idle: make(chan *pooledConn, max),
-	}
+	dial := func(ctx context.Context) (conn, error) { return opts.dial(ctx) }
+	return &connPool{pool: remote.NewPool(dial, func(c conn) error { return c.Quit() }, opts.MaxConns)}
 }
 
-// acquire возвращает соединение из пула.
-//
-// Сначала пробует взять idle-соединение. Если подходящих нет и число
-// созданных соединений меньше max — создаёт новое через p.opts.dial() БЕЗ
-// удержания блокировки: параллельные acquire могут диалить одновременно,
-// а единственное общее состояние (счётчик cur) защищено атомарно.
-// Если достигнут предел max — ждёт idle-соединение до закрытия ctx.
+// acquire создаёт новое соединение, захватив слот лимита пула.
 func (p *connPool) acquire(ctx context.Context) (*pooledConn, error) {
-	if p.closed.Load() {
-		return nil, fmt.Errorf("ftp: connection pool closed")
+	e, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
 	}
-	for {
-		select {
-		case pc := <-p.idle:
-			if !p.fresh(pc) {
-				p.closeStale(pc)
-				continue
-			}
-			return pc, nil
-		default:
-		}
-		cur := p.cur.Load()
-		if cur < int32(p.max) && p.cur.CompareAndSwap(cur, cur+1) {
-			c, err := p.opts.dial(ctx)
-			if err != nil {
-				p.cur.Add(-1)
-				return nil, err
-			}
-			return &pooledConn{conn: c, pool: p}, nil
-		}
-		select {
-		case pc := <-p.idle:
-			if !p.fresh(pc) {
-				p.closeStale(pc)
-				continue
-			}
-			return pc, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-// fresh сообщает, не истёк ли idle-таймаут для соединения.
-func (p *connPool) fresh(pc *pooledConn) bool {
-	if p.opts.IdleConnTimeout <= 0 || pc.lastUsed == 0 {
-		return true
-	}
-	return time.Since(time.Unix(0, pc.lastUsed)) < p.opts.IdleConnTimeout
-}
-
-// closeStale закрывает простаревшее idle-соединение и разрешает dial.
-func (p *connPool) closeStale(pc *pooledConn) {
-	_ = pc.conn.Quit()
-	p.cur.Add(-1)
-}
-
-// put возвращает соединение в пул. Если канал полон или пул закрыт —
-// соединение закрывается (пул не накапливает сверхлимитные).
-func (p *connPool) put(pc *pooledConn) {
-	pc.lastUsed = time.Now().UnixNano()
-	// closeMu устраняет гонку с close(): проверка closed и запись в idle
-	// атомарны относительно осушения канала в close().
-	p.closeMu.Lock()
-	defer p.closeMu.Unlock()
-	if p.closed.Load() {
-		_ = pc.conn.Quit()
-		p.cur.Add(-1)
-		return
-	}
-	select {
-	case p.idle <- pc:
-	default:
-		_ = pc.conn.Quit()
-		p.cur.Add(-1)
-	}
-}
-
-// discard закрывает конкретное соединение, разрешая пулу создать новое.
-func (p *connPool) discard(pc *pooledConn) {
-	_ = pc.conn.Quit()
-	p.cur.Add(-1)
-}
-
-// close закрывает пул и все idle-соединения.
-func (p *connPool) close() {
-	p.closeMu.Lock()
-	defer p.closeMu.Unlock()
-	p.closed.Store(true)
-	for {
-		select {
-		case pc := <-p.idle:
-			_ = pc.conn.Quit()
-			p.cur.Add(-1)
-		default:
-			return
-		}
-	}
+	return &pooledConn{conn: e.Value, entry: e}, nil
 }

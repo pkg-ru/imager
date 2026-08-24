@@ -46,15 +46,3 @@ func TestCanonicalKey(t *testing.T) {
 		})
 	}
 }
-
-func TestSafeKey(t *testing.T) {
-	if !SafeKey("a/b.jpg") {
-		t.Fatal("expected safe")
-	}
-	if SafeKey("../a") {
-		t.Fatal("expected unsafe")
-	}
-	if SafeKey("") {
-		t.Fatal("expected unsafe for empty")
-	}
-}

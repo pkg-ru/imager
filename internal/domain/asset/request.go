@@ -3,7 +3,6 @@ package asset
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
@@ -245,13 +244,4 @@ func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
 	cp := *r
 	cp.orientation = o
 	return &cp
-}
-
-// joinPath — вспомогательная функция (сохранена для совместимости с
-// внутренними вызовами).
-func joinPath(path, file string) string {
-	if path == "" {
-		return file
-	}
-	return strings.TrimSuffix(path, "/") + "/" + file
 }

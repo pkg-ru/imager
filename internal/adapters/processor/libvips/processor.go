@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
+	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
@@ -151,7 +152,7 @@ var newBackend func(opts Options) (backend, error)
 // ОДИН раз на процесс (sync.Once в process_libvips.go).
 type Processor struct {
 	limits    Limits
-	sem       *semaphore
+	sem       *shared.Semaphore
 	backend   backend
 	closeOnce sync.Once
 }
@@ -183,7 +184,7 @@ func New(opts Options) (*Processor, error) {
 	}
 	return &Processor{
 		limits:  opts.Limits,
-		sem:     newSemaphore(conc, conc),
+		sem:     shared.NewSemaphore(conc, 0, ErrTooManyConcurrency),
 		backend: bk,
 	}, nil
 }
@@ -220,10 +221,10 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 
 	// Ожидание слота конкурентности с bounded очередью. При переполнении
 	// очереди — быстрый отказ, а не бесконечное ожидание.
-	if err := p.sem.acquire(ctx); err != nil {
+	if err := p.sem.Acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer p.sem.release()
+	defer p.sem.Release()
 
 	// Application-level context deadline (не полагаемся только на libvips).
 	runCtx := ctx
@@ -270,14 +271,14 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 
 	// Запись результата через bounded writer: OutputBytes → LimitOutput.
-	bw := &boundedWriter{w: out, max: p.limits.OutputBytes, cancel: cancel}
-	_, err = bw.Write(output)
-	if err != nil {
-		return nil, err
-	}
-	exceeded, actual := bw.exceededN()
+	bw := shared.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
+	_, _ = bw.Write(output)
+	exceeded, actual := bw.ExceededN()
 	if exceeded {
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
+	}
+	if err != nil && !errors.Is(err, shared.ErrOutputLimitExceeded) {
+		return nil, err
 	}
 	return &processor.Result{Size: actual}, nil
 }
@@ -309,89 +310,4 @@ func runWatchdog(ctx context.Context, fn func() ([]byte, error)) ([]byte, error)
 type result struct {
 	out []byte
 	err error
-}
-
-// semaphore — bounded очередь слотов конкурентности (аналогично
-// imagemagick/processor.go): ограничивает и число активных, и число
-// ожидающих. При переполнении очереди ожидания — быстрый отказ
-// (ErrTooManyConcurrency).
-type semaphore struct {
-	mu      sync.Mutex
-	slots   chan struct{}
-	waiting int
-	maxWait int
-}
-
-func newSemaphore(max, maxWait int) *semaphore {
-	if max <= 0 {
-		max = 1
-	}
-	return &semaphore{slots: make(chan struct{}, max), maxWait: maxWait}
-}
-
-// acquire занимает слот. Блокируется до освобождения или отмены ctx.
-// Возвращает ErrTooManyConcurrency, если очередь ожидания переполнена.
-func (s *semaphore) acquire(ctx context.Context) error {
-	s.mu.Lock()
-	if s.waiting >= s.maxWait {
-		s.mu.Unlock()
-		return ErrTooManyConcurrency
-	}
-	s.waiting++
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.waiting--
-		s.mu.Unlock()
-	}()
-	select {
-	case s.slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// release освобождает слот.
-func (s *semaphore) release() {
-	select {
-	case <-s.slots:
-	default:
-	}
-}
-
-// boundedWriter ограничивает запись max байт. При превышении лимита помечает
-// exceeded, отменяет ctx и возвращает LimitError. Это application-level
-// защита, не полагающаяся на внутренние лимиты libvips.
-//
-// Потокобезопасен: Write/n могут вызываться из разных goroutines.
-type boundedWriter struct {
-	mu       sync.Mutex
-	w        io.Writer
-	max      int64
-	n        int64
-	exceeded bool
-	cancel   context.CancelFunc
-}
-
-func (b *boundedWriter) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.max > 0 && b.n+int64(len(p)) > b.max {
-		b.exceeded = true
-		if b.cancel != nil {
-			b.cancel()
-		}
-		return 0, &LimitError{Kind: LimitOutput, Limit: b.max, Actual: b.n + int64(len(p))}
-	}
-	n, err := b.w.Write(p)
-	b.n += int64(n)
-	return n, err
-}
-
-// exceededN возвращает флаг превышения и фактический размер (потокобезопасно).
-func (b *boundedWriter) exceededN() (bool, int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.exceeded, b.n
 }

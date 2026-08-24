@@ -7,6 +7,29 @@ import (
 	"os"
 )
 
+// Logger — минимальный интерфейс логирования (Debugf/Infof/Warnf/Errorf).
+//
+// Единый интерфейс, используемый httpapi и generatev2. Методы принимают
+// формат-строку и произвольные аргументы (как fmt.Sprintf). Реализации
+// обязаны не логировать URL/query/raw user input или секреты.
+type Logger interface {
+	Debugf(format string, args ...any)
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+	Errorf(format string, args ...any)
+}
+
+// nopLogger — заглушка, используемая при отсутствии логгера.
+type nopLogger struct{}
+
+func (nopLogger) Debugf(string, ...any) {}
+func (nopLogger) Infof(string, ...any)  {}
+func (nopLogger) Warnf(string, ...any)  {}
+func (nopLogger) Errorf(string, ...any) {}
+
+// NopLogger возвращает no-op реализацию Logger.
+func NopLogger() Logger { return nopLogger{} }
+
 // SlogLogger — структурированный логгер на stdlib log/slog.
 //
 // Реализует узкий интерфейс логирования (Debugf/Infof/Warnf/Errorf),
@@ -24,14 +47,6 @@ func NewSlogLogger(level slog.Level) *SlogLogger {
 	}
 	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	return &SlogLogger{l: slog.New(h)}
-}
-
-// NewSlogLoggerWith создаёт логгер поверх переданного *slog.Logger.
-func NewSlogLoggerWith(l *slog.Logger) *SlogLogger {
-	if l == nil {
-		return NewSlogLogger(slog.LevelInfo)
-	}
-	return &SlogLogger{l: l}
 }
 
 // Logger возвращает внутренний *slog.Logger.

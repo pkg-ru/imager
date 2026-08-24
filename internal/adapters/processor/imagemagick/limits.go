@@ -10,9 +10,7 @@ package imagemagick
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 )
@@ -106,43 +104,6 @@ func (e *LimitError) Error() string {
 
 // Unwrap возвращает исходную ошибку.
 func (e *LimitError) Unwrap() error { return e.Err }
-
-// boundedWriter ограничивает запись max байт. При превышении лимита
-// помечает exceeded, отменяет ctx (чтобы убить subprocess) и возвращает
-// LimitError. Это application-level защита, не полагающаяся на policy.
-//
-// Потокобезопасен: Write может вызываться из goroutine копирования stdout,
-// а n/exceeded читаются после завершения subprocess.
-type boundedWriter struct {
-	mu       sync.Mutex
-	w        io.Writer
-	max      int64
-	n        int64
-	exceeded bool
-	cancel   context.CancelFunc
-}
-
-func (b *boundedWriter) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.max > 0 && b.n+int64(len(p)) > b.max {
-		b.exceeded = true
-		if b.cancel != nil {
-			b.cancel()
-		}
-		return 0, &LimitError{Kind: LimitOutput, Limit: b.max, Actual: b.n + int64(len(p))}
-	}
-	n, err := b.w.Write(p)
-	b.n += int64(n)
-	return n, err
-}
-
-// exceededN возвращает флаг превышения и фактический размер (потокобезопасно).
-func (b *boundedWriter) exceededN() (bool, int64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.exceeded, b.n
-}
 
 // limitedBuffer накапливает stderr с ограничением размера, не теряя
 // информацию о том, что вывод был обрезан. Потокобезопасен (Write может

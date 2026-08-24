@@ -49,18 +49,6 @@ var outputCoder = map[processing.Format]string{
 	processing.FormatJPEGXL: "JXL",
 }
 
-// sourceCoder — маппинг доменного формата в ImageMagick coder для ввода.
-var sourceCoder = map[processing.Format]string{
-	processing.FormatJPEG:   "JPEG",
-	processing.FormatPNG:    "PNG",
-	processing.FormatWebP:   "WEBP",
-	processing.FormatGIF:    "GIF",
-	processing.FormatAVIF:   "AVIF",
-	processing.FormatHEIF:   "HEIF",
-	processing.FormatAPNG:   "APNG",
-	processing.FormatJPEGXL: "JXL",
-}
-
 // buildArgv преобразует валидированный план в массив аргументов ImageMagick
 // (без shell). Возвращает ошибку, если план содержит недопустимые значения.
 //

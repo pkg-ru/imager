@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 )
 
@@ -73,8 +74,8 @@ type Processor struct {
 	policyErr  error
 	// sem — bounded очередь слотов конкурентности (I3). Вместо простого
 	// канала используем очередь с лимитом ожидающих; при переполнении —
-	// быстрый отказ (ErrTooManyWaiting).
-	sem *semaphore
+	// быстрый отказ (ErrTooManyConcurrency).
+	sem *shared.Semaphore
 	// baseEnv — кэшированное базовое окружение (I13): os.Environ() +
 	// модульные пути binary. Инвариантно на экземпляр; policyDir добавляется
 	// отдельно при каждом запуске.
@@ -120,7 +121,7 @@ func New(opts Options) (*Processor, error) {
 	if conc <= 0 {
 		conc = 16
 	}
-	p.sem = newSemaphore(conc, conc)
+	p.sem = shared.NewSemaphore(conc, 0, ErrTooManyConcurrency)
 	// Кэшируем базовое окружение один раз (I13).
 	p.baseEnv = envForBinary(binary, nil)
 	if opts.Capabilities != nil {
@@ -196,10 +197,10 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	// очереди — быстрый отказ (ErrTooManyConcurrency), а не бесконечное
 	// ожидание. Метрика времени ожидания слота (N5).
 	slotStart := time.Now()
-	if err := p.sem.acquire(ctx); err != nil {
+	if err := p.sem.Acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer p.sem.release()
+	defer p.sem.Release()
 	p.metrics.observeSlotWait(time.Since(slotStart))
 
 	args, err := buildArgv(in.Plan, p.caps, p.limits)
@@ -227,7 +228,7 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	env = envWithPolicyDir(p.baseEnv, policyDir)
 
 	// Streaming stdout в out через bounded writer.
-	bw := &boundedWriter{w: out, max: p.limits.OutputBytes, cancel: cancel}
+	bw := shared.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
 
 	// stderr с ограничением размера.
 	stderr := &limitedBuffer{max: p.stderrN}
@@ -240,7 +241,7 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	// C3: проверяем превышение OutputBytes ПЕРВЫМ (до runCtx.Err()), т.к.
 	// boundedWriter при превышении отменяет контекст, и runCtx.Err() =
 	// context.Canceled маскирует LimitOutput.
-	exceeded, actual := bw.exceededN()
+	exceeded, actual := bw.ExceededN()
 	if exceeded {
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
 	}
@@ -265,55 +266,6 @@ func envWithPolicyDir(base []string, policyDir string) []string {
 		return base
 	}
 	return upsertEnv(base, envConfigurePath, policyDir)
-}
-
-// semaphore — bounded очередь слотов конкурентности (I3). Ограничивает и
-// число активных, и число ожидающих. При переполнении очереди ожидания —
-// быстрый отказ (ErrTooManyConcurrency).
-//
-// Реализация на канале с capacity = max: канал ограничивает число активных
-// слотов, а счётчик waiting под мьютексом — число ожидающих. Отмена ctx
-// прерывает ожидание через select.
-type semaphore struct {
-	mu      sync.Mutex
-	slots   chan struct{}
-	waiting int
-	maxWait int
-}
-
-func newSemaphore(max, maxWait int) *semaphore {
-	return &semaphore{slots: make(chan struct{}, max), maxWait: maxWait}
-}
-
-// acquire занимает слот. Блокируется до освобождения или отмены ctx.
-// Возвращает ErrTooManyConcurrency, если очередь ожидания переполнена.
-func (s *semaphore) acquire(ctx context.Context) error {
-	s.mu.Lock()
-	if s.waiting >= s.maxWait {
-		s.mu.Unlock()
-		return ErrTooManyConcurrency
-	}
-	s.waiting++
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.waiting--
-		s.mu.Unlock()
-	}()
-	select {
-	case s.slots <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// release освобождает слот.
-func (s *semaphore) release() {
-	select {
-	case <-s.slots:
-	default:
-	}
 }
 
 // procMetrics — метрики ожидания слота и запуска (N5).

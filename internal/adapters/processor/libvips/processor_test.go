@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
 	"github.com/pkg-ru/imager/internal/application/ports/processor"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
@@ -214,41 +215,41 @@ func TestProcessContextCancel(t *testing.T) {
 	close(bk.block)
 }
 
-// --- semaphore ---
+// --- semaphore (shared.Semaphore с sentinel-ошибкой пакета) ---
 
 func TestSemaphoreAllowsConcurrent(t *testing.T) {
-	s := newSemaphore(2, 2)
+	s := shared.NewSemaphore(2, 0, ErrTooManyConcurrency)
 	ctx := context.Background()
-	if err := s.acquire(ctx); err != nil {
+	if err := s.Acquire(ctx); err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	if err := s.acquire(ctx); err != nil {
+	if err := s.Acquire(ctx); err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
-	s.release()
-	s.release()
+	s.Release()
+	s.Release()
 }
 
 func TestSemaphoreTooManyWaiting(t *testing.T) {
-	// maxWait=1: слот занят + один ожидающий → третий запрос получает
+	// max=1: слот занят + один ожидающий → третий запрос получает
 	// быстрый отказ ErrTooManyConcurrency вместо блокировки.
-	s := newSemaphore(1, 1)
-	if err := s.acquire(context.Background()); err != nil {
+	s := shared.NewSemaphore(1, 0, ErrTooManyConcurrency)
+	if err := s.Acquire(context.Background()); err != nil {
 		t.Fatalf("acquire slot: %v", err)
 	}
 	queued := make(chan struct{})
 	go func() {
 		defer close(queued)
-		_ = s.acquire(context.Background())
+		_ = s.Acquire(context.Background())
 	}()
 	// Детерминированно ждём, пока второй запрос войдёт в очередь.
 	waitForWaiting(t, s, 1)
 
-	// Третий запрос: waiting >= maxWait → ErrTooManyConcurrency.
-	if err := s.acquire(context.Background()); err != ErrTooManyConcurrency {
+	// Третий запрос: waiting >= maxWaiting → ErrTooManyConcurrency.
+	if err := s.Acquire(context.Background()); err != ErrTooManyConcurrency {
 		t.Fatalf("err = %v, want ErrTooManyConcurrency", err)
 	}
-	s.release()
+	s.Release()
 	select {
 	case <-queued:
 	case <-time.After(2 * time.Second):
@@ -256,15 +257,13 @@ func TestSemaphoreTooManyWaiting(t *testing.T) {
 	}
 }
 
-// waitForWaiting ждёт, пока s.waiting станет >= want (вход в очередь).
-func waitForWaiting(t *testing.T, s *semaphore, want int) {
+// waitForWaiting ждёт, пока число ожидающих в семафоре станет >= want
+// (вход в очередь).
+func waitForWaiting(t *testing.T, s *shared.Semaphore, want int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		s.mu.Lock()
-		w := s.waiting
-		s.mu.Unlock()
-		if w >= want {
+		if s.Waiting() >= want {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -273,23 +272,23 @@ func waitForWaiting(t *testing.T, s *semaphore, want int) {
 }
 
 func TestSemaphoreCancel(t *testing.T) {
-	s := newSemaphore(1, 10)
-	if err := s.acquire(context.Background()); err != nil {
+	s := shared.NewSemaphore(1, 0, ErrTooManyConcurrency)
+	if err := s.Acquire(context.Background()); err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
-	defer s.release()
+	defer s.Release()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.acquire(ctx); !errors.Is(err, context.Canceled) {
+	if err := s.Acquire(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
 
-// --- boundedWriter ---
+// --- bounded writer (shared.BoundedWriter + маппинг в LimitError) ---
 
 func TestBoundedWriterUnderLimit(t *testing.T) {
 	var out bytes.Buffer
-	bw := &boundedWriter{w: &out, max: 10}
+	bw := shared.NewBoundedWriter(&out, 10, nil)
 	n, err := bw.Write([]byte("hello"))
 	if err != nil {
 		t.Fatalf("Write: %v", err)
@@ -297,7 +296,7 @@ func TestBoundedWriterUnderLimit(t *testing.T) {
 	if n != 5 || out.String() != "hello" {
 		t.Fatalf("n=%d out=%q", n, out.String())
 	}
-	ex, actual := bw.exceededN()
+	ex, actual := bw.ExceededN()
 	if ex || actual != 5 {
 		t.Fatalf("exceeded=%v actual=%d", ex, actual)
 	}
@@ -305,24 +304,20 @@ func TestBoundedWriterUnderLimit(t *testing.T) {
 
 func TestBoundedWriterOverLimit(t *testing.T) {
 	var out bytes.Buffer
-	bw := &boundedWriter{w: &out, max: 5}
+	bw := shared.NewBoundedWriter(&out, 5, nil)
 	_, err := bw.Write([]byte("hello world"))
-	if err == nil {
-		t.Fatal("Write: want error")
+	if !errors.Is(err, shared.ErrOutputLimitExceeded) {
+		t.Fatalf("err = %v, want shared.ErrOutputLimitExceeded", err)
 	}
-	var le *LimitError
-	if !errors.As(err, &le) || le.Kind != LimitOutput || le.Limit != 5 {
-		t.Fatalf("err = %v, want LimitError{Limit:5}", err)
-	}
-	ex, _ := bw.exceededN()
+	ex, _ := bw.ExceededN()
 	if !ex {
-		t.Fatal("exceededN: want true")
+		t.Fatal("ExceededN: want true")
 	}
 }
 
 func TestBoundedWriterNoLimit(t *testing.T) {
 	var out bytes.Buffer
-	bw := &boundedWriter{w: &out, max: 0}
+	bw := shared.NewBoundedWriter(&out, 0, nil)
 	if _, err := bw.Write([]byte("anything")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

@@ -231,7 +231,6 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 		return img, nil
 	}
 	ph := img.PageHeight()
-	W := img.Width()
 	H := img.Height()
 	if ph <= 0 || H <= ph {
 		if err := img.Flip(vips.DirectionVertical); err != nil {
@@ -239,6 +238,36 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 		}
 		return img, nil
 	}
+	return withFrames(img, func(f *vips.ImageRef, i int) error {
+		if err := f.Flip(vips.DirectionVertical); err != nil {
+			return fmt.Errorf("flip frame %d/%d: %w", i+1, n, err)
+		}
+		return nil
+	})
+}
+
+// withFrames инкапсулирует механику покадровой обработки анимации
+// (вертикальный стек страниц):
+//
+//  1. До разборки захватываются метаданные анимации (delay, loop) —
+//     arrayjoin их не переносит;
+//  2. каждый кадр вырезается из лёгкой копии (Copy + SetPageHeight(H) +
+//     ExtractArea(0, i*ph, W, ph)); временная установка высоты страницы
+//     равной высоте всего стека переключает govips на ОБЫЧНЫЙ extract
+//     региона (иначе он сам делает мультистраничный extract по всем
+//     кадрам сразу);
+//  3. к каждому кадру применяется колбэк fn;
+//  4. кадры склеиваются ArrayJoin(..., across=1) и восстанавливаются
+//     page-height / delay / loop.
+//
+// Семантика освобождения cgo-ресурсов: при любой ошибке текущий кадр и все
+// ранее собранные (кроме base при успешном join) закрываются; после
+// успешной сборки промежуточные кадры закрываются, остаётся только base.
+func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vips.ImageRef, error) {
+	n := img.Pages()
+	ph := img.PageHeight()
+	W := img.Width()
+	H := img.Height()
 
 	delay, _ := img.PageDelay()
 	loop := img.Loop()
@@ -258,8 +287,6 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 			closeFrames(false)
 			return nil, fmt.Errorf("copy frame %d/%d: %w", i+1, n, err)
 		}
-		// Высота страницы = высота всего стека: ExtractArea вырезает ровно
-		// один кадр по смещению i*ph (как в compositeWatermarkPerFrame).
 		if err := f.SetPageHeight(H); err != nil {
 			f.Close()
 			closeFrames(false)
@@ -270,10 +297,10 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 			closeFrames(false)
 			return nil, fmt.Errorf("extract frame %d/%d: %w", i+1, n, err)
 		}
-		if err := f.Flip(vips.DirectionVertical); err != nil {
+		if err := fn(f, i); err != nil {
 			f.Close()
 			closeFrames(false)
-			return nil, fmt.Errorf("flip frame %d/%d: %w", i+1, n, err)
+			return nil, err
 		}
 		frames = append(frames, f)
 	}
@@ -285,6 +312,8 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 			return nil, fmt.Errorf("join %d frames: %w", len(frames), err)
 		}
 	}
+	// Метаданные анимации: page-height обязателен (иначе стек читается как
+	// один высокий кадр), delay/loop переносятся вручную.
 	if err := base.SetPageHeight(ph); err != nil {
 		base.Close()
 		closeFrames(false)
@@ -302,6 +331,7 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 		closeFrames(false)
 		return nil, fmt.Errorf("restore loop: %w", err)
 	}
+	// Промежуточные кадры больше не нужны (base держит свои ссылки).
 	closeFrames(true)
 	return base, nil
 }
@@ -694,90 +724,15 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 
 // compositeWatermarkPerFrame накладывает ватермарку на каждый кадр
 // многокадрового изображения и собирает кадры обратно в вертикальный стек.
-//
-// Алгоритм:
-//  1. До разборки захватываются метаданные анимации (delay, loop) —
-//     arrayjoin их не переносит;
-//  2. каждый кадр вырезается из лёгкой копии (Copy + ExtractArea);
-//     перед ExtractArea высота страницы копии временно устанавливается
-//     равной высоте всего стека, чтобы govips выполнил ОБЫЧНЫЙ extract
-//     региона (иначе он сам делает мультистраничный extract по всем
-//     кадрам сразу);
-//  3. к каждому кадру применяется Composite во всех точках раскладки;
-//  4. кадры склеиваются ArrayJoin(..., across=1) и восстанавливаются
-//     page-height / delay / loop.
+// Механика разборки/сборки анимации инкапсулирована в withFrames.
 func compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
 	n := img.Pages()
-	H := img.Height()
-
-	delay, _ := img.PageDelay()
-	loop := img.Loop()
-
-	frames := make([]*vips.ImageRef, 0, n)
-	closeFrames := func(keepFirst bool) {
-		for i, f := range frames {
-			if i == 0 && keepFirst {
-				continue
-			}
-			f.Close()
-		}
-	}
-	for i := 0; i < n; i++ {
-		f, err := img.Copy()
-		if err != nil {
-			closeFrames(false)
-			return nil, fmt.Errorf("copy frame %d/%d: %w", i+1, n, err)
-		}
-		// Высота страницы = высота всего стека: Height()==PageHeight()
-		// переключает ExtractArea на обычный (не мультистраничный) путь,
-		// позволяя вырезать ровно один кадр по смещению i*ph.
-		if err := f.SetPageHeight(H); err != nil {
-			f.Close()
-			closeFrames(false)
-			return nil, fmt.Errorf("set page height of frame %d/%d: %w", i+1, n, err)
-		}
-		if err := f.ExtractArea(0, i*ph, W, ph); err != nil {
-			f.Close()
-			closeFrames(false)
-			return nil, fmt.Errorf("extract frame %d/%d: %w", i+1, n, err)
-		}
+	return withFrames(img, func(f *vips.ImageRef, i int) error {
 		for _, pt := range pts {
 			if err := f.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
-				f.Close()
-				closeFrames(false)
-				return nil, fmt.Errorf("composite frame %d/%d at (%d,%d): %w", i+1, n, pt.X, pt.Y, err)
+				return fmt.Errorf("composite frame %d/%d at (%d,%d): %w", i+1, n, pt.X, pt.Y, err)
 			}
 		}
-		frames = append(frames, f)
-	}
-
-	base := frames[0]
-	if len(frames) > 1 {
-		if err := base.ArrayJoin(frames[1:], 1); err != nil {
-			closeFrames(true)
-			return nil, fmt.Errorf("join %d frames: %w", len(frames), err)
-		}
-	}
-	// Метаданные анимации: page-height обязателен (иначе стек читается как
-	// один высокий кадр), delay/loop переносятся вручную.
-	if err := base.SetPageHeight(ph); err != nil {
-		base.Close()
-		closeFrames(false)
-		return nil, fmt.Errorf("restore page height: %w", err)
-	}
-	if len(delay) > 0 {
-		if err := base.SetPageDelay(delay); err != nil {
-			base.Close()
-			closeFrames(false)
-			return nil, fmt.Errorf("restore page delay: %w", err)
-		}
-	}
-	if err := base.SetLoop(loop); err != nil {
-		base.Close()
-		closeFrames(false)
-		return nil, fmt.Errorf("restore loop: %w", err)
-	}
-	// Промежуточные кадры больше не нужны (base держит свои ссылки).
-	closeFrames(true)
-	return base, nil
+		return nil
+	})
 }
