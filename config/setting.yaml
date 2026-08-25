@@ -161,8 +161,8 @@ http:
 
     # image — путь к СТАТИЧЕСКОМУ файлу-картинке, отдаваемому с HTTP 404.
     # Тип: string (путь к файлу). Дефолт: пусто.
-    # Пример: "not-found.png" (см. каталог example/)
-    # image: "example/not-found.png"
+    # Пример: "not-found.png"
+    # image: "not-found.png"
 
     # page — путь к СТАТИЧЕСКОМУ HTML-файлу, отдаваемому с HTTP 404.
     # Тип: string (путь к файлу). Дефолт: пусто.

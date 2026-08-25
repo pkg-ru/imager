@@ -450,12 +450,93 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		}
 		return err
 	}
+	// Файл уже удалён: учёт квоты не должен расходиться с диском, поэтому
+	// запись из LRU-таблицы снимаем независимо от результата fsync.
+	r.cache.remove(key)
 	if err := fsyncDir(filepath.Dir(full)); err != nil {
 		// fsync каталога не удался — удаление может быть не durable.
 		return fmt.Errorf("fs: fsync dir: %w", err)
 	}
-	r.cache.remove(key)
 	return nil
+}
+
+// DeleteByPrefix удаляет все ключи, начинающиеся с prefix (с границей '/'),
+// одним каталогом/пакетом. Реализует опциональный storage.PrefixDeleter
+// (используется admin DELETE по исходнику).
+//
+// Каталог ассетов исходника содержит только производные ассеты, поэтому
+// удаляется целиком через os.RemoveAll. Перед удалением число файлов
+// подсчитывается через filepath.Walk (для возврата). После удаления
+// синхронизируется LRU-кэш/квота (removePrefix) и выполняется fsync
+// родительского каталога по аналогии с Delete. Идемпотентно: если каталога
+// нет — возвращает (0, nil).
+//
+// Sidecar-метаданные (.meta/<srcKey>.json) при удалении каталога ассетов НЕ
+// чистятся: metadata.Store не предоставляет Delete, поэтому удаление
+// метаданных исходника не выполняется. Это безопасно — каталог .meta лежит
+// вне удаляемого каталога ассетов (префикс не может указывать на
+// зарезервированный сегмент .meta, см. cleanRel), поэтому удаление не
+// затрагивает метаданные чужих исходников.
+// TODO: при появлении Delete в metadata.Store — удалять sidecar исходника
+// вместе с каталогом ассетов.
+func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
+	pre := string(prefix)
+	pre = strings.Trim(pre, "/")
+	if pre == "" {
+		return 0, fmt.Errorf("fs: delete by prefix: empty prefix")
+	}
+	// Префикс трактуется как каталог: гарантируем завершающий '/', чтобы
+	// граница совпадала с каталогом ассетов (см. hasPrefixBoundary).
+	dirPrefix := pre
+	if !strings.HasSuffix(dirPrefix, "/") {
+		dirPrefix += "/"
+	}
+	rel, err := cleanRel(r.root, object.ObjectKey(dirPrefix))
+	if err != nil {
+		return 0, unsafe(object.ObjectKey(dirPrefix), err)
+	}
+	full := filepath.Join(r.root, rel)
+	if err := walkComponentsNotSymlink(r.root, full); err != nil {
+		return 0, unsafe(object.ObjectKey(dirPrefix), err)
+	}
+
+	// Подсчитываем число файлов до удаления (для возврата).
+	var count int64
+	err = filepath.Walk(full, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if ctx != nil {
+			if cErr := ctx.Err(); cErr != nil {
+				return cErr
+			}
+		}
+		if info.IsDir() {
+			return nil
+		}
+		count++
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fs: delete by prefix: count: %w", err)
+	}
+	if count == 0 {
+		// Каталога нет или он пуст — идемпотентно.
+		return 0, nil
+	}
+
+	if err := os.RemoveAll(full); err != nil {
+		return 0, fmt.Errorf("fs: delete by prefix: remove: %w", err)
+	}
+	// Синхронизируем учёт квоты: снимаем все записи с данным префиксом.
+	r.cache.removePrefix(dirPrefix)
+	if err := fsyncDir(filepath.Dir(full)); err != nil {
+		return 0, fmt.Errorf("fs: delete by prefix: fsync dir: %w", err)
+	}
+	return count, nil
 }
 
 // Stats возвращает статистику из in-memory учёта кэша. Не выполняет
@@ -514,7 +595,7 @@ func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]obje
 			return nil
 		}
 		key := filepath.ToSlash(rel)
-		if pre != "" && !strings.HasPrefix(key, pre) {
+		if pre != "" && !hasPrefixBoundary(key, pre) {
 			return nil
 		}
 		keys = append(keys, object.ObjectKey(key))
@@ -528,6 +609,7 @@ func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]obje
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)
+var _ storage.PrefixDeleter = (*ResultStore)(nil)
 
 // metaFromInfo строит ObjectMetadata из os.FileInfo.
 func metaFromInfo(key object.ObjectKey, info os.FileInfo) object.ObjectMetadata {

@@ -472,3 +472,76 @@ func TestAdminMethodNotAllowed(t *testing.T) {
 		t.Errorf("status = %d, want 405", rec.Code)
 	}
 }
+
+// TestAdminOversizedBody413 — тело >1МБ → 413 Request Entity Too Large.
+func TestAdminOversizedBody413(t *testing.T) {
+	ctx := newAdminTestCtx(t)
+	// Тело больше 1 МБ (maxBodyBytes+1 байт).
+	big := `{"source":"` + strings.Repeat("a", maxBodyBytes) + `"}`
+	rec := doAdmin(ctx.auth, http.MethodPost, "/admin/assets/generate", "secret-token", big)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+	m := decodeBody(t, rec)
+	if m["error"] == nil {
+		t.Fatal("error envelope missing")
+	}
+	env := m["error"].(map[string]any)
+	if env["code"] != "too_large" {
+		t.Errorf("error.code = %v, want too_large", env["code"])
+	}
+}
+
+// TestAdminAuthWrongTokenLength — неверный токен другой длины отклоняется
+// (constant-time авторизация не раскрывает длину токена).
+func TestAdminAuthWrongTokenLength(t *testing.T) {
+	ctx := newAdminTestCtx(t)
+	// Токен другой длины, чем "secret-token".
+	rec := doAdmin(ctx.auth, http.MethodPost, "/admin/assets/generate", "x", `{"source":"thumbs/photo.jpg"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// TestAdminDeleteBySourceDeletedCount — DELETE по source возвращает число
+// удалённых ассетов.
+func TestAdminDeleteBySourceDeletedCount(t *testing.T) {
+	ctx := newAdminTestCtx(t)
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), strings.NewReader("x"), object.PublishOptions{})
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), strings.NewReader("x"), object.PublishOptions{})
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/640x.webp"), strings.NewReader("x"), object.PublishOptions{})
+
+	rec := doAdmin(ctx.auth, http.MethodDelete, "/admin/assets/delete", "secret-token",
+		`{"source":"thumbs/photo.jpg"}`)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	m := decodeBody(t, rec)
+	if m["status"] != "completed" {
+		t.Errorf("status = %v, want completed", m["status"])
+	}
+	if got := int(m["deleted"].(float64)); got != 3 {
+		t.Errorf("deleted = %v, want 3", got)
+	}
+}
+
+// TestAdminDeleteAssetsDeletedCount — DELETE по assets возвращает число
+// удалённых ассетов.
+func TestAdminDeleteAssetsDeletedCount(t *testing.T) {
+	ctx := newAdminTestCtx(t)
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), strings.NewReader("x"), object.PublishOptions{})
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/640x.webp"), strings.NewReader("x"), object.PublishOptions{})
+
+	rec := doAdmin(ctx.auth, http.MethodDelete, "/admin/assets/delete", "secret-token",
+		`{"assets":["thumbs/photo-jpg/thumb.webp","thumbs/photo-jpg/640x.webp"]}`)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	m := decodeBody(t, rec)
+	if m["status"] != "completed" {
+		t.Errorf("status = %v, want completed", m["status"])
+	}
+	if got := int(m["deleted"].(float64)); got != 2 {
+		t.Errorf("deleted = %v, want 2", got)
+	}
+}

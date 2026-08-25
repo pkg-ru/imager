@@ -21,15 +21,19 @@ type JanitorOptions struct {
 // (temp-файлы вида ".tmp-*" внутри root). Это best-effort утилита: она
 // использует filepath.Walk и не блокирует другие операции; запускается в
 // отдельной goroutine через Start/Stop.
+//
+// Жизненный цикл симметричен и повторно используем: каждый Start создаёт
+// новые stop/stopped каналы и запускает горутину; Stop завершает её и
+// закрывает stopped. После Stop можно снова вызвать Start. Stop без
+// активного Start — no-op.
 type Janitor struct {
 	root    string
 	opts    JanitorOptions
 	stop    chan struct{}
 	stopped chan struct{}
-	closed  bool
 
-	// lifecycleMu защищает Start/Stop/close от гонок. Не удерживается во
-	// время ожидания <-j.stopped, чтобы run мог закрыть канал.
+	// lifecycleMu защищает Start/Stop от гонок. Не удерживается во время
+	// ожидания <-j.stopped, чтобы run мог закрыть канал.
 	lifecycleMu sync.Mutex
 }
 
@@ -45,11 +49,13 @@ func NewJanitor(root string, opts JanitorOptions) (*Janitor, error) {
 }
 
 // Start запускает периодический цикл. Повторный Start без Stop — ошибка.
+// При Interval <= 0 уборка отключена: Start успешен, но горутина не
+// запускается (Stop остаётся no-op).
 func (j *Janitor) Start() error {
 	j.lifecycleMu.Lock()
 	defer j.lifecycleMu.Unlock()
-	if j.closed {
-		return fmt.Errorf("fs: janitor: already started/stopped")
+	if j.stop != nil {
+		return fmt.Errorf("fs: janitor: already started")
 	}
 	if j.opts.Interval <= 0 {
 		return nil // Interval=0: уборка отключена, но Start успешен.
@@ -60,11 +66,11 @@ func (j *Janitor) Start() error {
 	return nil
 }
 
-// Stop останавливает цикл и ожидает завершения текущей уборки.
+// Stop останавливает цикл и ожидает завершения текущей уборки. Если цикл не
+// запущен (Start не вызывался, Interval=0 или уже остановлен) — no-op.
 func (j *Janitor) Stop() {
 	j.lifecycleMu.Lock()
 	if j.stop == nil {
-		j.closed = true
 		j.lifecycleMu.Unlock()
 		return
 	}
@@ -75,8 +81,8 @@ func (j *Janitor) Stop() {
 	close(stop)
 	<-stopped
 	j.lifecycleMu.Lock()
-	j.closed = true
 	j.stop = nil
+	j.stopped = nil
 	j.lifecycleMu.Unlock()
 }
 

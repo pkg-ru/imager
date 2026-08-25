@@ -82,7 +82,14 @@ type job struct {
 	assets []string
 	wait   bool
 
+	// ctx/cancel — контекст задачи. Создаётся для wait=true и отменяется
+	// при таймауте ожидания клиента (ErrWaitTimeout), чтобы воркер мог
+	// прервать генерацию. После завершения задачи cancel вызывается
+	// процессом (идемпотентно, безопасно при двойном вызове).
+	ctx    context.Context
+	cancel context.CancelFunc
 	done   chan struct{}
+
 	result *JobResult
 	err    error
 }
@@ -179,8 +186,13 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-// Stop выполняет graceful drain очереди: закрывает канал задач и ждёт
-// завершения всех воркеров. Идемпотентно.
+// Stop выполняет graceful drain очереди: помечает сервис останавливающимся
+// (под мьютексом), закрывает канал задач и ждёт завершения всех воркеров.
+// Идемпотентно.
+//
+// Флаг stopping и close(s.jobs) выполняются под s.mu — тем же мьютексом,
+// который держит enqueue при попытке отправки. Это исключает отправку в
+// закрытый канал (panic "send on closed channel").
 func (s *Service) Stop() {
 	s.mu.Lock()
 	if s.stopping {
@@ -208,15 +220,29 @@ func (s *Service) worker(ctx context.Context) {
 }
 
 // process выполняет задачу и сигнализирует о завершении через j.done.
+// Запись j.result/j.err выполняется только здесь (воркером) до close(j.done),
+// поэтому чтение в EnqueueGenerate после <-j.done безопасно.
+//
+// Для wait-задач используется cancellable job ctx (j.ctx): при таймауте
+// ожидания клиента EnqueueGenerate вызывает j.cancel(), и воркер может
+// прервать генерацию. Для wait=false задач используется ctx воркера.
 func (s *Service) process(ctx context.Context, j *job) {
+	jobCtx := ctx
+	if j.ctx != nil {
+		jobCtx = j.ctx
+	}
 	switch j.kind {
 	case jobGenerate:
-		j.result, j.err = s.runGenerate(ctx, j)
+		j.result, j.err = s.runGenerate(jobCtx, j)
 	case jobDelete:
-		j.result, j.err = s.runDelete(ctx, j)
+		j.result, j.err = s.runDelete(jobCtx, j)
 	}
 	if j.done != nil {
 		close(j.done)
+	}
+	// Освобождаем ресурсы контекста задачи (идемпотентно).
+	if j.cancel != nil {
+		j.cancel()
 	}
 }
 
@@ -231,7 +257,16 @@ func newJobID() string {
 }
 
 // enqueue ставит задачу в очередь. Возвращает ErrQueueFull при переполнении.
+//
+// Отправка защищена s.mu — тем же мьютексом, который держит Stop() при
+// установке stopping и close(s.jobs). Это исключает гонку «send on closed
+// channel»: если Stop() уже закрыл канал, stopping==true и мы не отправляем.
 func (s *Service) enqueue(j *job) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return ErrStopped
+	}
 	select {
 	case s.jobs <- j:
 		return nil
@@ -242,6 +277,9 @@ func (s *Service) enqueue(j *job) error {
 
 // ErrQueueFull — очередь задач переполнена (→ HTTP 503).
 var ErrQueueFull = errors.New("adminsvc: queue is full")
+
+// ErrStopped — сервис остановлен (Stop вызван), новые задачи не принимаются.
+var ErrStopped = errors.New("adminsvc: service is stopped")
 
 // EnqueueGenerate ставит задачу генерации ассетов.
 //
@@ -277,12 +315,13 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 		}
 	} else {
 		// Режим B: валидируем каждый asset URL.
+		canon := asset.NewCanonicalizer()
 		for _, a := range assets {
 			req, err := asset.Parse(a)
 			if err != nil {
 				return nil, ErrInvalidRequest
 			}
-			url, _, err := asset.NewCanonicalizer().CanonicalizeURL(req)
+			url, _, err := canon.CanonicalizeURL(req)
 			if err != nil {
 				return nil, ErrInvalidRequest
 			}
@@ -299,8 +338,14 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 	}
 	if wait {
 		j.done = make(chan struct{})
+		// Контекст задачи: отменяется при таймауте ожидания клиента, чтобы
+		// воркер мог прервать генерацию (утечка при ErrWaitTimeout).
+		j.ctx, j.cancel = context.WithCancel(context.Background())
 	}
 	if err := s.enqueue(&j); err != nil {
+		if j.cancel != nil {
+			j.cancel()
+		}
 		return nil, err
 	}
 
@@ -318,6 +363,8 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 		}
 		return j.result, nil
 	case <-time.After(s.cfg.WaitTimeout):
+		// Отменяем контекст задачи, чтобы воркер мог прервать генерацию.
+		j.cancel()
 		return nil, ErrWaitTimeout
 	}
 }
@@ -380,14 +427,32 @@ func (s *Service) runDelete(ctx context.Context, j *job) (*JobResult, error) {
 }
 
 // DeleteBySource удаляет все ассеты исходника (кроме самого исходника).
-// Требует, чтобы result-хранилище реализовывало storage.Lister; иначе
-// возвращается ErrNotSupported (→ HTTP 501).
+//
+// Стратегия удаления:
+//   - если result-хранилище реализует storage.PrefixDeleter — используется
+//     пакетное DeleteByPrefix с префиксом "{path}/{name}-{format}/"
+//     (граничный '/' уже учтён в реализациях адаптеров);
+//   - иначе если реализует storage.Lister — fallback на List + Delete по
+//     одному;
+//   - иначе возвращается ErrNotImplemented (→ HTTP 501).
+//
+// Сам исходник (path/name.format) лежит вне префикса ассетов и не удаляется.
 func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error) {
 	ref, err := objectRefKey(source)
 	if err != nil {
 		return 0, ErrInvalidRequest
 	}
 	prefix := assetPrefix(ref)
+
+	if pd, ok := s.results.(storage.PrefixDeleter); ok {
+		n, err := pd.DeleteByPrefix(ctx, object.ObjectKey(prefix))
+		if err != nil {
+			return 0, fmt.Errorf("adminsvc: delete-by-prefix: %w", err)
+		}
+		s.log.Infof("admin_job done id=%s kind=delete-by-source deleted=%d", newJobID(), n)
+		return int(n), nil
+	}
+
 	lister, ok := s.results.(storage.Lister)
 	if !ok {
 		return 0, ErrNotImplemented
@@ -407,18 +472,20 @@ func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error
 	return deleted, nil
 }
 
-// ErrNotImplemented — result-хранилище не поддерживает List (→ HTTP 501).
-var ErrNotImplemented = errors.New("adminsvc: result store does not support listing")
+// ErrNotImplemented — result-хранилище не поддерживает ни PrefixDeleter, ни
+// List (→ HTTP 501).
+var ErrNotImplemented = errors.New("adminsvc: result store does not support listing or prefix deletion")
 
 // DeleteAssets удаляет перечисленные ассеты (канонические URL). Идемпотентно.
 func (s *Service) DeleteAssets(ctx context.Context, assets []string) (int, error) {
 	deleted := 0
+	canon := asset.NewCanonicalizer()
 	for _, a := range assets {
 		req, err := asset.Parse(a)
 		if err != nil {
 			return deleted, ErrInvalidRequest
 		}
-		url, _, err := asset.NewCanonicalizer().CanonicalizeURL(req)
+		url, _, err := canon.CanonicalizeURL(req)
 		if err != nil {
 			return deleted, ErrInvalidRequest
 		}

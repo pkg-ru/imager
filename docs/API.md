@@ -307,7 +307,10 @@ curl -X POST http://localhost:8080/admin/assets/generate \
 {"source": "thumbs/photo.jpg"}
 ```
 
-Требует, чтобы result-хранилище реализовывало `Lister` (fs и s3 реализуют; иначе — `501`).
+Работает для всех хранилищ (fs, s3, ftp, sftp): используется пакетное
+`DeleteByPrefix` (PrefixDeleter), а при его отсутствии — fallback на
+`List` + одиночный `Delete`. Если хранилище не поддерживает ни то, ни
+другое — `501`.
 
 **Режим B** — удалить перечисленные ассеты (канонические URL):
 
@@ -340,7 +343,8 @@ curl -X POST http://localhost:8080/admin/assets/generate \
 | `200` | — | Удаление выполнено |
 | `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL |
 | `403` | `forbidden` | Неверный/отсутствующий bearer-токен |
-| `501` | `not_implemented` | Result-хранилище не поддерживает `list` (режим A) |
+| `413` | `too_large` | Тело запроса превышает 1 МБ |
+| `501` | `not_implemented` | Result-хранилище не поддерживает ни `DeleteByPrefix`, ни `list` (режим A) |
 | `500` | `internal` | Внутренняя ошибка |
 
 #### Примеры curl

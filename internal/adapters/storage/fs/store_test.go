@@ -311,3 +311,104 @@ func TestResultStoreList(t *testing.T) {
 		t.Errorf("List(empty) len = %d, want 3", len(all))
 	}
 }
+
+// TestResultStoreListPrefixBoundary проверяет границу префикса '/': префикс
+// "photo-jpg/" не должен совпадать с ключами "photo-jpg2/...".
+func TestResultStoreListPrefixBoundary(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+
+	keys := []object.ObjectKey{
+		"photo-jpg/thumb.webp",
+		"photo-jpg2/thumb.webp",
+		"photo-jpeg/thumb.webp",
+	}
+	for _, k := range keys {
+		if err := store.Publish(ctx, k, strings.NewReader("x"), object.PublishOptions{}); err != nil {
+			t.Fatalf("Publish(%q): %v", k, err)
+		}
+	}
+
+	got, err := store.List(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0] != "photo-jpg/thumb.webp" {
+		t.Fatalf("List(photo-jpg/) = %v, want only photo-jpg/thumb.webp", got)
+	}
+
+	// Префикс без завершающего '/' также не должен захватывать "photo-jpg2/".
+	got2, err := store.List(ctx, object.ObjectKey("photo-jpg"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got2) != 1 || got2[0] != "photo-jpg/thumb.webp" {
+		t.Fatalf("List(photo-jpg) = %v, want only photo-jpg/thumb.webp", got2)
+	}
+}
+
+// TestResultStoreDeleteByPrefix проверяет пакетное удаление каталога ассетов
+// исходника: удаляется только нужный префикс (граница '/'), число удалённых
+// файлов корректно, операция идемпотентна, учёт квоты синхронизирован.
+func TestResultStoreDeleteByPrefix(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+
+	// Ассеты двух исходников: photo.jpg (photo-jpg) и photo2.jpg (photo-jpg2).
+	keys := []object.ObjectKey{
+		"photo-jpg/thumb.webp",
+		"photo-jpg/preview.webp",
+		"photo-jpg2/thumb.webp",
+		"other/x.webp",
+	}
+	for _, k := range keys {
+		if err := store.Publish(ctx, k, strings.NewReader("data"), object.PublishOptions{}); err != nil {
+			t.Fatalf("Publish(%q): %v", k, err)
+		}
+	}
+
+	n, err := store.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted = %d, want 2", n)
+	}
+
+	// Удалённые ключи недоступны.
+	for _, k := range []object.ObjectKey{"photo-jpg/thumb.webp", "photo-jpg/preview.webp"} {
+		if _, err := store.Lookup(ctx, k); !errors.Is(err, object.ErrNotFound) {
+			t.Errorf("Lookup(%q): expected ErrNotFound, got %v", k, err)
+		}
+	}
+	// Соседние префиксы не тронуты.
+	for _, k := range []object.ObjectKey{"photo-jpg2/thumb.webp", "other/x.webp"} {
+		if _, err := store.Lookup(ctx, k); err != nil {
+			t.Errorf("Lookup(%q): unexpected error %v", k, err)
+		}
+	}
+
+	// Идемпотентность: повторное удаление возвращает 0.
+	n, err = store.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("second DeleteByPrefix: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second deleted = %d, want 0", n)
+	}
+
+	// Учёт квоты синхронизирован: осталось 2 объекта.
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Objects != 2 {
+		t.Fatalf("Stats objects = %d, want 2 (квота расходится с диском)", stats.Objects)
+	}
+}

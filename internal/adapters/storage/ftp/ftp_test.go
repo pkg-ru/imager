@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/textproto"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +23,9 @@ type fakeConn struct {
 	// listFailures — сколько раз List должен вернуть ошибку соединения
 	// перед успехом (для проверки retry).
 	listFailures int
+	// deleteNoSuchFile — если true, Delete возвращает 550 (File unavailable)
+	// для отсутствующих файлов (проверка идемпотентности Delete).
+	deleteNoSuchFile bool
 }
 
 func newFakeConn() *fakeConn {
@@ -54,7 +59,40 @@ func (c *fakeConn) List(path string) ([]*ftp.Entry, error) {
 		return []*ftp.Entry{{Name: path, Type: ftp.EntryTypeFile, Size: uint64(len(data))}}, nil
 	}
 	if c.dirs[path] {
-		return []*ftp.Entry{{Name: path, Type: ftp.EntryTypeFolder}}, nil
+		// Перечисляем содержимое каталога: файлы с префиксом path+"/"
+		// и подкаталоги, которые не входят в другой каталог.
+		base := path
+		if base != "" && !strings.HasSuffix(base, "/") {
+			base += "/"
+		}
+		var out []*ftp.Entry
+		seenDir := map[string]bool{}
+		for k := range c.files {
+			if strings.HasPrefix(k, base) {
+				name := strings.TrimPrefix(k, base)
+				if idx := strings.Index(name, "/"); idx >= 0 {
+					dir := name[:idx]
+					if !seenDir[dir] {
+						seenDir[dir] = true
+						out = append(out, &ftp.Entry{Name: dir, Type: ftp.EntryTypeFolder})
+					}
+					continue
+				}
+				out = append(out, &ftp.Entry{Name: name, Type: ftp.EntryTypeFile, Size: uint64(len(c.files[k]))})
+			}
+		}
+		for d := range c.dirs {
+			if d == path {
+				continue
+			}
+			if strings.HasPrefix(d, base) && !strings.Contains(strings.TrimPrefix(d, base), "/") {
+				if !seenDir[d[len(base):]] {
+					seenDir[d[len(base):]] = true
+					out = append(out, &ftp.Entry{Name: d[len(base):], Type: ftp.EntryTypeFolder})
+				}
+			}
+		}
+		return out, nil
 	}
 	return nil, nil
 }
@@ -83,11 +121,20 @@ func (c *fakeConn) Rename(from, to string) error {
 	return nil
 }
 func (c *fakeConn) Delete(path string) error {
+	if c.deleteNoSuchFile {
+		if _, ok := c.files[path]; !ok {
+			return &textproto.Error{Code: 550, Msg: "file unavailable"}
+		}
+	}
 	delete(c.files, path)
 	return nil
 }
 func (c *fakeConn) MakeDir(path string) error {
 	c.dirs[path] = true
+	return nil
+}
+func (c *fakeConn) RemoveDir(path string) error {
+	delete(c.dirs, path)
 	return nil
 }
 
@@ -352,5 +399,93 @@ func TestFTPPoolConcurrentDial(t *testing.T) {
 	// Возвращаем все соединения в пул (discard, т.к. release-цепочка удалена).
 	for _, c := range conns {
 		c.discard()
+	}
+}
+
+// TestFTPDeleteByPrefix проверяет рекурсивное пакетное удаление каталога
+// ассетов: удаляются только ключи с границей '/', возвращается число
+// удалённых файлов, операция идемпотентна.
+func TestFTPDeleteByPrefix(t *testing.T) {
+	conn := newFakeConn()
+	conn.dirs["photo-jpg"] = true
+	conn.files["photo-jpg/thumb.webp"] = []byte("a")
+	conn.files["photo-jpg/preview.webp"] = []byte("b")
+	conn.files["photo-jpg2/thumb.webp"] = []byte("c")
+	conn.files["other/x.webp"] = []byte("d")
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+
+	n, err := r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted = %d, want 2", n)
+	}
+	for _, k := range []string{"photo-jpg/thumb.webp", "photo-jpg/preview.webp"} {
+		if _, ok := conn.files[k]; ok {
+			t.Errorf("file %q not deleted", k)
+		}
+	}
+	// Соседние префиксы не тронуты.
+	if _, ok := conn.files["photo-jpg2/thumb.webp"]; !ok {
+		t.Error("photo-jpg2/thumb.webp unexpectedly deleted")
+	}
+	if _, ok := conn.files["other/x.webp"]; !ok {
+		t.Error("other/x.webp unexpectedly deleted")
+	}
+
+	// Идемпотентность: повторное удаление возвращает 0.
+	n, err = r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("second DeleteByPrefix: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second deleted = %d, want 0", n)
+	}
+}
+
+// TestFTPPublishTempNameUnique проверяет, что temp-файл публикации имеет
+// уникальное имя вида ".tmp-<base>-<UnixNano>" и не остаётся после успешной
+// публикации.
+func TestFTPPublishTempNameUnique(t *testing.T) {
+	conn := newFakeConn()
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+	key := object.ObjectKey("out/result.bin")
+	if err := r.Publish(ctx, key, bytes.NewReader([]byte("payload")), object.PublishOptions{}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// Temp-файл не должен остаться после успешной публикации.
+	for k := range conn.files {
+		if strings.HasPrefix(k, "out/.tmp-") {
+			t.Fatalf("temp file left after publish: %q", k)
+		}
+	}
+	// Целевой файл опубликован.
+	if _, ok := conn.files["out/result.bin"]; !ok {
+		t.Fatal("published file missing")
+	}
+}
+
+// TestFTPDeleteIdempotent550 проверяет, что ошибка 550 (no such file) при
+// Delete маппится в идемпотентный успех (не ошибка).
+func TestFTPDeleteIdempotent550(t *testing.T) {
+	conn := newFakeConn()
+	conn.deleteNoSuchFile = true
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+	// Файла нет — Delete должен быть идемпотентным (550 → успех).
+	if err := r.Delete(ctx, object.ObjectKey("missing.bin")); err != nil {
+		t.Fatalf("Delete missing: expected idempotent success, got %v", err)
 	}
 }

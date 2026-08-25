@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -37,6 +38,9 @@ type conn interface {
 	Rename(from, to string) error
 	Delete(path string) error
 	MakeDir(path string) error
+	// RemoveDir удаляет каталог (FTP-команда RMD). Используется при
+	// рекурсивном пакетном удалении (DeleteByPrefix).
+	RemoveDir(path string) error
 	// Feature возвращает true, если сервер объявил поддержку команды
 	// (через FEAT). Для команд базового RFC 959 (STOR, RNFR/RNTO, DELE)
 	// возвращает true, даже если сервер не поддерживает FEAT.
@@ -167,11 +171,31 @@ func (a *serverConnAdapter) Retr(path string) (io.ReadCloser, error) {
 // считаются неподдерживаемыми.
 func (a *serverConnAdapter) Feature(cmd string) bool {
 	switch strings.ToUpper(cmd) {
-	case "STOR", "RNFR", "RNTO", "DELE", "MKD":
+	case "STOR", "RNFR", "RNTO", "DELE", "MKD", "RMD":
 		return true
 	default:
 		return false
 	}
+}
+
+// RemoveDir удаляет каталог через RMD.
+func (a *serverConnAdapter) RemoveDir(path string) error {
+	return a.ServerConn.RemoveDir(path)
+}
+
+// baseName возвращает имя последнего компонента пути (без каталога).
+func baseName(p string) string {
+	if idx := strings.LastIndex(p, "/"); idx >= 0 {
+		return p[idx+1:]
+	}
+	return p
+}
+
+// isTempName сообщает, является ли имя файла временным файлом публикации.
+// Учитываются как новые имена вида ".tmp-<base>-<UnixNano>" (конкурентно
+// безопасные), так и старый суффикс "<key>.tmp" для совместимости.
+func isTempName(name string) bool {
+	return strings.HasPrefix(name, ".tmp-") || strings.HasSuffix(name, ".tmp")
 }
 
 func (o Options) key(key object.ObjectKey) (string, error) {
@@ -375,7 +399,14 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			}
 		}
 
-		tmpName := full + ".tmp"
+		// Уникальное имя temp-файла: не попадает в List/Stats (фильтр по
+		// префиксу ".tmp") и не конфликтует при конкурентных публикациях
+		// одного ключа. Каталог — тот же, что и у целевого файла, для
+		// атомарного rename.
+		tmpName := dir + "/.tmp-" + baseName(full) + "-" + fmt.Sprint(time.Now().UnixNano())
+		if dir == "" {
+			tmpName = ".tmp-" + baseName(full) + "-" + fmt.Sprint(time.Now().UnixNano())
+		}
 		if err := c.Stor(tmpName, src); err != nil {
 			return struct{}{}, err, remote.MapError("ftp stor temp", err)
 		}
@@ -399,8 +430,23 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 	return err
 }
 
-// Delete удаляет объект. Идемпотентно. При ошибке соединения выполняется
-// повторная попытка с новым соединением.
+// isFTPNotFound сообщает, является ли ошибка FTP признаком отсутствия файла
+// (550 File unavailable). Библиотека jlaffaye/ftp возвращает
+// *textproto.Error с полем Code.
+func isFTPNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var tpErr *textproto.Error
+	if errors.As(err, &tpErr) {
+		return tpErr.Code == ftp.StatusFileUnavailable
+	}
+	return false
+}
+
+// Delete удаляет объект. Идемпотентно: 550 (no such file) маппится в
+// object.ErrNotFound и не считается ошибкой соединения. При ошибке
+// соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	full, err := r.opts.key(key)
 	if err != nil {
@@ -409,6 +455,10 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	_, err = withRetry(ctx, &r.store, func(c *pooledConn) (struct{}, error, error) {
 		err := c.Delete(full)
 		if err != nil {
+			if isFTPNotFound(err) {
+				// Идемпотентность: объекта уже нет — это не ошибка.
+				return struct{}{}, nil, nil
+			}
 			return struct{}{}, err, remote.MapError("ftp delete", err)
 		}
 		return struct{}{}, nil, nil
@@ -439,7 +489,7 @@ func (r *ResultStore) walk(c conn, dir string, stats *object.StoreStats) error {
 	}
 	for _, e := range entries {
 		name := e.Name
-		if strings.HasPrefix(name, ".tmp") {
+		if isTempName(name) {
 			continue
 		}
 		full := strings.TrimSuffix(dir, "/") + "/" + name
@@ -455,4 +505,72 @@ func (r *ResultStore) walk(c conn, dir string, stats *object.StoreStats) error {
 	return nil
 }
 
+// DeleteByPrefix рекурсивно удаляет все ключи, начинающиеся с prefix (с
+// границей '/'), одним каталогом/пакетом. Реализует опциональный
+// storage.PrefixDeleter (используется admin DELETE по исходнику).
+//
+// Обход использует ту же логику, что и walk (Stats): файлы удаляются через
+// DELE, подкаталоги — через RMD (после опустошения). Временные файлы
+// публикации (.tmp-* и старый суффикс .tmp) пропускаются. Идемпотентно:
+// если каталога нет — возвращает (0, nil). Возвращает число удалённых
+// файлов.
+func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
+	full, err := r.opts.key(prefix)
+	if err != nil {
+		return 0, err
+	}
+	return withRetry(ctx, &r.store, func(c *pooledConn) (int64, error, error) {
+		n, err := r.deleteByPrefixWalk(c.conn, full)
+		if err != nil {
+			if isFTPNotFound(err) {
+				// Каталог уже удалён — идемпотентно.
+				return 0, nil, nil
+			}
+			return 0, err, remote.MapError("ftp delete by prefix", err)
+		}
+		return n, nil, nil
+	})
+}
+
+// deleteByPrefixWalk рекурсивно удаляет содержимое dir: DELE для файлов,
+// RMD для подкаталогов. Временные файлы пропускаются. Разделитель каталога
+// нормализуется (без завершающего '/' для List/RMD).
+func (r *ResultStore) deleteByPrefixWalk(c conn, dir string) (int64, error) {
+	return r.deleteDir(c, strings.TrimSuffix(dir, "/"))
+}
+
+// deleteDir рекурсивно удаляет каталог dir: файлы через DELE, подкаталоги
+// через рекурсию и RMD. Пропускает temp-файлы.
+func (r *ResultStore) deleteDir(c conn, dir string) (int64, error) {
+	entries, err := c.List(dir)
+	if err != nil {
+		return 0, err
+	}
+	var removed int64
+	for _, e := range entries {
+		name := e.Name
+		if isTempName(name) {
+			continue
+		}
+		sub := strings.TrimSuffix(dir, "/") + "/" + name
+		if e.Type == ftp.EntryTypeFolder {
+			n, err := r.deleteDir(c, sub)
+			if err != nil {
+				return removed, err
+			}
+			removed += n
+			if err := c.RemoveDir(sub); err != nil && !isFTPNotFound(err) {
+				return removed, err
+			}
+			continue
+		}
+		if err := c.Delete(sub); err != nil && !isFTPNotFound(err) {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 var _ storage.ResultStore = (*ResultStore)(nil)
+var _ storage.PrefixDeleter = (*ResultStore)(nil)

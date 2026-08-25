@@ -155,3 +155,24 @@ func within(parent, child string) bool {
 	}
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
 }
+
+// hasPrefixBoundary сообщает, начинается ли key с prefix с учётом границы
+// '/'. Пустой prefix означает «все ключи». Если prefix не заканчивается на
+// '/', то после совпавшей части в key должен следовать '/' (или key должен
+// заканчиваться ровно на prefix). Это исключает ложные совпадения вида
+// префикс "dir/" с ключом "dir2/..." и префикс "photo-jpg" с "photo-jpg2/...".
+func hasPrefixBoundary(key, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if !strings.HasPrefix(key, prefix) {
+		return false
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return true
+	}
+	if len(key) == len(prefix) {
+		return true
+	}
+	return key[len(prefix)] == '/'
+}

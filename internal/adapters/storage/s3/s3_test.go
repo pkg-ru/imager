@@ -67,6 +67,8 @@ func (f *fakeS3Handler) initialize(ctx context.Context, in middleware.Initialize
 		return f.handlePut(in)
 	case "DeleteObject":
 		return f.handleDelete(in)
+	case "DeleteObjects":
+		return f.handleDeleteBatch(in)
 	case "ListObjectsV2":
 		return f.handleList(in)
 	case "CreateMultipartUpload":
@@ -208,6 +210,27 @@ func (f *fakeS3Handler) handleDelete(in middleware.InitializeInput) (middleware.
 	params := in.Parameters.(*s3.DeleteObjectInput)
 	delete(f.objects, *params.Key)
 	return middleware.InitializeOutput{Result: &s3.DeleteObjectOutput{}}, middleware.Metadata{}, nil
+}
+
+// handleDeleteBatch обрабатывает DeleteObjects (пакетное удаление).
+func (f *fakeS3Handler) handleDeleteBatch(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
+	if f.failStatus > 0 {
+		return middleware.InitializeOutput{}, middleware.Metadata{}, f.failError()
+	}
+	params := in.Parameters.(*s3.DeleteObjectsInput)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var deleted []types.DeletedObject
+	for _, obj := range params.Delete.Objects {
+		if obj.Key == nil {
+			continue
+		}
+		if _, ok := f.objects[*obj.Key]; ok {
+			delete(f.objects, *obj.Key)
+			deleted = append(deleted, types.DeletedObject{Key: obj.Key})
+		}
+	}
+	return middleware.InitializeOutput{Result: &s3.DeleteObjectsOutput{Deleted: deleted}}, middleware.Metadata{}, nil
 }
 
 func (f *fakeS3Handler) handleList(in middleware.InitializeInput) (middleware.InitializeOutput, middleware.Metadata, error) {
@@ -607,5 +630,79 @@ func TestS3MultipartAbortOnError(t *testing.T) {
 	f.mu.Unlock()
 	if aborted == 0 {
 		t.Fatal("expected AbortMultipartUpload after upload part failure")
+	}
+}
+
+// TestS3ListPrefixBoundary проверяет границу префикса '/': префикс
+// "photo-jpg/" не должен совпадать с ключами "photo-jpg2/...".
+func TestS3ListPrefixBoundary(t *testing.T) {
+	f := newFakeS3Handler()
+	f.objects["photo-jpg/thumb.webp"] = []byte("a")
+	f.objects["photo-jpg2/thumb.webp"] = []byte("b")
+	f.objects["photo-jpeg/thumb.webp"] = []byte("c")
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+
+	got, err := r.List(context.Background(), object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0] != "photo-jpg/thumb.webp" {
+		t.Fatalf("List(photo-jpg/) = %v, want only photo-jpg/thumb.webp", got)
+	}
+
+	got2, err := r.List(context.Background(), object.ObjectKey("photo-jpg"))
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got2) != 1 || got2[0] != "photo-jpg/thumb.webp" {
+		t.Fatalf("List(photo-jpg) = %v, want only photo-jpg/thumb.webp", got2)
+	}
+}
+
+// TestS3DeleteByPrefix проверяет пакетное удаление по префиксу: удаляются
+// только ключи с границей '/', возвращается число удалённых, операция
+// идемпотентна.
+func TestS3DeleteByPrefix(t *testing.T) {
+	f := newFakeS3Handler()
+	f.objects["photo-jpg/thumb.webp"] = []byte("a")
+	f.objects["photo-jpg/preview.webp"] = []byte("b")
+	f.objects["photo-jpg2/thumb.webp"] = []byte("c")
+	f.objects["other/x.webp"] = []byte("d")
+	r, err := NewResultStore(Options{Bucket: "bucket", Client: f.client()})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+
+	n, err := r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted = %d, want 2", n)
+	}
+	for _, k := range []string{"photo-jpg/thumb.webp", "photo-jpg/preview.webp"} {
+		if _, ok := f.objects[k]; ok {
+			t.Errorf("object %q not deleted", k)
+		}
+	}
+	// Соседние префиксы не тронуты.
+	if _, ok := f.objects["photo-jpg2/thumb.webp"]; !ok {
+		t.Error("photo-jpg2/thumb.webp unexpectedly deleted")
+	}
+	if _, ok := f.objects["other/x.webp"]; !ok {
+		t.Error("other/x.webp unexpectedly deleted")
+	}
+
+	// Идемпотентность: повторное удаление возвращает 0.
+	n, err = r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("second DeleteByPrefix: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second deleted = %d, want 0", n)
 	}
 }

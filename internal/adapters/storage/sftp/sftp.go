@@ -38,6 +38,9 @@ type client interface {
 	MkdirAll(path string) error
 	PosixRename(oldname, newname string) error
 	Remove(path string) error
+	// RemoveDirectory удаляет пустой каталог. Используется при рекурсивном
+	// пакетном удалении (DeleteByPrefix).
+	RemoveDirectory(path string) error
 	ReadDir(path string) ([]os.FileInfo, error)
 	Close() error
 }
@@ -498,6 +501,72 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	return err
 }
 
+// DeleteByPrefix рекурсивно удаляет все ключи, начинающиеся с prefix (с
+// границей '/'), одним каталогом/пакетом. Реализует опциональный
+// storage.PrefixDeleter (используется admin DELETE по исходнику).
+//
+// Обход использует ту же логику, что и walk (Stats): каталог перечисляется
+// через ReadDir, файлы удаляются через Remove, подкаталоги рекурсивно
+// опустошаются и удаляются через RemoveDirectory. Временные файлы публикации
+// (.tmp-*) пропускаются. Идемпотентно: если каталога нет — возвращает
+// (0, nil). Возвращает число удалённых файлов.
+func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
+	full, err := r.opts.key(prefix)
+	if err != nil {
+		return 0, err
+	}
+	return withRetry(ctx, &r.store, func(cl *pooledClient) (int64, error, error) {
+		n, err := r.deleteDir(cl.client, full)
+		if err != nil {
+			switch {
+			case err == nil:
+				return n, nil, nil
+			case os.IsNotExist(err):
+				// Каталог уже удалён — идемпотентно.
+				return n, nil, nil
+			case !isClientErr(err):
+				return n, nil, remote.MapError("sftp delete by prefix", err)
+			default:
+				return n, err, remote.MapError("sftp delete by prefix", err)
+			}
+		}
+		return n, nil, nil
+	})
+}
+
+// deleteDir рекурсивно удаляет каталог dir: файлы через Remove, подкаталоги
+// через рекурсию и RemoveDirectory. Временные файлы (.tmp-*) пропускаются.
+func (r *ResultStore) deleteDir(cl client, dir string) (int64, error) {
+	entries, err := cl.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	var removed int64
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		full := path.Join(dir, name)
+		if e.IsDir() {
+			n, err := r.deleteDir(cl, full)
+			if err != nil {
+				return removed, err
+			}
+			removed += n
+			if err := cl.RemoveDirectory(full); err != nil && !os.IsNotExist(err) {
+				return removed, err
+			}
+			continue
+		}
+		if err := cl.Remove(full); err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
@@ -538,6 +607,7 @@ func (r *ResultStore) walk(client client, dir string, stats *object.StoreStats) 
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)
+var _ storage.PrefixDeleter = (*ResultStore)(nil)
 
 // isExistErr сообщает, является ли ошибка признаком существования файла.
 func isExistErr(err error) bool {

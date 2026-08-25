@@ -37,8 +37,12 @@ const multipartMaxParts = 10000
 // multipartWorkers — число параллельных UploadPart воркеров.
 const multipartWorkers = 8
 
-// maxListPages — предохранитель от бесконечной пагинации в Stats.
+// maxListPages — предохранитель от бесконечной пагинации в Stats/List.
 const maxListPages = 10000
+
+// s3DeleteBatchLimit — максимальное число ключей в одном DeleteObjects
+// (лимит S3).
+const s3DeleteBatchLimit = 1000
 
 // DefaultMetadataTTL — TTL кэша метаданных по умолчанию (30 секунд).
 const DefaultMetadataTTL = 30 * time.Second
@@ -86,6 +90,27 @@ func trimSlashes(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// hasPrefixBoundary сообщает, начинается ли key с prefix с учётом границы
+// '/'. Пустой prefix означает «все ключи». Если prefix не заканчивается на
+// '/', то после совпавшей части в key должен следовать '/' (или key должен
+// заканчиваться ровно на prefix). Это исключает ложные совпадения вида
+// префикс "dir/" с ключом "dir2/..." и префикс "photo-jpg" с "photo-jpg2/...".
+func hasPrefixBoundary(key, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if !strings.HasPrefix(key, prefix) {
+		return false
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return true
+	}
+	if len(key) == len(prefix) {
+		return true
+	}
+	return key[len(prefix)] == '/'
 }
 
 // isNotFound сообщает, является ли ошибка S3 признаком отсутствия объекта
@@ -234,6 +259,17 @@ func (c *metadataCache) invalidate(full string) {
 		return
 	}
 	c.lru.Delete(full)
+}
+
+// invalidatePrefix удаляет из кэша все записи, чей полный ключ попадает под
+// prefix (с границей '/'). Используется при пакетном удалении объектов по
+// префиксу (DeleteByPrefix), чтобы кэш метаданных не вернул stale-записи
+// после удаления объектов из S3.
+func (c *metadataCache) invalidatePrefix(prefix string) {
+	if c == nil {
+		return
+	}
+	c.lru.DeletePrefix(prefix)
 }
 
 func (o Options) head(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
@@ -684,6 +720,84 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	return nil
 }
 
+// DeleteByPrefix удаляет все ключи, начинающиеся с prefix (с границей '/'),
+// пакетно через DeleteObjects (до 1000 ключей за запрос). Реализует
+// опциональный storage.PrefixDeleter (используется admin DELETE по исходнику).
+//
+// Перечисление выполняется через ListObjectsV2 с пагинацией; ключи
+// группируются в батчи DeleteObjects. После удаления инвалидируются записи
+// metadata-cache с данным префиксом. Идемпотентно: если по префиксу ничего
+// нет — возвращает (0, nil). Возвращает число удалённых ключей.
+func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
+	pre := string(prefix)
+	pre = trimSlashes(pre)
+	fullPrefix := pre
+	if r.opts.Prefix != "" {
+		if fullPrefix != "" {
+			fullPrefix = r.opts.Prefix + "/" + fullPrefix
+		} else {
+			fullPrefix = r.opts.Prefix
+		}
+	}
+
+	var deleted int64
+	var token *string
+	for page := 0; ; page++ {
+		if page >= maxListPages {
+			return deleted, fmt.Errorf("s3: delete by prefix: list exceeded %d pages (possible infinite pagination)", maxListPages)
+		}
+		out, err := r.opts.Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(r.opts.Bucket),
+			Prefix:            aws.String(fullPrefix),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return deleted, MapError("s3 delete by prefix list", err)
+		}
+		// Собираем ключи текущей страницы, удовлетворяющие границе префикса.
+		var batch []types.ObjectIdentifier
+		for _, obj := range out.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			key := *obj.Key
+			// Граница '/': префикс "dir/" не должен совпадать с "dir2/...".
+			if !hasPrefixBoundary(key, fullPrefix) {
+				continue
+			}
+			batch = append(batch, types.ObjectIdentifier{Key: aws.String(key)})
+		}
+		// Удаляем батчами по s3DeleteBatchLimit.
+		for len(batch) > 0 {
+			n := len(batch)
+			if n > s3DeleteBatchLimit {
+				n = s3DeleteBatchLimit
+			}
+			chunk := batch[:n]
+			batch = batch[n:]
+			_, err := r.opts.Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(r.opts.Bucket),
+				Delete: &types.Delete{Objects: chunk, Quiet: aws.Bool(true)},
+			})
+			if err != nil {
+				return deleted, MapError("s3 delete by prefix", err)
+			}
+			deleted += int64(len(chunk))
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			break
+		}
+		if out.NextContinuationToken == nil {
+			return deleted, fmt.Errorf("s3: delete by prefix list truncated without continuation token")
+		}
+		token = out.NextContinuationToken
+	}
+	// Инвалидируем metadata-cache по префиксу (полный ключ с учётом
+	// bucket-конфигурации).
+	r.opts.cache.invalidatePrefix(fullPrefix)
+	return deleted, nil
+}
+
 // Stats возвращает агрегированную статистику по префиксу.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
 	var stats object.StoreStats
@@ -759,6 +873,10 @@ func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]obje
 				continue
 			}
 			key := *obj.Key
+			// Граница '/': префикс "dir/" не должен совпадать с "dir2/...".
+			if !hasPrefixBoundary(key, fullPrefix) {
+				continue
+			}
 			// Срезаем префикс bucket-конфигурации, чтобы вернуть canonical ключ.
 			if r.opts.Prefix != "" {
 				key = strings.TrimPrefix(key, r.opts.Prefix+"/")
@@ -777,3 +895,4 @@ func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]obje
 }
 
 var _ storage.ResultStore = (*ResultStore)(nil)
+var _ storage.PrefixDeleter = (*ResultStore)(nil)

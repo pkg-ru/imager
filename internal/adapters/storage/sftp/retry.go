@@ -60,23 +60,29 @@ func withRetryPolicy[T any](ctx context.Context, s *store, policy func(error) bo
 			var zero T
 			return zero, remote.MapError("sftp dial", err)
 		}
+		// Очистка соединения выполняется в конце каждой итерации явным
+		// замыканием (не defer-в-цикле, который накапливался бы до выхода из
+		// функции). Двойной discard безопасен: discard идемпотентен.
 		needDiscard := true
-		defer func() {
+		cleanup := func() {
 			if needDiscard {
 				cl.discard()
 			}
-		}()
+		}
 		v, raw, mapped := op(cl)
 		if raw == nil && mapped == nil {
 			needDiscard = false
+			cleanup()
 			return v, nil
 		}
 		lastErr = mapped
 		if !policy(raw) {
+			cleanup()
 			var zero T
 			return zero, lastErr
 		}
 		cl.discard()
+		cleanup()
 		if ctx.Err() != nil {
 			var zero T
 			return zero, lastErr

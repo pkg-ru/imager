@@ -214,6 +214,27 @@ func (c *cacheManager) remove(key object.ObjectKey) {
 	c.totalObjects--
 }
 
+// removePrefix удаляет все записи, чей ключ попадает под префикс prefix
+// (с границей '/'), и возвращает число удалённых. Используется для
+// синхронизации учёта квоты при пакетном удалении каталога ассетов
+// (DeleteByPrefix). Идемпотентно: если совпадений нет — возвращает 0.
+func (c *cacheManager) removePrefix(prefix string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var removed int64
+	for k, el := range c.index {
+		if !hasPrefixBoundary(k, prefix) {
+			continue
+		}
+		c.list.Remove(el)
+		delete(c.index, k)
+		c.totalBytes -= el.Value.(*lruEntry).size
+		c.totalObjects--
+		removed++
+	}
+	return removed
+}
+
 // currentLocked возвращает суммарный размер и число объектов по таблице
 // (должен вызываться при взятом мьютексе). O(1): возвращает аккумуляторы.
 func (c *cacheManager) currentLocked() (bytes, objects int64) {

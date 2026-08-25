@@ -5,6 +5,7 @@ package lru
 
 import (
 	"container/list"
+	"strings"
 	"sync"
 )
 
@@ -84,4 +85,41 @@ func (c *Cache[K, V]) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.m)
+}
+
+// DeletePrefix удаляет все записи, ключи которых начинаются с prefix.
+// Возвращает число удалённых записей. Идемпотентно при отсутствии совпадений.
+func (c *Cache[K, V]) DeletePrefix(prefix K) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var removed int
+	// Собираем совпавшие ключи отдельно, чтобы безопасно удалять во время
+	// итерации по map (удаление во время range по map допустимо в Go, но
+	// сбор явного списка упрощает логику и не завязан на эту особенность).
+	for k := range c.m {
+		if c.matchesPrefix(k, prefix) {
+			if n := c.elems[k]; n != nil {
+				c.lru.Remove(n)
+				delete(c.elems, k)
+			}
+			delete(c.m, k)
+			removed++
+		}
+	}
+	return removed
+}
+
+// matchesPrefix сообщает, начинается ли key с prefix (только лексическое
+// сравнение без границ: ответственность за границу '/' лежит на вызывающем,
+// который знает семантику ключей).
+func (c *Cache[K, V]) matchesPrefix(key, prefix K) bool {
+	k, ok := any(key).(string)
+	if !ok {
+		return false
+	}
+	p, ok := any(prefix).(string)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(k, p)
 }

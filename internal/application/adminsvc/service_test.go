@@ -554,3 +554,190 @@ var _ storage.ResultStore = (*nonListerResultStore)(nil)
 func emptyReader() io.Reader {
 	return strings.NewReader("")
 }
+
+// prefixDeleterResultStore — ResultStore, реализующий storage.PrefixDeleter
+// (но НЕ storage.Lister), для проверки пути DeleteByPrefix в DeleteBySource.
+type prefixDeleterResultStore struct {
+	mu      sync.Mutex
+	data    map[string][]byte
+	lastPre string
+}
+
+func newPrefixDeleterResultStore() *prefixDeleterResultStore {
+	return &prefixDeleterResultStore{data: map[string][]byte{}}
+}
+
+func (r *prefixDeleterResultStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.data[key.String()]; !ok {
+		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
+	}
+	return object.ObjectMetadata{Key: key}, nil
+}
+func (r *prefixDeleterResultStore) Open(_ context.Context, _ object.ObjectKey) (object.Artifact, error) {
+	return nil, &object.NotFoundError{}
+}
+func (r *prefixDeleterResultStore) ReadStream(_ context.Context, _ object.ObjectKey) (object.Stream, error) {
+	return nil, &object.NotFoundError{}
+}
+func (r *prefixDeleterResultStore) Publish(_ context.Context, key object.ObjectKey, _ io.Reader, _ object.PublishOptions) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[key.String()] = []byte("")
+	return nil
+}
+func (r *prefixDeleterResultStore) Delete(_ context.Context, key object.ObjectKey) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.data, key.String())
+	return nil
+}
+func (r *prefixDeleterResultStore) Stats(_ context.Context) (object.StoreStats, error) {
+	return object.StoreStats{}, nil
+}
+
+// DeleteByPrefix удаляет все ключи с префиксом (с граничным '/') и
+// запоминает переданный префикс для проверки.
+func (r *prefixDeleterResultStore) DeleteByPrefix(_ context.Context, prefix object.ObjectKey) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastPre = prefix.String()
+	var n int64
+	for k := range r.data {
+		if strings.HasPrefix(k, prefix.String()) {
+			delete(r.data, k)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *prefixDeleterResultStore) lastPrefix() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastPre
+}
+
+var _ storage.ResultStore = (*prefixDeleterResultStore)(nil)
+var _ storage.PrefixDeleter = (*prefixDeleterResultStore)(nil)
+
+// TestDeleteBySourcePrefixDeleter — DeleteBySource использует PrefixDeleter,
+// когда хранилище его реализует (даже без Lister).
+func TestDeleteBySourcePrefixDeleter(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newPrefixDeleterResultStore()
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	// Посторонний ассет — не должен удаляться.
+	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
+
+	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
+	if err != nil {
+		t.Fatalf("DeleteBySource: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2", deleted)
+	}
+	if got := res.lastPrefix(); got != "thumbs/photo-jpg/" {
+		t.Errorf("DeleteByPrefix prefix = %q, want %q", got, "thumbs/photo-jpg/")
+	}
+	// Посторонний ассет остался.
+	if _, err := res.Lookup(context.Background(), "thumbs/other-jpg/thumb.webp"); err != nil {
+		t.Errorf("unrelated asset should remain: %v", err)
+	}
+}
+
+// blockingGenerator — Generator, который блокируется до отмены контекста.
+// Используется для проверки отмены задачи при wait-timeout.
+type blockingGenerator struct {
+	mu       sync.Mutex
+	started  chan struct{}
+	released chan struct{}
+}
+
+func newBlockingGenerator() *blockingGenerator {
+	return &blockingGenerator{started: make(chan struct{}), released: make(chan struct{})}
+}
+
+func (b *blockingGenerator) Generate(ctx context.Context, _ *asset.Request) (*generatev2.Result, error) {
+	close(b.started)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.released:
+		return &generatev2.Result{URL: "x", Key: object.ObjectKey("x")}, nil
+	}
+}
+
+// TestEnqueueGenerateWaitTimeoutCancels — при ErrWaitTimeout контекст задачи
+// отменяется, и воркер может прервать генерацию (нет утечки).
+func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
+	gen := newBlockingGenerator()
+	src := newMemSourceStore()
+	res := newMemResultStore()
+	svc, err := New(Deps{
+		Gen:     gen,
+		Sources: src,
+		Results: res,
+		Presets: mustPresetSet(t),
+		Policy:  &policy.Policy{},
+		Logger:  fakeLogger{},
+	}, Config{Workers: 1, QueueSize: 4, WaitTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@2.webp"}, true)
+	wantErr(t, err, ErrWaitTimeout)
+
+	// Воркер должен получить отмену контекста и завершиться.
+	select {
+	case <-gen.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("generator never started")
+	}
+	select {
+	case <-gen.released:
+		// Не должен быть освобождён вручную — отмена должна сработать.
+		t.Fatal("generator was released manually, expected context cancellation")
+	case <-time.After(2 * time.Second):
+		// Ожидаем, что воркер завершился по отмене контекста.
+	}
+}
+
+// TestConcurrentEnqueueStop — конкурентные enqueue и Stop не вызывают panic
+// (гонка «send on closed channel»).
+func TestConcurrentEnqueueStop(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newMemResultStore()
+	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
+	svc.Start(context.Background())
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_, _ = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@2.webp"}, false)
+				}
+			}
+		}()
+	}
+	// Даём горутинам поработать, затем останавливаем сервис.
+	time.Sleep(20 * time.Millisecond)
+	svc.Stop()
+	close(stop)
+	wg.Wait()
+}

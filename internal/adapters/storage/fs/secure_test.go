@@ -298,6 +298,60 @@ func TestJanitorTempFiles(t *testing.T) {
 	}
 }
 
+// TestJanitorStartStopSymmetric проверяет симметричный и повторно используемый
+// жизненный цикл: Start -> Stop -> Start -> Stop работает, Stop без активного
+// Start — no-op, повторный Start без Stop — ошибка.
+func TestJanitorStartStopSymmetric(t *testing.T) {
+	root := t.TempDir()
+	j, err := NewJanitor(root, JanitorOptions{Interval: time.Millisecond, MaxAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Stop без Start — no-op.
+	j.Stop()
+
+	// Start -> Stop.
+	if err := j.Start(); err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	j.Stop()
+
+	// Повторный Start -> Stop (повторное использование).
+	if err := j.Start(); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	j.Stop()
+
+	// Повторный Start без Stop — ошибка.
+	if err := j.Start(); err != nil {
+		t.Fatalf("third Start: %v", err)
+	}
+	if err := j.Start(); err == nil {
+		t.Fatal("Start while running must fail")
+	}
+	j.Stop()
+}
+
+// TestJanitorStartIntervalZero — при Interval<=0 Start успешен, но горутина не
+// запускается; Stop остаётся no-op и не блокирует.
+func TestJanitorStartIntervalZero(t *testing.T) {
+	root := t.TempDir()
+	j, err := NewJanitor(root, JanitorOptions{Interval: 0, MaxAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Start(); err != nil {
+		t.Fatalf("Start with Interval=0: %v", err)
+	}
+	j.Stop() // no-op, не блокирует
+	// Повторный Start с Interval=0 тоже успешен.
+	if err := j.Start(); err != nil {
+		t.Fatalf("second Start with Interval=0: %v", err)
+	}
+	j.Stop()
+}
+
 // TestConcurrentQuotaPublish проверяет race-safe поведение жёсткой квоты при
 // конкурентных публикациях: суммарный размер не должен превышать квоту, а
 // ошибки ErrQuota допустимы (но не data race).

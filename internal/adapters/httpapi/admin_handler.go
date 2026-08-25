@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -56,8 +57,12 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// authorized проверяет Authorization: Bearer <token> через
-// crypto/subtle.ConstantTimeCompare.
+// authorized проверяет Authorization: Bearer <token> constant-time.
+//
+// Чтобы не раскрывать длину токена по timing, сравниваются SHA-256 хеши
+// предоставленного токена и ожидаемого: хеши всегда имеют одинаковую длину,
+// поэтому subtle.ConstantTimeCompare выполняется за константное время без
+// раннего выхода по длине.
 func (a *AdminHandler) authorized(r *http.Request) bool {
 	auth := r.Header.Get("Authorization")
 	const prefix = "Bearer "
@@ -68,11 +73,9 @@ func (a *AdminHandler) authorized(r *http.Request) bool {
 	if token == "" {
 		return false
 	}
-	// ConstantTimeCompare требует равной длины; при разной длине — false.
-	if len(token) != len(a.cfg.Token) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(a.cfg.Token)) == 1
+	got := sha256.Sum256([]byte(token))
+	want := sha256.Sum256([]byte(a.cfg.Token))
+	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
 }
 
 // generateRequest — тело POST /admin/assets/generate.
@@ -86,7 +89,7 @@ type generateRequest struct {
 func (a *AdminHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	var req generateRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		a.writeError(w, r, http.StatusBadRequest, "invalid", "invalid json body")
+		a.mapDecodeError(w, r, err)
 		return
 	}
 	// Ровно одно из source/assets.
@@ -118,7 +121,7 @@ type deleteRequest struct {
 func (a *AdminHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	var req deleteRequest
 	if err := decodeJSON(w, r, &req); err != nil {
-		a.writeError(w, r, http.StatusBadRequest, "invalid", "invalid json body")
+		a.mapDecodeError(w, r, err)
 		return
 	}
 	if (req.Source == "") == (len(req.Assets) == 0) {
@@ -162,11 +165,32 @@ func (a *AdminHandler) mapServiceError(w http.ResponseWriter, r *http.Request, e
 	}
 }
 
+// maxBodyBytes — максимальный размер тела запроса (1 МБ).
+const maxBodyBytes = 1 << 20
+
+// errBodyTooLarge — тело запроса превышает maxBodyBytes (→ HTTP 413).
+var errBodyTooLarge = errors.New("request body too large")
+
+// mapDecodeError маппит ошибку декодирования тела в HTTP-ответ.
+func (a *AdminHandler) mapDecodeError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errBodyTooLarge) {
+		a.writeError(w, r, http.StatusRequestEntityTooLarge, "too_large", "request body too large")
+		return
+	}
+	a.writeError(w, r, http.StatusBadRequest, "invalid", "invalid json body")
+}
+
 // decodeJSON читает и декодирует JSON-тело запроса.
+//
+// Читается maxBodyBytes+1 байт: если тело превышает лимит — возвращается
+// errBodyTooLarge (→ HTTP 413), а не невнятная ошибка "invalid json body".
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(body) > maxBodyBytes {
+		return errBodyTooLarge
 	}
 	if len(body) == 0 {
 		return errors.New("empty body")
@@ -174,10 +198,15 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return json.Unmarshal(body, v)
 }
 
-// writeJSON пишет JSON-ответ.
+// writeJSON пишет JSON-ответ. При ошибке маршалинга логирует её и пишет
+// пустое тело с корректным статусом, а не молча.
 func (a *AdminHandler) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	body, _ := json.Marshal(v)
+	body, err := json.Marshal(v)
+	if err != nil {
+		a.log.Errorf("httpapi: admin: json.Marshal: %v", err)
+		body = nil
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
@@ -186,9 +215,15 @@ func (a *AdminHandler) writeJSON(w http.ResponseWriter, r *http.Request, status 
 }
 
 // writeError пишет стабильный error envelope (в стиле Handler.writeError).
+// При ошибке марширования логирует её и пишет пустое тело с корректным
+// статусом, а не молча.
 func (a *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	body, _ := json.Marshal(errorEnvelope{Error: errorDetail{Code: code, Message: message}})
+	body, err := json.Marshal(errorEnvelope{Error: errorDetail{Code: code, Message: message}})
+	if err != nil {
+		a.log.Errorf("httpapi: admin: marshal error envelope: %v", err)
+		body = nil
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {

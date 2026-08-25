@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,11 +126,36 @@ func (c *fakeClient) Remove(p string) error {
 	delete(c.files, p)
 	return nil
 }
+func (c *fakeClient) RemoveDirectory(p string) error {
+	delete(c.dirs, p)
+	return nil
+}
 func (c *fakeClient) ReadDir(p string) ([]os.FileInfo, error) {
 	var out []os.FileInfo
+	seenDir := map[string]bool{}
 	for k, v := range c.files {
 		if path.Dir(k) == p {
 			out = append(out, fakeFileInfo{name: path.Base(k), size: int64(len(v))})
+		} else if strings.HasPrefix(k, p+"/") {
+			// Вложенный файл: его родительский каталог — подкаталог p.
+			rest := strings.TrimPrefix(k, p+"/")
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				dir := rest[:idx]
+				if !seenDir[dir] {
+					seenDir[dir] = true
+					out = append(out, fakeFileInfo{name: dir, isDir: true})
+				}
+			}
+		}
+	}
+	// Явно зарегистрированные подкаталоги.
+	for d := range c.dirs {
+		if path.Dir(d) == p {
+			name := path.Base(d)
+			if !seenDir[name] {
+				seenDir[name] = true
+				out = append(out, fakeFileInfo{name: name, isDir: true})
+			}
 		}
 	}
 	return out, nil
@@ -316,6 +342,52 @@ func TestSFTPLookupRetryExhausted(t *testing.T) {
 	}
 	if _, err := s.Lookup(context.Background(), "dir/file.bin"); err == nil {
 		t.Fatal("expected error after exhausting attempts")
+	}
+}
+
+// TestSFTPDeleteByPrefix проверяет рекурсивное пакетное удаление каталога
+// ассетов: удаляются только ключи с границей '/', возвращается число
+// удалённых файлов, операция идемпотентна.
+func TestSFTPDeleteByPrefix(t *testing.T) {
+	c := newFakeClient()
+	c.dirs["photo-jpg"] = true
+	c.files["photo-jpg/thumb.webp"] = []byte("a")
+	c.files["photo-jpg/preview.webp"] = []byte("b")
+	c.files["photo-jpg2/thumb.webp"] = []byte("c")
+	c.files["other/x.webp"] = []byte("d")
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+
+	n, err := r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted = %d, want 2", n)
+	}
+	for _, k := range []string{"photo-jpg/thumb.webp", "photo-jpg/preview.webp"} {
+		if _, ok := c.files[k]; ok {
+			t.Errorf("file %q not deleted", k)
+		}
+	}
+	// Соседние префиксы не тронуты.
+	if _, ok := c.files["photo-jpg2/thumb.webp"]; !ok {
+		t.Error("photo-jpg2/thumb.webp unexpectedly deleted")
+	}
+	if _, ok := c.files["other/x.webp"]; !ok {
+		t.Error("other/x.webp unexpectedly deleted")
+	}
+
+	// Идемпотентность: повторное удаление возвращает 0.
+	n, err = r.DeleteByPrefix(ctx, object.ObjectKey("photo-jpg/"))
+	if err != nil {
+		t.Fatalf("second DeleteByPrefix: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second deleted = %d, want 0", n)
 	}
 }
 

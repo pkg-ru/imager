@@ -56,23 +56,29 @@ func withRetry[T any](ctx context.Context, s *store, op func(c *pooledConn) (T, 
 			var zero T
 			return zero, remote.MapError("ftp dial", err)
 		}
+		// Очистка соединения выполняется в конце каждой итерации явным
+		// замыканием (не defer-в-цикле, который накапливался бы до выхода из
+		// функции). Двойной discard безопасен: discard идемпотентен.
 		needDiscard := true
-		defer func() {
+		cleanup := func() {
 			if needDiscard {
 				c.discard()
 			}
-		}()
+		}
 		v, raw, mapped := op(c)
 		if raw == nil && mapped == nil {
 			needDiscard = false
+			cleanup()
 			return v, nil
 		}
 		lastErr = mapped
 		if !isConnErr(raw) {
+			cleanup()
 			var zero T
 			return zero, lastErr
 		}
 		c.discard()
+		cleanup()
 		if ctx.Err() != nil {
 			var zero T
 			return zero, lastErr
