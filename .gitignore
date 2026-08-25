@@ -1,5 +1,7 @@
 /*.log
-/imager.exe
+/imager
+/imager.*
+!/imager.go
 /*-local.yaml
 .DS_Store
 .idea
