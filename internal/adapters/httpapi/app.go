@@ -162,7 +162,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Presets:            compiled.Presets,
 		Buffers:            buffers,
 		OutputLimit:        opt.OutputLimit,
-		Quality:            compiled.DefaultQuality,
+		Quality:            int(compiled.DefaultQuality),
 		DefaultWatermark:   compiled.DefaultWatermark,
 		DefaultOrientation: compiled.DefaultOrientation,
 		DefaultTrim:        compiled.DefaultTrim,

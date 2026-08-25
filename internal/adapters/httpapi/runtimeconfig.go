@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pkg-ru/dynamic"
 	"gopkg.in/yaml.v2"
 
 	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
@@ -146,22 +147,22 @@ type DetectionConfig struct {
 
 // DetectionYAML — YAML-представление DetectionConfig.
 //
-// Пороговые значения — указатели, чтобы отличать «не задано» (nil → дефолт)
-// от явного значения (включая 0), которое валидируется.
+// Пороговые значения — nullable, чтобы отличать «не задано» (Set=false →
+// дефолт) от явного значения (включая 0), которое валидируется.
 type DetectionYAML struct {
 	// FaceModel — путь к ONNX-модели YuNet для детекции лиц.
-	FaceModel string `yaml:"face-model"`
+	FaceModel dynamic.String `yaml:"face-model"`
 	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
 	// объектов.
-	ObjectModel string `yaml:"object-model"`
+	ObjectModel dynamic.String `yaml:"object-model"`
 	// ConfidenceThreshold — порог уверенности в интервале [0,1] (nil = 0.5).
-	ConfidenceThreshold *float64 `yaml:"confidence-threshold"`
+	ConfidenceThreshold dynamic.Nullable[dynamic.Float64] `yaml:"confidence-threshold"`
 	// MaxObjects — максимальное число объектов после NMS (первые N самых
 	// уверенных, должет быть > 0; nil = 5).
-	MaxObjects *int `yaml:"max-objects"`
+	MaxObjects dynamic.Nullable[dynamic.Int64] `yaml:"max-objects"`
 	// Margin — отступ к найденной области как доля от её размера в
 	// интервале [0,1] (nil = 0.1).
-	Margin *float64 `yaml:"margin"`
+	Margin dynamic.Nullable[dynamic.Float64] `yaml:"margin"`
 }
 
 // RuntimeConfigFile — YAML-представление единого runtime-конфига.
@@ -170,7 +171,7 @@ type DetectionYAML struct {
 // в typed config.Config (см. ParseRuntimeConfig).
 type RuntimeConfigFile struct {
 	// Version — версия конфигурации.
-	Version string `yaml:"version"`
+	Version dynamic.String `yaml:"version"`
 	// Watermarks — именованные декларации ватермарок (пробрасываются в
 	// config.Config; ссылки из пресетов/path-policies разрешаются при
 	// компиляции).
@@ -206,93 +207,93 @@ type RuntimeConfigFile struct {
 // ServerYAML — YAML-представление ServerConfig.
 type ServerYAML struct {
 	// Addr — адрес прослушивания (TCP), например ":8080".
-	Addr string `yaml:"addr"`
+	Addr dynamic.String `yaml:"addr"`
 	// ReadHeaderTimeout — таймаут чтения заголовков (duration, например "5s").
-	ReadHeaderTimeout string `yaml:"read-header-timeout"`
+	ReadHeaderTimeout dynamic.String `yaml:"read-header-timeout"`
 	// ReadTimeout — таймаут чтения тела запроса.
-	ReadTimeout string `yaml:"read-timeout"`
+	ReadTimeout dynamic.String `yaml:"read-timeout"`
 	// WriteTimeout — таймаут записи ответа.
-	WriteTimeout string `yaml:"write-timeout"`
+	WriteTimeout dynamic.String `yaml:"write-timeout"`
 	// IdleTimeout — таймаут idle-соединений.
-	IdleTimeout string `yaml:"idle-timeout"`
+	IdleTimeout dynamic.String `yaml:"idle-timeout"`
 	// ShutdownTimeout — максимальное время ожидания активных запросов.
-	ShutdownTimeout string `yaml:"shutdown-timeout"`
+	ShutdownTimeout dynamic.String `yaml:"shutdown-timeout"`
 	// MaxHeaderBytes — максимальный размер заголовков запроса.
-	MaxHeaderBytes int `yaml:"max-header-bytes"`
+	MaxHeaderBytes dynamic.Int64 `yaml:"max-header-bytes"`
 	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
-	MaxBodyBytes int `yaml:"max-body-bytes"`
+	MaxBodyBytes dynamic.Int64 `yaml:"max-body-bytes"`
 }
 
 // StorageYAML — YAML-представление конфигурации хранилища (source или
 // result). Секреты задаются отдельными полями и не попадают в URI/логи.
 type StorageYAML struct {
 	// Storage — тип хранилища (fs, s3, sftp, ftp, ftps, http). Пусто = fs.
-	Storage string `yaml:"storage"`
+	Storage dynamic.String `yaml:"storage"`
 	// Path — локальный каталог для FS-хранилища.
-	Path string `yaml:"path"`
+	Path dynamic.String `yaml:"path"`
 	// BaseURL — базовый адрес исходников для HTTP/HTTPS source.
-	BaseURL string `yaml:"base-url"`
+	BaseURL dynamic.String `yaml:"base-url"`
 	// Bucket — bucket для S3.
-	Bucket string `yaml:"bucket"`
+	Bucket dynamic.String `yaml:"bucket"`
 	// Prefix — префикс ключей для S3.
-	Prefix string `yaml:"prefix"`
+	Prefix dynamic.String `yaml:"prefix"`
 	// Endpoint — endpoint S3 (для S3-совместимых хранилищ; пусто = AWS).
-	Endpoint string `yaml:"endpoint"`
+	Endpoint dynamic.String `yaml:"endpoint"`
 	// Region — регион S3.
-	Region string `yaml:"region"`
+	Region dynamic.String `yaml:"region"`
 	// AccessKey — access key S3.
-	AccessKey string `yaml:"access-key"`
+	AccessKey dynamic.String `yaml:"access-key"`
 	// SecretKey — secret key S3.
-	SecretKey string `yaml:"secret-key"`
+	SecretKey dynamic.String `yaml:"secret-key"`
 	// Addr — адрес "host:port" для SFTP/FTP/FTPS.
-	Addr string `yaml:"addr"`
+	Addr dynamic.String `yaml:"addr"`
 	// User — пользователь для SFTP/FTP/FTPS.
-	User string `yaml:"user"`
+	User dynamic.String `yaml:"user"`
 	// Password — пароль для SFTP/FTP/FTPS.
-	Password string `yaml:"password"`
+	Password dynamic.String `yaml:"password"`
 	// PrivateKeyFile — путь к файлу приватного ключа для SFTP.
-	PrivateKeyFile string `yaml:"private-key-file"`
+	PrivateKeyFile dynamic.String `yaml:"private-key-file"`
 	// Root — корневой каталог для SFTP/FTP/FTPS.
-	Root string `yaml:"root"`
+	Root dynamic.String `yaml:"root"`
 	// TLS — true для FTPS.
-	TLS bool `yaml:"tls"`
+	TLS dynamic.Bool `yaml:"tls"`
 	// TLSVerify — проверять ли TLS-сертификат для FTPS (default: true).
-	TLSVerify *bool `yaml:"tls-verify"`
+	TLSVerify dynamic.Nullable[dynamic.Bool] `yaml:"tls-verify"`
 	// HostKeyFingerprint — ожидаемый SHA-256 fingerprint SFTP host key.
 	// Пример: "SHA256:abcdef...". Пусто = фундаментально небезопасно
 	// (см. docs/PRODUCTION.md); рекомендуется задавать всегда.
-	HostKeyFingerprint string `yaml:"host-key-fingerprint"`
+	HostKeyFingerprint dynamic.String `yaml:"host-key-fingerprint"`
 	// SpoolDir — каталог временных spool.
-	SpoolDir string `yaml:"spool-dir"`
+	SpoolDir dynamic.String `yaml:"spool-dir"`
 	// SpoolMaxBytes — максимальный размер source spool (0 = без лимита).
-	SpoolMaxBytes int64 `yaml:"spool-max-bytes"`
+	SpoolMaxBytes dynamic.Int64 `yaml:"spool-max-bytes"`
 	// DialTimeout — таймаут соединения для SFTP/FTP/FTPS, HTTP и S3 (duration).
-	DialTimeout string `yaml:"dial-timeout"`
+	DialTimeout dynamic.String `yaml:"dial-timeout"`
 	// ReadTimeout — таймаут чтения ответа для HTTP-подобных хранилищ
 	// (S3, HTTP; duration).
-	ReadTimeout string `yaml:"read-timeout"`
+	ReadTimeout dynamic.String `yaml:"read-timeout"`
 	// MaxAttempts — максимальное число попыток запроса для HTTP-подобных
 	// хранилищ (S3, HTTP).
-	MaxAttempts int `yaml:"max-attempts"`
+	MaxAttempts dynamic.Int64 `yaml:"max-attempts"`
 	// MaxIdleConns — максимальное число idle-соединений в пуле
 	// (S3, HTTP).
-	MaxIdleConns int `yaml:"max-idle-conns"`
+	MaxIdleConns dynamic.Int64 `yaml:"max-idle-conns"`
 	// MaxConns — максимальное число одновременных соединений в пуле
 	// (SFTP/FTP/FTPS; 0 = 2).
-	MaxConns int `yaml:"max-conns"`
+	MaxConns dynamic.Int64 `yaml:"max-conns"`
 	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
 	// (S3, HTTP).
-	MaxIdleConnsPerHost int `yaml:"max-idle-conns-per-host"`
+	MaxIdleConnsPerHost dynamic.Int64 `yaml:"max-idle-conns-per-host"`
 	// IdleConnTimeout — таймаут idle-соединений (S3, HTTP; duration).
-	IdleConnTimeout string `yaml:"idle-conn-timeout"`
+	IdleConnTimeout dynamic.String `yaml:"idle-conn-timeout"`
 	// MetadataTTL — TTL кэша метаданных (S3; duration; 0 = кэш отключён).
-	MetadataTTL string `yaml:"metadata-ttl"`
+	MetadataTTL dynamic.String `yaml:"metadata-ttl"`
 }
 
 // ImageMagickYAML — YAML-представление ImageMagickConfig.
 type ImageMagickYAML struct {
 	// Binary — путь к ImageMagick binary (по умолчанию "magick").
-	Binary string `yaml:"binary"`
+	Binary dynamic.String `yaml:"binary"`
 	// Policy — настройки deny-by-default policy.xml.
 	Policy PolicyYAML `yaml:"policy"`
 	// Limits — resource limits для subprocess.
@@ -308,93 +309,93 @@ type LibvipsYAML struct {
 // LibvipsLimitsYAML — YAML-представление libvips.Limits.
 type LibvipsLimitsYAML struct {
 	// OutputBytes — лимит размера выходных данных (байт).
-	OutputBytes int64 `yaml:"output-bytes"`
+	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
 	// Timeout — context deadline на одну операцию (duration).
-	Timeout string `yaml:"timeout"`
+	Timeout dynamic.String `yaml:"timeout"`
 	// Concurrency — максимальное число одновременно выполняемых операций.
-	Concurrency int `yaml:"concurrency"`
+	Concurrency dynamic.Int64 `yaml:"concurrency"`
 	// Threads — число потоков libvips (vips_concurrency_set).
-	Threads int `yaml:"threads"`
+	Threads dynamic.Int64 `yaml:"threads"`
 	// MaxCacheMem — максимум памяти кэша libvips (байт).
-	MaxCacheMem int `yaml:"max-cache-mem"`
+	MaxCacheMem dynamic.Int64 `yaml:"max-cache-mem"`
 	// MaxCacheFiles — максимум файлов кэша libvips.
-	MaxCacheFiles int `yaml:"max-cache-files"`
+	MaxCacheFiles dynamic.Int64 `yaml:"max-cache-files"`
 	// MaxCacheSize — максимум операций в кэше libvips.
-	MaxCacheSize int `yaml:"max-cache-size"`
+	MaxCacheSize dynamic.Int64 `yaml:"max-cache-size"`
 }
 
 // PolicyYAML — YAML-представление imagemagick.PolicyConfig.
 type PolicyYAML struct {
 	// Enabled — включать ли генерацию policy.xml (nil = true).
-	Enabled *bool `yaml:"enabled"`
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
 	// Dir — каталог, куда записывается policy.xml (пусто = временный).
-	Dir string `yaml:"dir"`
+	Dir dynamic.String `yaml:"dir"`
 	// MaxMemoryBytes, MaxMapBytes, MaxDiskBytes, MaxThreads, MaxTimeSeconds,
 	// MaxWidth, MaxHeight, MaxPixels, MaxFrames — resource policies
 	// (0 = не задавать).
-	MaxMemoryBytes int64 `yaml:"max-memory-bytes"`
-	MaxMapBytes    int64 `yaml:"max-map-bytes"`
-	MaxDiskBytes   int64 `yaml:"max-disk-bytes"`
-	MaxThreads     int   `yaml:"max-threads"`
-	MaxTimeSeconds int   `yaml:"max-time-seconds"`
-	MaxWidth       int64 `yaml:"max-width"`
-	MaxHeight      int64 `yaml:"max-height"`
-	MaxPixels      int64 `yaml:"max-pixels"`
-	MaxFrames      int   `yaml:"max-frames"`
+	MaxMemoryBytes dynamic.Int64 `yaml:"max-memory-bytes"`
+	MaxMapBytes    dynamic.Int64 `yaml:"max-map-bytes"`
+	MaxDiskBytes   dynamic.Int64 `yaml:"max-disk-bytes"`
+	MaxThreads     dynamic.Int64 `yaml:"max-threads"`
+	MaxTimeSeconds dynamic.Int64 `yaml:"max-time-seconds"`
+	MaxWidth       dynamic.Int64 `yaml:"max-width"`
+	MaxHeight      dynamic.Int64 `yaml:"max-height"`
+	MaxPixels      dynamic.Int64 `yaml:"max-pixels"`
+	MaxFrames      dynamic.Int64 `yaml:"max-frames"`
 	// DisableNetwork — отключать network-capable delegates (nil = true).
-	DisableNetwork *bool `yaml:"disable-network"`
+	DisableNetwork dynamic.Nullable[dynamic.Bool] `yaml:"disable-network"`
 	// DisabledCoders — дополнительные coders для запрета.
-	DisabledCoders []string `yaml:"disabled-coders"`
+	DisabledCoders []dynamic.String `yaml:"disabled-coders"`
 	// DisabledDelegates — дополнительные delegates для запрета.
-	DisabledDelegates []string `yaml:"disabled-delegates"`
+	DisabledDelegates []dynamic.String `yaml:"disabled-delegates"`
 }
 
 // LimitsYAML describes the YAML representation of imagemagick.Limits.
 type LimitsYAML struct {
 	// MemoryBytes — лимит памяти в байтах.
-	MemoryBytes int64 `yaml:"memory-bytes"`
+	MemoryBytes dynamic.Int64 `yaml:"memory-bytes"`
 	// MapBytes — лимит виртуальной памяти в байтах.
-	MapBytes int64 `yaml:"map-bytes"`
+	MapBytes dynamic.Int64 `yaml:"map-bytes"`
 	// DiskBytes — лимит дискового кэша в байтах.
-	DiskBytes int64 `yaml:"disk-bytes"`
+	DiskBytes dynamic.Int64 `yaml:"disk-bytes"`
 	// Threads — лимит потоков.
-	Threads int `yaml:"threads"`
+	Threads dynamic.Int64 `yaml:"threads"`
 	// TimeSeconds — лимит времени CPU в секундах.
-	TimeSeconds int `yaml:"time-seconds"`
+	TimeSeconds dynamic.Int64 `yaml:"time-seconds"`
 	// Width — лимит ширины в пикселях (0 = не ограничено).
-	Width int64 `yaml:"width"`
+	Width dynamic.Int64 `yaml:"width"`
 	// Height — лимит высоты в пикселях (0 = не ограничено).
-	Height int64 `yaml:"height"`
+	Height dynamic.Int64 `yaml:"height"`
 	// Pixels — лимит площади (width*height) в пикселях.
-	Pixels int64 `yaml:"pixels"`
+	Pixels dynamic.Int64 `yaml:"pixels"`
 	// Frames — лимит числа кадров.
-	Frames int `yaml:"frames"`
+	Frames dynamic.Int64 `yaml:"frames"`
 	// OutputBytes — application-level лимит размера выхода в байтах.
-	OutputBytes int64 `yaml:"output-bytes"`
+	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
 	// Timeout — application-level context deadline для subprocess (duration).
-	Timeout string `yaml:"timeout"`
+	Timeout dynamic.String `yaml:"timeout"`
 	// Concurrency — максимальное число одновременно работающих subprocess
 	// (0 = без ограничения).
-	Concurrency int `yaml:"concurrency"`
+	Concurrency dynamic.Int64 `yaml:"concurrency"`
 	// WebPMethod — метод сжатия WebP (0-6; 0 = умолчание ImageMagick).
-	WebPMethod int `yaml:"webp-method"`
+	WebPMethod dynamic.Int64 `yaml:"webp-method"`
 	// PNGCompressionLevel — уровень сжатия PNG (0-9; 0 = умолчание).
-	PNGCompressionLevel int `yaml:"png-compression-level"`
+	PNGCompressionLevel dynamic.Int64 `yaml:"png-compression-level"`
 }
 
 // ApplicationYAML — прикладные лимиты.
 type ApplicationYAML struct {
 	// OutputLimit — максимальный размер выходного файла (0 = без лимита).
-	OutputLimit int64 `yaml:"output-limit"`
+	OutputLimit dynamic.Int64 `yaml:"output-limit"`
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
-	BufferMaxBytes int64 `yaml:"buffer-max-bytes"`
+	BufferMaxBytes dynamic.Int64 `yaml:"buffer-max-bytes"`
 }
 
 // ObservabilityYAML — логирование и метрики.
 type ObservabilityYAML struct {
 	// LogLevel — уровень логов: debug, info, warn, error (по умолчанию info).
-	LogLevel string `yaml:"log-level"`
+	LogLevel dynamic.String `yaml:"log-level"`
 	// AssetErrors — учёт ошибок asset URL (счётчики, top-paths, логи).
 	AssetErrors AssetErrorsYAML `yaml:"asset-errors"`
 }
@@ -402,9 +403,9 @@ type ObservabilityYAML struct {
 // AssetErrorsYAML — YAML-представление AssetErrorConfig.
 type AssetErrorsYAML struct {
 	// Enabled — включать ли учёт ошибок asset URL. Дефолт true.
-	Enabled *bool `yaml:"enabled"`
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
 	// LogLevel — уровень структурного лога ошибки. Дефолт warn.
-	LogLevel string `yaml:"log-level"`
+	LogLevel dynamic.String `yaml:"log-level"`
 	// TopPaths — bounded-реестр проблемных путей.
 	TopPaths TopPathsYAML `yaml:"top-paths"`
 }
@@ -412,13 +413,13 @@ type AssetErrorsYAML struct {
 // TopPathsYAML — YAML-представление TopPathsConfig.
 type TopPathsYAML struct {
 	// Enabled — включать ли учёт top-paths. Дефолт false.
-	Enabled bool `yaml:"enabled"`
+	Enabled dynamic.Bool `yaml:"enabled"`
 	// MaxEntries — максимальное число отслеживаемых путей (LRU). Дефолт 1024.
-	MaxEntries int `yaml:"max-entries"`
+	MaxEntries dynamic.Int64 `yaml:"max-entries"`
 	// ReportTop — число путей в отчёте. Дефолт 20.
-	ReportTop int `yaml:"report-top"`
+	ReportTop dynamic.Int64 `yaml:"report-top"`
 	// KeyMode — режим ключа: source | hash. Дефолт source.
-	KeyMode string `yaml:"key-mode"`
+	KeyMode dynamic.String `yaml:"key-mode"`
 }
 
 // MetadataYAML — конфигурация sidecar-кэша моделей и largest_ai_asset
@@ -430,76 +431,76 @@ type TopPathsYAML struct {
 type MetadataYAML struct {
 	// Enabled — включить sidecar-кэш моделей и largest_ai_asset.
 	// Тип: bool. Дефолт: true. false = поведение идентично текущему.
-	Enabled *bool `yaml:"enabled"`
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
 	// Dir — КОРЕНЬ sidecar-хранилища метаданных (НОВАЯ СЕМАНТИКА v2.1):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы. Метаданные всегда хранятся
 	// локально по этому пути, независимо от типов source/result.
 	// Тип: string. Дефолт: <эффективный локальный result-каталог>/.meta.
-	Dir string `yaml:"dir"`
+	Dir dynamic.String `yaml:"dir"`
 }
 
 // AdminYAML — YAML-представление AdminConfig.
 //
 // Выключено по умолчанию (enabled: false). При enabled: true ТРЕБУЕТСЯ
-// непустой token (иначе fail-fast ошибка старта). workers ≥ 1 (дефолт 2),
+// непустой token (иначе — fail-fast ошибка старта). workers ≥ 1 (дефолт 2),
 // queue-size ≥ 1 (дефолт 64), wait-timeout > 0 (дефолт "300s").
 type AdminYAML struct {
 	// Enabled — включать ли admin-эндпоинты. Дефолт false.
-	Enabled bool `yaml:"enabled"`
+	Enabled dynamic.Bool `yaml:"enabled"`
 	// Token — bearer-токен (Authorization: Bearer <token>). Обязателен при
 	// enabled: true.
-	Token string `yaml:"token"`
+	Token dynamic.String `yaml:"token"`
 	// Workers — число параллельных фоновых генераций. Дефолт 2.
-	Workers int `yaml:"workers"`
+	Workers dynamic.Int64 `yaml:"workers"`
 	// QueueSize — ёмкость очереди задач; переполнение → 503. Дефолт 64.
-	QueueSize int `yaml:"queue-size"`
+	QueueSize dynamic.Int64 `yaml:"queue-size"`
 	// WaitTimeout — таймаут режима wait=true (duration). Дефолт "300s".
-	WaitTimeout string `yaml:"wait-timeout"`
+	WaitTimeout dynamic.String `yaml:"wait-timeout"`
 }
 
 // HTTPYAML — YAML-представление httpapi.Config.
 type HTTPYAML struct {
 	// AllowedOrigins — CORS allowlist.
-	AllowedOrigins []string `yaml:"allowed-origins"`
+	AllowedOrigins []dynamic.String `yaml:"allowed-origins"`
 	// AllowCredentials — разрешить credentials.
-	AllowCredentials bool `yaml:"allow-credentials"`
+	AllowCredentials dynamic.Bool `yaml:"allow-credentials"`
 	// CacheControl — Cache-Control для canonical assets.
-	CacheControl string `yaml:"cache-control"`
+	CacheControl dynamic.String `yaml:"cache-control"`
 	// NotFoundCacheControl — Cache-Control для fallback.
-	NotFoundCacheControl string `yaml:"not-found-cache-control"`
+	NotFoundCacheControl dynamic.String `yaml:"not-found-cache-control"`
 	// ReferrerPolicy — Referrer-Policy.
-	ReferrerPolicy string `yaml:"referrer-policy"`
+	ReferrerPolicy dynamic.String `yaml:"referrer-policy"`
 	// CSP — Content-Security-Policy.
-	CSP string `yaml:"csp"`
+	CSP dynamic.String `yaml:"csp"`
 	// MaxURLLen — максимальная длина URL.
-	MaxURLLen int `yaml:"max-url-len"`
+	MaxURLLen dynamic.Int64 `yaml:"max-url-len"`
 	// GenerateTimeout — таймаут генерации ассета (duration, например "30s").
-	GenerateTimeout string `yaml:"generate-timeout"`
+	GenerateTimeout dynamic.String `yaml:"generate-timeout"`
 	// NotFound — not-found fallback.
 	NotFound NotFoundYAML `yaml:"not-found"`
 	// SourceFallback — fallback на исходный файл при ошибке ассета.
 	SourceFallback SourceFallbackYAML `yaml:"source-fallback"`
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
 	// HTTP-запросов (0 = без ограничения).
-	MaxConcurrentRequests int `yaml:"max-concurrent-requests"`
+	MaxConcurrentRequests dynamic.Int64 `yaml:"max-concurrent-requests"`
 }
 
 // SourceFallbackYAML — YAML-представление SourceFallbackConfig.
 type SourceFallbackYAML struct {
 	// Enabled — включать ли source fallback. Дефолт false.
-	Enabled bool `yaml:"enabled"`
+	Enabled dynamic.Bool `yaml:"enabled"`
 	// Status — HTTP-статус ответа: 200 или 404 (0 → 404).
-	Status int `yaml:"status"`
+	Status dynamic.Int64 `yaml:"status"`
 	// CacheControl — Cache-Control для fallback-ответа. Дефолт "no-store".
-	CacheControl string `yaml:"cache-control"`
+	CacheControl dynamic.String `yaml:"cache-control"`
 }
 
 // NotFoundYAML — YAML-представление NotFoundConfig.
 type NotFoundYAML struct {
-	Pixel    bool   `yaml:"pixel"`
-	Image    string `yaml:"image"`
-	Page     string `yaml:"page"`
-	Redirect string `yaml:"redirect"`
+	Pixel    dynamic.Bool   `yaml:"pixel"`
+	Image    dynamic.String `yaml:"image"`
+	Page     dynamic.String `yaml:"page"`
+	Redirect dynamic.String `yaml:"redirect"`
 }
 
 // ParseRuntimeConfig десериализует merged YAML-данные в единый typed
@@ -515,11 +516,11 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	cfg := &config.Config{Version: raw.Version, Watermarks: raw.Watermarks}
 	// Fail-fast: файлы ватермарок должны существовать на старте.
 	for i, w := range raw.Watermarks {
-		if w.Path == "" {
+		if w.Path.Unwrap() == "" {
 			continue // пустой path отклонится в config.Validate
 		}
-		if _, err := os.Stat(w.Path); err != nil {
-			return nil, fmt.Errorf("httpapi: watermarks[%d] (%s): %w", i, w.Name, err)
+		if _, err := os.Stat(w.Path.Unwrap()); err != nil {
+			return nil, fmt.Errorf("httpapi: watermarks[%d] (%s): %w", i, w.Name.Unwrap(), err)
 		}
 	}
 	if raw.Policy != nil {
@@ -546,66 +547,70 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	}
 
 	// HTTP-адаптер.
+	allowedOrigins := make([]string, 0, len(raw.HTTP.AllowedOrigins))
+	for _, o := range raw.HTTP.AllowedOrigins {
+		allowedOrigins = append(allowedOrigins, o.Unwrap())
+	}
 	httpCfg := Config{
-		AllowedOrigins:        raw.HTTP.AllowedOrigins,
-		AllowCredentials:      raw.HTTP.AllowCredentials,
-		CacheControl:          raw.HTTP.CacheControl,
-		NotFoundCacheControl:  raw.HTTP.NotFoundCacheControl,
-		ReferrerPolicy:        raw.HTTP.ReferrerPolicy,
-		CSP:                   raw.HTTP.CSP,
-		MaxURLLen:             raw.HTTP.MaxURLLen,
-		MaxConcurrentRequests: raw.HTTP.MaxConcurrentRequests,
+		AllowedOrigins:        allowedOrigins,
+		AllowCredentials:      raw.HTTP.AllowCredentials.Unwrap(),
+		CacheControl:          raw.HTTP.CacheControl.Unwrap(),
+		NotFoundCacheControl:  raw.HTTP.NotFoundCacheControl.Unwrap(),
+		ReferrerPolicy:        raw.HTTP.ReferrerPolicy.Unwrap(),
+		CSP:                   raw.HTTP.CSP.Unwrap(),
+		MaxURLLen:             int(raw.HTTP.MaxURLLen.Unwrap()),
+		MaxConcurrentRequests: int(raw.HTTP.MaxConcurrentRequests.Unwrap()),
 		NotFound: NotFoundConfig{
-			Pixel:    raw.HTTP.NotFound.Pixel,
-			Image:    raw.HTTP.NotFound.Image,
-			Page:     raw.HTTP.NotFound.Page,
-			Redirect: raw.HTTP.NotFound.Redirect,
+			Pixel:    raw.HTTP.NotFound.Pixel.Unwrap(),
+			Image:    raw.HTTP.NotFound.Image.Unwrap(),
+			Page:     raw.HTTP.NotFound.Page.Unwrap(),
+			Redirect: raw.HTTP.NotFound.Redirect.Unwrap(),
 		},
 		SourceFallback: SourceFallbackConfig{
-			Enabled:      raw.HTTP.SourceFallback.Enabled,
-			Status:       raw.HTTP.SourceFallback.Status,
-			CacheControl: raw.HTTP.SourceFallback.CacheControl,
+			Enabled:      raw.HTTP.SourceFallback.Enabled.Unwrap(),
+			Status:       int(raw.HTTP.SourceFallback.Status.Unwrap()),
+			CacheControl: raw.HTTP.SourceFallback.CacheControl.Unwrap(),
 		},
 		Admin: AdminConfig{
-			Enabled:   raw.Admin.Enabled,
-			Token:     raw.Admin.Token,
-			Workers:   raw.Admin.Workers,
-			QueueSize: raw.Admin.QueueSize,
+			Enabled:   raw.Admin.Enabled.Unwrap(),
+			Token:     raw.Admin.Token.Unwrap(),
+			Workers:   int(raw.Admin.Workers.Unwrap()),
+			QueueSize: int(raw.Admin.QueueSize.Unwrap()),
 		},
 	}
 	// Admin wait-timeout (duration).
-	if raw.Admin.WaitTimeout != "" {
-		d, err := time.ParseDuration(raw.Admin.WaitTimeout)
+	if raw.Admin.WaitTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.Admin.WaitTimeout.Unwrap())
 		if err != nil {
 			return nil, fmt.Errorf("httpapi: admin.wait-timeout: %w", err)
 		}
 		if d < 0 {
-			return nil, fmt.Errorf("httpapi: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout)
+			return nil, fmt.Errorf("httpapi: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout.Unwrap())
 		}
 		httpCfg.Admin.WaitTimeout = d
 	}
 	// Asset errors observability (fail-fast на неверных значениях).
 	assetErrorsEnabled := true
-	if raw.Observability.AssetErrors.Enabled != nil {
-		assetErrorsEnabled = *raw.Observability.AssetErrors.Enabled
+	if raw.Observability.AssetErrors.Enabled.Set {
+		assetErrorsEnabled = raw.Observability.AssetErrors.Enabled.Value.Unwrap()
 	}
 	httpCfg.AssetErrors = AssetErrorConfig{
 		Enabled:  assetErrorsEnabled,
-		LogLevel: raw.Observability.AssetErrors.LogLevel,
+		LogLevel: raw.Observability.AssetErrors.LogLevel.Unwrap(),
 		TopPaths: TopPathsConfig{
-			Enabled:    raw.Observability.AssetErrors.TopPaths.Enabled,
-			MaxEntries: raw.Observability.AssetErrors.TopPaths.MaxEntries,
-			ReportTop:  raw.Observability.AssetErrors.TopPaths.ReportTop,
-			KeyMode:    raw.Observability.AssetErrors.TopPaths.KeyMode,
+			Enabled:    raw.Observability.AssetErrors.TopPaths.Enabled.Unwrap(),
+			MaxEntries: int(raw.Observability.AssetErrors.TopPaths.MaxEntries.Unwrap()),
+			ReportTop:  int(raw.Observability.AssetErrors.TopPaths.ReportTop.Unwrap()),
+			KeyMode:    raw.Observability.AssetErrors.TopPaths.KeyMode.Unwrap(),
 		},
 	}
-	if raw.HTTP.GenerateTimeout != "" {
-		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout)
+	if raw.HTTP.GenerateTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout.Unwrap())
 		if err != nil {
 			return nil, fmt.Errorf("httpapi: http.generate-timeout: %w", err)
 		}
 		if d < 0 {
-			return nil, fmt.Errorf("httpapi: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout)
+			return nil, fmt.Errorf("httpapi: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout.Unwrap())
 		}
 		httpCfg.GenerateTimeout = d
 	}
@@ -631,11 +636,11 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	}
 
 	// FS-каталоги.
-	sourceDir := raw.Source.Path
+	sourceDir := raw.Source.Path.Unwrap()
 	if sourceDir == "" {
 		sourceDir = "./data/source"
 	}
-	resultDir := raw.Result.Path
+	resultDir := raw.Result.Path.Unwrap()
 	if resultDir == "" {
 		resultDir = "./data/result"
 	}
@@ -671,18 +676,18 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	}
 
 	// Прикладные лимиты.
-	if raw.Application.OutputLimit < 0 {
-		return nil, fmt.Errorf("httpapi: application.output-limit: negative value %d", raw.Application.OutputLimit)
+	if raw.Application.OutputLimit.Unwrap() < 0 {
+		return nil, fmt.Errorf("httpapi: application.output-limit: negative value %d", raw.Application.OutputLimit.Unwrap())
 	}
-	if raw.Application.BufferMaxBytes < 0 {
-		return nil, fmt.Errorf("httpapi: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes)
+	if raw.Application.BufferMaxBytes.Unwrap() < 0 {
+		return nil, fmt.Errorf("httpapi: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes.Unwrap())
 	}
-	bufferMaxBytes := raw.Application.BufferMaxBytes
+	bufferMaxBytes := raw.Application.BufferMaxBytes.Unwrap()
 	if bufferMaxBytes == 0 {
 		bufferMaxBytes = DefaultBufferMaxBytes
 	}
 
-	logLevel := raw.Observability.LogLevel
+	logLevel := raw.Observability.LogLevel.Unwrap()
 	if logLevel == "" {
 		logLevel = "info"
 	}
@@ -693,10 +698,10 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	// дефолт `<эффективный локальный result-каталог>/.meta` (обратно
 	// совместимо) — применяется на уровне DI (app.go).
 	metadataEnabled := true
-	if raw.Metadata.Enabled != nil {
-		metadataEnabled = *raw.Metadata.Enabled
+	if raw.Metadata.Enabled.Set {
+		metadataEnabled = raw.Metadata.Enabled.Value.Unwrap()
 	}
-	metadataDir := raw.Metadata.Dir
+	metadataDir := raw.Metadata.Dir.Unwrap()
 
 	return &RuntimeConfig{
 		Pipeline:        cfg,
@@ -712,7 +717,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		Detection:       det,
 		MetadataEnabled: metadataEnabled,
 		MetadataDir:     metadataDir,
-		OutputLimit:     raw.Application.OutputLimit,
+		OutputLimit:     raw.Application.OutputLimit.Unwrap(),
 		BufferMaxBytes:  bufferMaxBytes,
 		LogLevel:        logLevel,
 	}, nil
@@ -720,105 +725,105 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 
 // toRemoteStorageConfig конвертирует YAML-конфигурацию в RemoteStorageConfig.
 func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
-	if s.SpoolMaxBytes < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("spool-max-bytes: negative value %d", s.SpoolMaxBytes)
+	if s.SpoolMaxBytes.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("spool-max-bytes: negative value %d", s.SpoolMaxBytes.Unwrap())
 	}
 	// Секреты S3 могут задаваться через переменные окружения
 	// (IMAGER_S3_ACCESS_KEY / IMAGER_S3_SECRET_KEY), чтобы не хранить их
 	// открытым текстом в конфиге. Значение из YAML имеет приоритет.
-	accessKey := s.AccessKey
+	accessKey := s.AccessKey.Unwrap()
 	if accessKey == "" {
 		accessKey = os.Getenv("IMAGER_S3_ACCESS_KEY")
 	}
-	secretKey := s.SecretKey
+	secretKey := s.SecretKey.Unwrap()
 	if secretKey == "" {
 		secretKey = os.Getenv("IMAGER_S3_SECRET_KEY")
 	}
 	cfg := RemoteStorageConfig{
-		Kind:               StorageKind(s.Storage),
-		Path:               s.Path,
-		BaseURL:            s.BaseURL,
-		Bucket:             s.Bucket,
-		Prefix:             s.Prefix,
-		Endpoint:           s.Endpoint,
-		Region:             s.Region,
+		Kind:               StorageKind(s.Storage.Unwrap()),
+		Path:               s.Path.Unwrap(),
+		BaseURL:            s.BaseURL.Unwrap(),
+		Bucket:             s.Bucket.Unwrap(),
+		Prefix:             s.Prefix.Unwrap(),
+		Endpoint:           s.Endpoint.Unwrap(),
+		Region:             s.Region.Unwrap(),
 		AccessKey:          accessKey,
 		SecretKey:          secretKey,
-		Addr:               s.Addr,
-		User:               s.User,
-		Password:           s.Password,
-		Root:               s.Root,
-		TLS:                s.TLS,
+		Addr:               s.Addr.Unwrap(),
+		User:               s.User.Unwrap(),
+		Password:           s.Password.Unwrap(),
+		Root:               s.Root.Unwrap(),
+		TLS:                s.TLS.Unwrap(),
 		TLSVerify:          true,
-		HostKeyFingerprint: s.HostKeyFingerprint,
-		SpoolDir:           s.SpoolDir,
-		SpoolMaxBytes:      s.SpoolMaxBytes,
+		HostKeyFingerprint: s.HostKeyFingerprint.Unwrap(),
+		SpoolDir:           s.SpoolDir.Unwrap(),
+		SpoolMaxBytes:      s.SpoolMaxBytes.Unwrap(),
 		DialTimeout:        30 * time.Second,
 	}
-	if s.TLSVerify != nil {
-		cfg.TLSVerify = *s.TLSVerify
+	if s.TLSVerify.Set {
+		cfg.TLSVerify = s.TLSVerify.Value.Unwrap()
 	}
-	if s.DialTimeout != "" {
-		d, err := time.ParseDuration(s.DialTimeout)
+	if s.DialTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.DialTimeout.Unwrap())
 		if err != nil {
 			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: negative duration %q", s.DialTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: negative duration %q", s.DialTimeout.Unwrap())
 		}
 		cfg.DialTimeout = d
 	}
 	// Общие настройки HTTP-подобных хранилищ (S3, HTTP): таймауты, retry,
 	// пул соединений, кэш метаданных. Для SFTP/FTP/FTPS применяется только
 	// dial-timeout (см. выше).
-	if s.ReadTimeout != "" {
-		d, err := time.ParseDuration(s.ReadTimeout)
+	if s.ReadTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.ReadTimeout.Unwrap())
 		if err != nil {
 			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: negative duration %q", s.ReadTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: negative duration %q", s.ReadTimeout.Unwrap())
 		}
 		cfg.ReadTimeout = d
 	}
-	if s.IdleConnTimeout != "" {
-		d, err := time.ParseDuration(s.IdleConnTimeout)
+	if s.IdleConnTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.IdleConnTimeout.Unwrap())
 		if err != nil {
 			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: negative duration %q", s.IdleConnTimeout)
+			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: negative duration %q", s.IdleConnTimeout.Unwrap())
 		}
 		cfg.IdleConnTimeout = d
 	}
-	if s.MetadataTTL != "" {
-		d, err := time.ParseDuration(s.MetadataTTL)
+	if s.MetadataTTL.Unwrap() != "" {
+		d, err := time.ParseDuration(s.MetadataTTL.Unwrap())
 		if err != nil {
 			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: %w", err)
 		}
 		if d < 0 {
-			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: negative duration %q", s.MetadataTTL)
+			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: negative duration %q", s.MetadataTTL.Unwrap())
 		}
 		cfg.MetadataTTL = d
 	}
-	if s.MaxAttempts < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("max-attempts: negative value %d", s.MaxAttempts)
+	if s.MaxAttempts.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-attempts: negative value %d", s.MaxAttempts.Unwrap())
 	}
-	cfg.MaxAttempts = s.MaxAttempts
-	if s.MaxIdleConns < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns)
+	cfg.MaxAttempts = int(s.MaxAttempts.Unwrap())
+	if s.MaxIdleConns.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns.Unwrap())
 	}
-	cfg.MaxIdleConns = s.MaxIdleConns
-	if s.MaxConns < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("max-conns: negative value %d", s.MaxConns)
+	cfg.MaxIdleConns = int(s.MaxIdleConns.Unwrap())
+	if s.MaxConns.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-conns: negative value %d", s.MaxConns.Unwrap())
 	}
-	cfg.MaxConns = s.MaxConns
-	if s.MaxIdleConnsPerHost < 0 {
-		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost)
+	cfg.MaxConns = int(s.MaxConns.Unwrap())
+	if s.MaxIdleConnsPerHost.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost.Unwrap())
 	}
-	cfg.MaxIdleConnsPerHost = s.MaxIdleConnsPerHost
-	if s.PrivateKeyFile != "" {
-		data, err := os.ReadFile(s.PrivateKeyFile)
+	cfg.MaxIdleConnsPerHost = int(s.MaxIdleConnsPerHost.Unwrap())
+	if s.PrivateKeyFile.Unwrap() != "" {
+		data, err := os.ReadFile(s.PrivateKeyFile.Unwrap())
 		if err != nil {
 			return RemoteStorageConfig{}, fmt.Errorf("private-key-file: %w", err)
 		}
@@ -831,8 +836,8 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 // Пустые таймауты оставляются нулевыми — runtime применит умолчания.
 func (s ServerYAML) build() (ServerConfig, error) {
 	cfg := ServerConfig{
-		Addr:           s.Addr,
-		MaxHeaderBytes: s.MaxHeaderBytes,
+		Addr:           s.Addr.Unwrap(),
+		MaxHeaderBytes: int(s.MaxHeaderBytes.Unwrap()),
 	}
 	parse := func(name, val string) error {
 		if val == "" {
@@ -860,11 +865,11 @@ func (s ServerYAML) build() (ServerConfig, error) {
 		return nil
 	}
 	for _, p := range []struct{ name, val string }{
-		{"read-header-timeout", s.ReadHeaderTimeout},
-		{"read-timeout", s.ReadTimeout},
-		{"write-timeout", s.WriteTimeout},
-		{"idle-timeout", s.IdleTimeout},
-		{"shutdown-timeout", s.ShutdownTimeout},
+		{"read-header-timeout", s.ReadHeaderTimeout.Unwrap()},
+		{"read-timeout", s.ReadTimeout.Unwrap()},
+		{"write-timeout", s.WriteTimeout.Unwrap()},
+		{"idle-timeout", s.IdleTimeout.Unwrap()},
+		{"shutdown-timeout", s.ShutdownTimeout.Unwrap()},
 	} {
 		if err := parse(p.name, p.val); err != nil {
 			return ServerConfig{}, err
@@ -875,51 +880,59 @@ func (s ServerYAML) build() (ServerConfig, error) {
 
 // build конвертирует YAML-конфигурацию ImageMagick в ImageMagickConfig.
 func (i ImageMagickYAML) build() (ImageMagickConfig, error) {
+	disabledCoders := make([]string, 0, len(i.Policy.DisabledCoders))
+	for _, c := range i.Policy.DisabledCoders {
+		disabledCoders = append(disabledCoders, c.Unwrap())
+	}
+	disabledDelegates := make([]string, 0, len(i.Policy.DisabledDelegates))
+	for _, d := range i.Policy.DisabledDelegates {
+		disabledDelegates = append(disabledDelegates, d.Unwrap())
+	}
 	cfg := ImageMagickConfig{
-		Binary: i.Binary,
+		Binary: i.Binary.Unwrap(),
 		Limits: imagemagick.Limits{
-			MemoryBytes:         i.Limits.MemoryBytes,
-			MapBytes:            i.Limits.MapBytes,
-			DiskBytes:           i.Limits.DiskBytes,
-			Threads:             i.Limits.Threads,
-			TimeSeconds:         i.Limits.TimeSeconds,
-			Width:               i.Limits.Width,
-			Height:              i.Limits.Height,
-			Pixels:              i.Limits.Pixels,
-			Frames:              i.Limits.Frames,
-			OutputBytes:         i.Limits.OutputBytes,
-			Concurrency:         i.Limits.Concurrency,
-			WebPMethod:          i.Limits.WebPMethod,
-			PNGCompressionLevel: i.Limits.PNGCompressionLevel,
+			MemoryBytes:         i.Limits.MemoryBytes.Unwrap(),
+			MapBytes:            i.Limits.MapBytes.Unwrap(),
+			DiskBytes:           i.Limits.DiskBytes.Unwrap(),
+			Threads:             int(i.Limits.Threads.Unwrap()),
+			TimeSeconds:         int(i.Limits.TimeSeconds.Unwrap()),
+			Width:               i.Limits.Width.Unwrap(),
+			Height:              i.Limits.Height.Unwrap(),
+			Pixels:              i.Limits.Pixels.Unwrap(),
+			Frames:              int(i.Limits.Frames.Unwrap()),
+			OutputBytes:         i.Limits.OutputBytes.Unwrap(),
+			Concurrency:         int(i.Limits.Concurrency.Unwrap()),
+			WebPMethod:          int(i.Limits.WebPMethod.Unwrap()),
+			PNGCompressionLevel: int(i.Limits.PNGCompressionLevel.Unwrap()),
 		},
 		Policy: imagemagick.PolicyConfig{
 			Enabled:           true,
 			DisableNetwork:    true,
-			Dir:               i.Policy.Dir,
-			MaxMemoryBytes:    i.Policy.MaxMemoryBytes,
-			MaxMapBytes:       i.Policy.MaxMapBytes,
-			MaxDiskBytes:      i.Policy.MaxDiskBytes,
-			MaxThreads:        i.Policy.MaxThreads,
-			MaxTimeSeconds:    i.Policy.MaxTimeSeconds,
-			MaxWidth:          i.Policy.MaxWidth,
-			MaxHeight:         i.Policy.MaxHeight,
-			MaxPixels:         i.Policy.MaxPixels,
-			MaxFrames:         i.Policy.MaxFrames,
-			DisabledCoders:    i.Policy.DisabledCoders,
-			DisabledDelegates: i.Policy.DisabledDelegates,
+			Dir:               i.Policy.Dir.Unwrap(),
+			MaxMemoryBytes:    i.Policy.MaxMemoryBytes.Unwrap(),
+			MaxMapBytes:       i.Policy.MaxMapBytes.Unwrap(),
+			MaxDiskBytes:      i.Policy.MaxDiskBytes.Unwrap(),
+			MaxThreads:        int(i.Policy.MaxThreads.Unwrap()),
+			MaxTimeSeconds:    int(i.Policy.MaxTimeSeconds.Unwrap()),
+			MaxWidth:          i.Policy.MaxWidth.Unwrap(),
+			MaxHeight:         i.Policy.MaxHeight.Unwrap(),
+			MaxPixels:         i.Policy.MaxPixels.Unwrap(),
+			MaxFrames:         int(i.Policy.MaxFrames.Unwrap()),
+			DisabledCoders:    disabledCoders,
+			DisabledDelegates: disabledDelegates,
 		},
 	}
 	if cfg.Binary == "" {
 		cfg.Binary = "magick"
 	}
-	if i.Policy.Enabled != nil {
-		cfg.Policy.Enabled = *i.Policy.Enabled
+	if i.Policy.Enabled.Set {
+		cfg.Policy.Enabled = i.Policy.Enabled.Value.Unwrap()
 	}
-	if i.Policy.DisableNetwork != nil {
-		cfg.Policy.DisableNetwork = *i.Policy.DisableNetwork
+	if i.Policy.DisableNetwork.Set {
+		cfg.Policy.DisableNetwork = i.Policy.DisableNetwork.Value.Unwrap()
 	}
-	if i.Limits.Timeout != "" {
-		d, err := time.ParseDuration(i.Limits.Timeout)
+	if i.Limits.Timeout.Unwrap() != "" {
+		d, err := time.ParseDuration(i.Limits.Timeout.Unwrap())
 		if err != nil {
 			return ImageMagickConfig{}, fmt.Errorf("limits.timeout: %w", err)
 		}
@@ -932,21 +945,21 @@ func (i ImageMagickYAML) build() (ImageMagickConfig, error) {
 func (l LibvipsYAML) build() (LibvipsConfig, error) {
 	cfg := LibvipsConfig{
 		Limits: libvips.Limits{
-			OutputBytes:   l.Limits.OutputBytes,
-			Concurrency:   l.Limits.Concurrency,
-			Threads:       l.Limits.Threads,
-			MaxCacheMem:   l.Limits.MaxCacheMem,
-			MaxCacheFiles: l.Limits.MaxCacheFiles,
-			MaxCacheSize:  l.Limits.MaxCacheSize,
+			OutputBytes:   l.Limits.OutputBytes.Unwrap(),
+			Concurrency:   int(l.Limits.Concurrency.Unwrap()),
+			Threads:       int(l.Limits.Threads.Unwrap()),
+			MaxCacheMem:   int(l.Limits.MaxCacheMem.Unwrap()),
+			MaxCacheFiles: int(l.Limits.MaxCacheFiles.Unwrap()),
+			MaxCacheSize:  int(l.Limits.MaxCacheSize.Unwrap()),
 		},
 	}
-	if l.Limits.Timeout != "" {
-		d, err := time.ParseDuration(l.Limits.Timeout)
+	if l.Limits.Timeout.Unwrap() != "" {
+		d, err := time.ParseDuration(l.Limits.Timeout.Unwrap())
 		if err != nil {
 			return LibvipsConfig{}, fmt.Errorf("limits.timeout: %w", err)
 		}
 		if d < 0 {
-			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout)
+			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout.Unwrap())
 		}
 		cfg.Limits.Timeout = d
 	}
@@ -959,21 +972,22 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 // просто отключён).
 func (d DetectionYAML) build() (DetectionConfig, error) {
 	cfg := DetectionConfig{
-		FaceModel:           d.FaceModel,
-		ObjectModel:         d.ObjectModel,
+		FaceModel:           d.FaceModel.Unwrap(),
+		ObjectModel:         d.ObjectModel.Unwrap(),
 		ConfidenceThreshold: 0.5,
 		MaxObjects:          5,
 		Margin:              0.1,
 	}
-	// nil = ключ не задан → дефолт. Явное значение (включая 0) валидируется.
-	if d.ConfidenceThreshold != nil {
-		cfg.ConfidenceThreshold = *d.ConfidenceThreshold
+	// Set = false (ключ не задан) → дефолт. Явное значение (включая 0)
+	// валидируется.
+	if d.ConfidenceThreshold.Set {
+		cfg.ConfidenceThreshold = d.ConfidenceThreshold.Value.Unwrap()
 	}
-	if d.MaxObjects != nil {
-		cfg.MaxObjects = *d.MaxObjects
+	if d.MaxObjects.Set {
+		cfg.MaxObjects = int(d.MaxObjects.Value.Unwrap())
 	}
-	if d.Margin != nil {
-		cfg.Margin = *d.Margin
+	if d.Margin.Set {
+		cfg.Margin = d.Margin.Value.Unwrap()
 	}
 	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
 		return DetectionConfig{}, fmt.Errorf("confidence-threshold: must be in [0,1], got %v", cfg.ConfidenceThreshold)

@@ -9,6 +9,7 @@ require (
 	github.com/aws/smithy-go v1.27.8
 	github.com/davidbyttow/govips/v2 v2.18.0
 	github.com/jlaffaye/ftp v0.2.2
+	github.com/pkg-ru/dynamic v1.0.0
 	github.com/pkg/sftp v1.13.11
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0

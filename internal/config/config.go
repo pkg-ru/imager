@@ -11,11 +11,19 @@
 // в decode.go, а domain-пакеты (asset, policy, processing) не импортируют
 // этот пакет. Здесь только собираются доменные объекты из валидированного
 // DTO.
+//
+// Поля DTO используют «снисходительные» обёртки пакета
+// github.com/pkg-ru/dynamic: они принимают широкий спектр представлений
+// (число или числовая строка, bool или "yes"/"no", duration-строка и т.п.)
+// и нормализуют их в единое нативное значение. Доступ к нативному значению
+// выполняется через Unwrap(), для nullable-полей — через Nullable.Value /
+// Nullable.Set.
 package config
 
 import (
 	"fmt"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/policy"
 	"github.com/pkg-ru/imager/internal/domain/processing"
@@ -24,7 +32,7 @@ import (
 // Config — typed DTO конфигурации конвейера ассетов.
 type Config struct {
 	// Version — версия конфигурации (должна быть "1").
-	Version string `yaml:"version"`
+	Version dynamic.String `yaml:"version"`
 	// Watermarks — именованные декларации ватермарок. На них ссылаются
 	// пресеты и path-policies по имени (watermark: <name>).
 	Watermarks []WatermarkConfig `yaml:"watermarks"`
@@ -38,52 +46,52 @@ type Config struct {
 type WatermarkConfig struct {
 	// Name — уникальное имя ватермарки (по нему ссылаются пресеты и
 	// path-policies).
-	Name string `yaml:"name"`
+	Name dynamic.String `yaml:"name"`
 	// Path — путь к файлу изображения ватермарки на диске.
-	Path string `yaml:"path"`
+	Path dynamic.String `yaml:"path"`
 	// Position — позиция размещения:
 	// top | bottom | left | right | center (CSS-подобно). Пусто = center.
-	Position string `yaml:"position"`
+	Position dynamic.String `yaml:"position"`
 	// Repeat — режим заполнения копиями: no-repeat | repeat | repeat-x |
 	// repeat-y | round | space (CSS-подобно). Пусто = no-repeat.
-	Repeat string `yaml:"repeat"`
+	Repeat dynamic.String `yaml:"repeat"`
 	// Size — размер копии: contain | cover | "{width}px {height}px"
 	// (CSS background-size). Пусто = contain.
-	Size string `yaml:"size"`
+	Size dynamic.String `yaml:"size"`
 }
 
 // ProcessingConfig — конфигурация обработки.
 type ProcessingConfig struct {
 	// DefaultQuality — качество сжатия по умолчанию (0-100).
-	DefaultQuality int `yaml:"default-quality"`
+	DefaultQuality dynamic.Int64 `yaml:"default-quality"`
 	// DefaultLoop — зацикливание анимации по умолчанию (nil = true).
-	DefaultLoop *bool `yaml:"default-loop"`
+	DefaultLoop dynamic.Nullable[dynamic.Bool] `yaml:"default-loop"`
 	// DefaultWatermark — имя ватермарки по умолчанию (пусто = не
 	// применяется). Используется, если ватермарка не задана ни в пресете,
 	// ни в path-policy. Неизвестное имя — ошибка старта.
-	DefaultWatermark string `yaml:"default-watermark"`
+	DefaultWatermark dynamic.String `yaml:"default-watermark"`
 	// DefaultAutoOrient — EXIF auto-orient по умолчанию (nil = true).
 	// Применяется, если в пресете auto-orient не задан явно.
-	DefaultAutoOrient *bool `yaml:"default-auto-orient"`
+	DefaultAutoOrient dynamic.Nullable[dynamic.Bool] `yaml:"default-auto-orient"`
 	// DefaultRotate — фиксированный поворот по умолчанию: ""/"none"/"90"/
 	// "180"/"270" ("" = без поворота). Применяется, если в пресете rotate
 	// не задан явно.
-	DefaultRotate string `yaml:"default-rotate"`
+	DefaultRotate dynamic.String `yaml:"default-rotate"`
 	// DefaultFlip — отражение по умолчанию: ""/"none"/"horizontal"/
 	// "vertical" ("" = без отражения). horizontal = зеркало слева-направо,
 	// vertical = сверху-вниз. Применяется, если в пресете flip не задан
 	// явно.
-	DefaultFlip string `yaml:"default-flip"`
+	DefaultFlip dynamic.String `yaml:"default-flip"`
 	// DefaultTrimMode — режим определения цвета однотонного поля для
 	// независимого фильтра trim: "auto" (авто, по краевому пикселю) или
 	// "color" (фиксированный цвет DefaultTrimColor). Дефолт: "auto".
-	DefaultTrimMode string `yaml:"default-trim-mode"`
+	DefaultTrimMode dynamic.String `yaml:"default-trim-mode"`
 	// DefaultTrimColor — фиксированный цвет фона для trim в hex-форме
 	// "#RRGGBB" (только при default-trim-mode: color). Дефолт: "".
-	DefaultTrimColor string `yaml:"default-trim-color"`
+	DefaultTrimColor dynamic.String `yaml:"default-trim-color"`
 	// DefaultTrimTolerance — допуск сравнения пикселей с фоновым цветом
 	// для trim в диапазоне [0,1] (0 — точное совпадение). Дефолт: 0.
-	DefaultTrimTolerance float64 `yaml:"default-trim-tolerance"`
+	DefaultTrimTolerance dynamic.Float64 `yaml:"default-trim-tolerance"`
 }
 
 // SupportedVersion — поддерживаемая версия конфигурации.
@@ -94,16 +102,16 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if c.Version != SupportedVersion {
-		return fmt.Errorf("config: unsupported version %q, expected %q", c.Version, SupportedVersion)
+	if c.Version.Unwrap() != SupportedVersion {
+		return fmt.Errorf("config: unsupported version %q, expected %q", c.Version.Unwrap(), SupportedVersion)
 	}
-	if c.Processing.DefaultQuality < 0 || c.Processing.DefaultQuality > 100 {
-		return fmt.Errorf("config: default-quality must be in [0,100], got %d", c.Processing.DefaultQuality)
+	if q := c.Processing.DefaultQuality.Unwrap(); q < 0 || q > 100 {
+		return fmt.Errorf("config: default-quality must be in [0,100], got %d", q)
 	}
-	if _, err := processing.ParseRotation(c.Processing.DefaultRotate); err != nil {
+	if _, err := processing.ParseRotation(c.Processing.DefaultRotate.Unwrap()); err != nil {
 		return fmt.Errorf("config: processing.default-rotate: %w", err)
 	}
-	if _, err := processing.ParseFlip(c.Processing.DefaultFlip); err != nil {
+	if _, err := processing.ParseFlip(c.Processing.DefaultFlip.Unwrap()); err != nil {
 		return fmt.Errorf("config: processing.default-flip: %w", err)
 	}
 	// Глобальные настройки trim: режим (auto/color), цвет (для color) и
@@ -113,18 +121,19 @@ func (c *Config) Validate() error {
 	}
 	// Ватермарки: валидность каждой декларации, уникальность имён.
 	for i, w := range c.Watermarks {
-		if _, err := processing.NewWatermarkSpec(w.Name, w.Path,
-			processing.WatermarkPosition(w.Position),
-			processing.WatermarkRepeat(w.Repeat), w.Size); err != nil {
+		if _, err := processing.NewWatermarkSpec(w.Name.Unwrap(), w.Path.Unwrap(),
+			processing.WatermarkPosition(w.Position.Unwrap()),
+			processing.WatermarkRepeat(w.Repeat.Unwrap()), w.Size.Unwrap()); err != nil {
 			return fmt.Errorf("config: watermarks[%d]: %w", i, err)
 		}
 	}
 	seenWM := make(map[string]bool, len(c.Watermarks))
 	for _, w := range c.Watermarks {
-		if seenWM[w.Name] {
-			return fmt.Errorf("config: watermarks: duplicate name %q", w.Name)
+		name := w.Name.Unwrap()
+		if seenWM[name] {
+			return fmt.Errorf("config: watermarks: duplicate name %q", name)
 		}
-		seenWM[w.Name] = true
+		seenWM[name] = true
 	}
 	// Ссылки на ватермарки: default-watermark, пресеты, path-policies.
 	checkRef := func(name, what string) error {
@@ -136,16 +145,16 @@ func (c *Config) Validate() error {
 		}
 		return nil
 	}
-	if err := checkRef(c.Processing.DefaultWatermark, "processing.default-watermark"); err != nil {
+	if err := checkRef(c.Processing.DefaultWatermark.Unwrap(), "processing.default-watermark"); err != nil {
 		return err
 	}
 	for i, p := range c.Policy.Presets {
-		if err := checkRef(p.Watermark, fmt.Sprintf("policy.presets[%d] (%s).watermark", i, p.Name)); err != nil {
+		if err := checkRef(p.Watermark.Unwrap(), fmt.Sprintf("policy.presets[%d] (%s).watermark", i, p.Name.Unwrap())); err != nil {
 			return err
 		}
 	}
 	for i, pp := range c.Policy.PathPolicies {
-		if err := checkRef(pp.Watermark, fmt.Sprintf("policy.path-policies[%d] (%s).watermark", i, pp.Path)); err != nil {
+		if err := checkRef(pp.Watermark.Unwrap(), fmt.Sprintf("policy.path-policies[%d] (%s).watermark", i, pp.Path.Unwrap())); err != nil {
 			return err
 		}
 	}
@@ -161,9 +170,9 @@ func (c *Config) Validate() error {
 func (c *Config) watermarkRegistry() map[string]*processing.WatermarkSpec {
 	reg := make(map[string]*processing.WatermarkSpec, len(c.Watermarks))
 	for _, w := range c.Watermarks {
-		spec, err := processing.NewWatermarkSpec(w.Name, w.Path,
-			processing.WatermarkPosition(w.Position),
-			processing.WatermarkRepeat(w.Repeat), w.Size)
+		spec, err := processing.NewWatermarkSpec(w.Name.Unwrap(), w.Path.Unwrap(),
+			processing.WatermarkPosition(w.Position.Unwrap()),
+			processing.WatermarkRepeat(w.Repeat.Unwrap()), w.Size.Unwrap())
 		if err != nil {
 			// Не должно случиться после Validate.
 			continue
@@ -175,8 +184,8 @@ func (c *Config) watermarkRegistry() map[string]*processing.WatermarkSpec {
 
 // Normalize приводит DTO к канонической форме.
 func (c *Config) Normalize() {
-	if c.Version == "" {
-		c.Version = SupportedVersion
+	if c.Version.Unwrap() == "" {
+		c.Version = dynamic.String(SupportedVersion)
 	}
 }
 
@@ -187,7 +196,7 @@ type Compiled struct {
 	// Presets — набор пресетов.
 	Presets *asset.PresetSet
 	// DefaultQuality — качество по умолчанию.
-	DefaultQuality int
+	DefaultQuality int64
 	// DefaultLoop — зацикливание по умолчанию.
 	DefaultLoop *bool
 	// Watermarks — реестр скомпилированных спецификаций ватермарок по
@@ -208,14 +217,14 @@ type Compiled struct {
 // compileDefaultTrim собирает глобальные настройки trim из processing.default-*.
 // Возвращает спецификацию по умолчанию ({auto, 0}), если режим не задан.
 func (c *Config) compileDefaultTrim() *processing.TrimSpec {
-	mode := processing.TrimMode(c.Processing.DefaultTrimMode)
+	mode := processing.TrimMode(c.Processing.DefaultTrimMode.Unwrap())
 	if mode == "" {
 		mode = processing.TrimModeAuto
 	}
 	return &processing.TrimSpec{
 		Mode:      mode,
-		Color:     c.Processing.DefaultTrimColor,
-		Tolerance: c.Processing.DefaultTrimTolerance,
+		Color:     c.Processing.DefaultTrimColor.Unwrap(),
+		Tolerance: c.Processing.DefaultTrimTolerance.Unwrap(),
 	}
 }
 
@@ -228,14 +237,14 @@ func (c *Config) Compile() (*Compiled, error) {
 	// Ориентация по умолчанию вычисляется до компиляции политики: пресеты
 	// наследуют её по-полево (auto-orient/rotate/flip).
 	autoOrient := true
-	if c.Processing.DefaultAutoOrient != nil {
-		autoOrient = *c.Processing.DefaultAutoOrient
+	if c.Processing.DefaultAutoOrient.Set {
+		autoOrient = c.Processing.DefaultAutoOrient.Value.Unwrap()
 	}
-	defRot, err := processing.ParseRotation(c.Processing.DefaultRotate)
+	defRot, err := processing.ParseRotation(c.Processing.DefaultRotate.Unwrap())
 	if err != nil {
 		return nil, fmt.Errorf("config: compile default orientation: %w", err)
 	}
-	defFlip, err := processing.ParseFlip(c.Processing.DefaultFlip)
+	defFlip, err := processing.ParseFlip(c.Processing.DefaultFlip.Unwrap())
 	if err != nil {
 		return nil, fmt.Errorf("config: compile default orientation: %w", err)
 	}
@@ -248,14 +257,19 @@ func (c *Config) Compile() (*Compiled, error) {
 		return nil, fmt.Errorf("config: compile policy: %w", err)
 	}
 	var defWM *processing.WatermarkSpec
-	if c.Processing.DefaultWatermark != "" {
-		defWM = reg[c.Processing.DefaultWatermark]
+	if wm := c.Processing.DefaultWatermark.Unwrap(); wm != "" {
+		defWM = reg[wm]
+	}
+	var defLoop *bool
+	if c.Processing.DefaultLoop.Set {
+		loop := c.Processing.DefaultLoop.Value.Unwrap()
+		defLoop = &loop
 	}
 	return &Compiled{
 		Policy:             compiled.Policy,
 		Presets:            compiled.Presets,
-		DefaultQuality:     c.Processing.DefaultQuality,
-		DefaultLoop:        c.Processing.DefaultLoop,
+		DefaultQuality:     c.Processing.DefaultQuality.Unwrap(),
+		DefaultLoop:        defLoop,
 		Watermarks:         reg,
 		DefaultWatermark:   defWM,
 		DefaultOrientation: defOr,

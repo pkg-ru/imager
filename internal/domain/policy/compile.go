@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/processing"
 )
@@ -18,10 +19,10 @@ type Config struct {
 
 // GlobalConfig — глобальная конфигурация политики.
 type GlobalConfig struct {
-	Authorization  string   `yaml:"authorization"`
-	SizeRules      []string `yaml:"size-rules"`
-	AllowedPresets []string `yaml:"allowed-presets"`
-	Limits         Limits   `yaml:"limits"`
+	Authorization  dynamic.String   `yaml:"authorization"`
+	SizeRules      []dynamic.String `yaml:"size-rules"`
+	AllowedPresets []dynamic.String `yaml:"allowed-presets"`
+	Limits         Limits           `yaml:"limits"`
 }
 
 // PathPolicyConfig — конфигурация path-policy (политики пути).
@@ -32,10 +33,10 @@ type GlobalConfig struct {
 // Path-policy применяется только к каноническим URL (не preset) и является
 // дополнительным ограничением поверх глобальной политики.
 type PathPolicyConfig struct {
-	Path string `yaml:"path"`
+	Path dynamic.String `yaml:"path"`
 	// DPR — строка-диапазон допустимого DPR (nil/пусто = без ограничения).
 	// Например "0-1" (только dpr=1) или "2-3" (dpr 2 или 3).
-	DPR string `yaml:"dpr"`
+	DPR dynamic.String `yaml:"dpr"`
 	// Crop — правило допустимых crop-режимов (nil = не задано/неважно).
 	// ТОЛЬКО строковые формы (см. CropRuleConfig): имя режима
 	// ("center"/"smart"/"face"/"object"), "none" (запрет любого кропа) или
@@ -43,11 +44,11 @@ type PathPolicyConfig struct {
 	Crop *CropRuleConfig `yaml:"crop"`
 	// Trim — требование к trim (nil = не задано/неважно). true = trim обязан
 	// присутствовать (код с trim), false = trim запрещён.
-	Trim *bool `yaml:"trim"`
+	Trim dynamic.Nullable[dynamic.Bool] `yaml:"trim"`
 	// Watermark — имя ватермарки (ссылка на элемент секции watermarks;
 	// пусто = не задана). Разрешается в спецификацию при компиляции:
 	// неизвестное имя — ошибка старта.
-	Watermark string `yaml:"watermark"`
+	Watermark dynamic.String `yaml:"watermark"`
 }
 
 // PresetConfig — конфигурация пресета.
@@ -72,39 +73,39 @@ type PathPolicyConfig struct {
 // Настройки trim (режим auto/color + tolerance) — глобальные
 // (processing.default-trim-*), не per-preset.
 type PresetConfig struct {
-	Name         string `yaml:"name"`
-	Crop         string `yaml:"crop"`
-	Trim         bool   `yaml:"trim"`
-	Size         string `yaml:"size"`
-	OutputFormat string `yaml:"output-format"`
+	Name         dynamic.String `yaml:"name"`
+	Crop         dynamic.String `yaml:"crop"`
+	Trim         dynamic.Bool   `yaml:"trim"`
+	Size         dynamic.String `yaml:"size"`
+	OutputFormat dynamic.String `yaml:"output-format"`
 	// DPR — фиксированный DPR пресета (0 = не задан). Допустимы 1, 2, 3
 	// (1 эквивалентен отсутствию).
-	DPR int `yaml:"dpr"`
+	DPR dynamic.Int64 `yaml:"dpr"`
 	// Quality — качество сжатия (0-100; 0 = default-quality из processing).
-	Quality int `yaml:"quality"`
+	Quality dynamic.Int64 `yaml:"quality"`
 	// Frames — максимальное число кадров анимации (0 = без ограничения).
-	Frames int `yaml:"frames"`
+	Frames dynamic.Int64 `yaml:"frames"`
 	// Duration — максимальная длительность анимации в мс (0 = без
 	// ограничения).
-	Duration int `yaml:"duration"`
+	Duration dynamic.Int64 `yaml:"duration"`
 	// Loop — зацикливание анимации (nil = default-loop из processing).
-	Loop *bool `yaml:"loop"`
+	Loop dynamic.Nullable[dynamic.Bool] `yaml:"loop"`
 	// Watermark — имя ватермарки (ссылка на элемент секции watermarks;
 	// пусто = не задана). Разрешается в спецификацию при компиляции:
 	// неизвестное имя — ошибка старта. Приоритет выше path-policy и
 	// processing.default-watermark.
-	Watermark string `yaml:"watermark"`
+	Watermark dynamic.String `yaml:"watermark"`
 	// AutoOrient — EXIF auto-orient пресета (nil = наследовать глобальный
 	// дефолт processing.default-auto-orient).
-	AutoOrient *bool `yaml:"auto-orient"`
+	AutoOrient dynamic.Nullable[dynamic.Bool] `yaml:"auto-orient"`
 	// Rotate — фиксированный поворот пресета: ""/"90"/"180"/"270"/"none".
 	// "" = наследовать глобальный дефолт processing.default-rotate;
 	// "none" = ЯВНО отключить поворот (перекрыть глобальный).
-	Rotate string `yaml:"rotate"`
+	Rotate dynamic.String `yaml:"rotate"`
 	// Flip — отражение пресета: ""/"horizontal"/"vertical"/"none".
 	// "" = наследовать глобальный дефолт processing.default-flip;
 	// "none" = ЯВНО отключить отражение (перекрыть глобальный).
-	Flip string `yaml:"flip"`
+	Flip dynamic.String `yaml:"flip"`
 }
 
 // CropRuleConfig — YAML-представление правила crop для path-policy.
@@ -238,14 +239,14 @@ func ValidateConfig(cfg *Config) error {
 	var errs ValidationErrors
 
 	// Global.
-	if cfg.Global.Authorization != "" && !ValidAuthorization(Authorization(cfg.Global.Authorization)) {
+	if cfg.Global.Authorization.Unwrap() != "" && !ValidAuthorization(Authorization(cfg.Global.Authorization.Unwrap())) {
 		errs = append(errs, &ValidationError{
 			Path:   "global.authorization",
-			Reason: fmt.Sprintf("invalid value %q, must be safe or unsafe", cfg.Global.Authorization),
+			Reason: fmt.Sprintf("invalid value %q, must be safe or unsafe", cfg.Global.Authorization.Unwrap()),
 		})
 	}
 	for i, rule := range cfg.Global.SizeRules {
-		if _, err := ParseSizeRule(rule); err != nil {
+		if _, err := ParseSizeRule(rule.Unwrap()); err != nil {
 			errs = append(errs, &ValidationError{
 				Path:   fmt.Sprintf("global.size-rules[%d]", i),
 				Reason: err.Error(),
@@ -260,15 +261,15 @@ func ValidateConfig(cfg *Config) error {
 	seen := map[string]bool{}
 	for i, pp := range cfg.PathPolicies {
 		base := fmt.Sprintf("path-policies[%d]", i)
-		norm := normalizePath(pp.Path)
+		norm := normalizePath(pp.Path.Unwrap())
 		if norm == "" {
 			errs = append(errs, &ValidationError{Path: base + ".path", Reason: "path is empty"})
 		} else if seen[norm] {
 			errs = append(errs, &ValidationError{Path: base + ".path", Reason: fmt.Sprintf("duplicate path %q (after normalization)", norm)})
 		}
 		seen[norm] = true
-		if pp.DPR != "" {
-			r, err := ParseDPRRange(pp.DPR)
+		if pp.DPR.Unwrap() != "" {
+			r, err := ParseDPRRange(pp.DPR.Unwrap())
 			if err != nil {
 				errs = append(errs, &ValidationError{Path: base + ".dpr", Reason: err.Error()})
 			} else if err := validateDPRRange(r); err != nil {
@@ -286,56 +287,65 @@ func ValidateConfig(cfg *Config) error {
 	presetNames := map[string]bool{}
 	for i, p := range cfg.Presets {
 		base := fmt.Sprintf("presets[%d]", i)
-		if p.Name == "" {
+		name := p.Name.Unwrap()
+		crop := p.Crop.Unwrap()
+		outputFormat := p.OutputFormat.Unwrap()
+		rotate := p.Rotate.Unwrap()
+		flip := p.Flip.Unwrap()
+		if name == "" {
 			errs = append(errs, &ValidationError{Path: base + ".name", Reason: "preset name is empty"})
-		} else if presetNames[p.Name] {
-			errs = append(errs, &ValidationError{Path: base + ".name", Reason: fmt.Sprintf("duplicate preset %q", p.Name)})
+		} else if presetNames[name] {
+			errs = append(errs, &ValidationError{Path: base + ".name", Reason: fmt.Sprintf("duplicate preset %q", name)})
 		}
-		presetNames[p.Name] = true
-		switch p.Crop {
+		presetNames[name] = true
+		switch crop {
 		case "", "center", "smart", "face", "object":
 		default:
 			errs = append(errs, &ValidationError{
 				Path:   base + ".crop",
-				Reason: fmt.Sprintf("invalid value %q, must be one of: center, smart, face, object (empty = no crop)", p.Crop),
+				Reason: fmt.Sprintf("invalid value %q, must be one of: center, smart, face, object (empty = no crop)", crop),
 			})
 		}
-		if _, err := asset.ParseSize(p.Size); err != nil {
+		if _, err := asset.ParseSize(p.Size.Unwrap()); err != nil {
 			errs = append(errs, &ValidationError{Path: base + ".size", Reason: err.Error()})
 		}
-		if p.OutputFormat == "" {
+		if outputFormat == "" {
 			errs = append(errs, &ValidationError{Path: base + ".output-format", Reason: "output format is empty"})
 		}
-		if p.DPR != 0 {
-			if p.DPR < asset.DefaultDPR || p.DPR > asset.MaxDPR {
+		dpr := p.DPR.Unwrap()
+		if dpr != 0 {
+			if dpr < int64(asset.DefaultDPR) || dpr > int64(asset.MaxDPR) {
 				errs = append(errs, &ValidationError{
 					Path:   base + ".dpr",
-					Reason: fmt.Sprintf("dpr must be in [%d,%d], got %d", asset.DefaultDPR, asset.MaxDPR, p.DPR),
+					Reason: fmt.Sprintf("dpr must be in [%d,%d], got %d", asset.DefaultDPR, asset.MaxDPR, dpr),
 				})
 			}
 		}
-		if p.Quality < 0 || p.Quality > 100 {
+		quality := p.Quality.Unwrap()
+		if quality < 0 || quality > 100 {
 			errs = append(errs, &ValidationError{
 				Path:   base + ".quality",
-				Reason: fmt.Sprintf("quality must be in [0,100], got %d", p.Quality),
+				Reason: fmt.Sprintf("quality must be in [0,100], got %d", quality),
 			})
 		}
-		if p.Frames < 0 {
+		frames := p.Frames.Unwrap()
+		if frames < 0 {
 			errs = append(errs, &ValidationError{
 				Path:   base + ".frames",
-				Reason: fmt.Sprintf("frames must be non-negative, got %d", p.Frames),
+				Reason: fmt.Sprintf("frames must be non-negative, got %d", frames),
 			})
 		}
-		if p.Duration < 0 {
+		duration := p.Duration.Unwrap()
+		if duration < 0 {
 			errs = append(errs, &ValidationError{
 				Path:   base + ".duration",
-				Reason: fmt.Sprintf("duration must be non-negative, got %d", p.Duration),
+				Reason: fmt.Sprintf("duration must be non-negative, got %d", duration),
 			})
 		}
-		if _, err := processing.ParseRotation(p.Rotate); err != nil {
+		if _, err := processing.ParseRotation(rotate); err != nil {
 			errs = append(errs, &ValidationError{Path: base + ".rotate", Reason: err.Error()})
 		}
-		if _, err := processing.ParseFlip(p.Flip); err != nil {
+		if _, err := processing.ParseFlip(flip); err != nil {
 			errs = append(errs, &ValidationError{Path: base + ".flip", Reason: err.Error()})
 		}
 	}
@@ -379,34 +389,43 @@ func Compile(cfg *Config, watermarks map[string]*processing.WatermarkSpec, defau
 		return wm, nil
 	}
 
+	allowedPresets := make([]string, 0, len(cfg.Global.AllowedPresets))
+	for _, ap := range cfg.Global.AllowedPresets {
+		allowedPresets = append(allowedPresets, ap.Unwrap())
+	}
 	policy := &Policy{
 		Global: GlobalPolicy{
-			Authorization:  Authorization(cfg.Global.Authorization),
+			Authorization:  Authorization(cfg.Global.Authorization.Unwrap()),
 			SizeRules:      make([]SizeRule, 0, len(cfg.Global.SizeRules)),
-			AllowedPresets: cfg.Global.AllowedPresets,
+			AllowedPresets: allowedPresets,
 			Limits:         cfg.Global.Limits,
 		},
 	}
 	for _, r := range cfg.Global.SizeRules {
-		rule, _ := ParseSizeRule(r)
+		rule, _ := ParseSizeRule(r.Unwrap())
 		policy.Global.SizeRules = append(policy.Global.SizeRules, rule)
 	}
 
 	for i, pp := range cfg.PathPolicies {
 		cropRule, err := compileCropRule(derefCropRuleConfig(pp.Crop))
 		if err != nil {
-			return nil, fmt.Errorf("policy: path-policies[%d] (%s): %w", i, pp.Path, err)
+			return nil, fmt.Errorf("policy: path-policies[%d] (%s): %w", i, pp.Path.Unwrap(), err)
+		}
+		var trim *bool
+		if pp.Trim.Set {
+			v := pp.Trim.Value.Unwrap()
+			trim = &v
 		}
 		compiled := PathPolicy{
-			Path: normalizePath(pp.Path),
+			Path: normalizePath(pp.Path.Unwrap()),
 			Crop: cropRule,
-			Trim: pp.Trim,
+			Trim: trim,
 		}
-		if pp.DPR != "" {
-			r, _ := ParseDPRRange(pp.DPR)
+		if pp.DPR.Unwrap() != "" {
+			r, _ := ParseDPRRange(pp.DPR.Unwrap())
 			compiled.DPR = &r
 		}
-		wm, err := resolveWM(pp.Watermark, fmt.Sprintf("path-policies[%d] (%s)", i, pp.Path))
+		wm, err := resolveWM(pp.Watermark.Unwrap(), fmt.Sprintf("path-policies[%d] (%s)", i, pp.Path.Unwrap()))
 		if err != nil {
 			return nil, err
 		}
@@ -416,22 +435,27 @@ func Compile(cfg *Config, watermarks map[string]*processing.WatermarkSpec, defau
 
 	presets := make([]*asset.Preset, 0, len(cfg.Presets))
 	for i, p := range cfg.Presets {
-		size, _ := asset.ParseSize(p.Size)
+		size, _ := asset.ParseSize(p.Size.Unwrap())
+		var loop *bool
+		if p.Loop.Set {
+			v := p.Loop.Value.Unwrap()
+			loop = &v
+		}
 		preset, err := asset.NewPreset(
-			p.Name,
-			transformFromCropTrim(p.Crop, p.Trim),
+			p.Name.Unwrap(),
+			transformFromCropTrim(p.Crop.Unwrap(), p.Trim.Unwrap()),
 			size,
-			asset.Format(p.OutputFormat),
-			asset.DPR(p.DPR),
-			p.Quality,
-			p.Frames,
-			p.Duration,
-			p.Loop,
+			asset.Format(p.OutputFormat.Unwrap()),
+			asset.DPR(int(p.DPR.Unwrap())),
+			int(p.Quality.Unwrap()),
+			int(p.Frames.Unwrap()),
+			int(p.Duration.Unwrap()),
+			loop,
 		)
 		if err != nil {
 			return nil, err
 		}
-		wm, err := resolveWM(p.Watermark, fmt.Sprintf("presets[%d] (%s)", i, p.Name))
+		wm, err := resolveWM(p.Watermark.Unwrap(), fmt.Sprintf("presets[%d] (%s)", i, p.Name.Unwrap()))
 		if err != nil {
 			return nil, err
 		}
@@ -510,15 +534,17 @@ func mergePresetOrientation(p PresetConfig, def *processing.OrientationSpec) *pr
 		def = processing.DefaultOrientation()
 	}
 	autoOrient := def.AutoOrient
-	if p.AutoOrient != nil {
-		autoOrient = *p.AutoOrient
+	if p.AutoOrient.Set {
+		autoOrient = p.AutoOrient.Value.Unwrap()
 	}
 	rotate := def.Rotate
-	if r, err := processing.ParseRotation(p.Rotate); err == nil && p.Rotate != "" {
+	pr := p.Rotate.Unwrap()
+	if r, err := processing.ParseRotation(pr); err == nil && pr != "" {
 		rotate = r
 	}
 	flip := def.Flip
-	if f, err := processing.ParseFlip(p.Flip); err == nil && p.Flip != "" {
+	pf := p.Flip.Unwrap()
+	if f, err := processing.ParseFlip(pf); err == nil && pf != "" {
 		flip = f
 	}
 	spec, err := processing.NewOrientationSpec(autoOrient, rotate, flip)

@@ -3,29 +3,31 @@ package policy
 import (
 	"math"
 	"testing"
+
+	"github.com/pkg-ru/dynamic"
 )
 
 func TestNewLimitsValid(t *testing.T) {
-	l, err := NewLimits(Limits{SourceBytes: 100, Width: 1000, Height: 1000, Pixels: 1_000_000, DPR: 2, Frames: 10, OutputBytes: 500, Duration: 1000, Concurrency: 4})
+	l, err := NewLimits(Limits{SourceBytes: dynamic.Int64(100), Width: dynamic.Int64(1000), Height: dynamic.Int64(1000), Pixels: dynamic.Int64(1_000_000), DPR: dynamic.Int64(2), Frames: dynamic.Int64(10), OutputBytes: dynamic.Int64(500), Duration: dynamic.Int64(1000), Concurrency: dynamic.Int64(4)})
 	if err != nil {
 		t.Fatalf("NewLimits error: %v", err)
 	}
-	if l.SourceBytes != 100 {
-		t.Errorf("SourceBytes = %d, want 100", l.SourceBytes)
+	if l.SourceBytes.Unwrap() != 100 {
+		t.Errorf("SourceBytes = %d, want 100", l.SourceBytes.Unwrap())
 	}
 }
 
 func TestNewLimitsInvalid(t *testing.T) {
 	bad := []Limits{
-		{SourceBytes: -1},
-		{Width: -1},
-		{Height: -1},
-		{Pixels: -1},
-		{DPR: -1},
-		{Frames: -1},
-		{OutputBytes: -1},
-		{Duration: -1},
-		{Concurrency: -1},
+		{SourceBytes: dynamic.Int64(-1)},
+		{Width: dynamic.Int64(-1)},
+		{Height: dynamic.Int64(-1)},
+		{Pixels: dynamic.Int64(-1)},
+		{DPR: dynamic.Int64(-1)},
+		{Frames: dynamic.Int64(-1)},
+		{OutputBytes: dynamic.Int64(-1)},
+		{Duration: dynamic.Int64(-1)},
+		{Concurrency: dynamic.Int64(-1)},
 	}
 	for _, l := range bad {
 		if _, err := NewLimits(l); err == nil {
@@ -36,7 +38,7 @@ func TestNewLimitsInvalid(t *testing.T) {
 
 func TestLimitsCheck(t *testing.T) {
 	// Всё в пределах.
-	l, _ := NewLimits(Limits{SourceBytes: 1000, Width: 100, Height: 100, Pixels: 10_000, DPR: 2, Frames: 5, OutputBytes: 500, Duration: 1000})
+	l, _ := NewLimits(Limits{SourceBytes: dynamic.Int64(1000), Width: dynamic.Int64(100), Height: dynamic.Int64(100), Pixels: dynamic.Int64(10_000), DPR: dynamic.Int64(2), Frames: dynamic.Int64(5), OutputBytes: dynamic.Int64(500), Duration: dynamic.Int64(1000)})
 	if r := l.Check(500, 50, 50, 1, 3, 200, 500); r.Exceeded() {
 		t.Errorf("expected no exceed, got %+v", r)
 	}
@@ -47,15 +49,15 @@ func TestLimitsCheck(t *testing.T) {
 		args []int64
 		want string
 	}{
-		{"source_bytes", Limits{SourceBytes: 1000}, []int64{2000, 50, 50, 1, 3, 200, 500}, "source_bytes"},
-		{"width", Limits{Width: 100}, []int64{500, 200, 50, 1, 3, 200, 500}, "width"},
-		{"height", Limits{Height: 100}, []int64{500, 50, 200, 1, 3, 200, 500}, "height"},
+		{"source_bytes", Limits{SourceBytes: dynamic.Int64(1000)}, []int64{2000, 50, 50, 1, 3, 200, 500}, "source_bytes"},
+		{"width", Limits{Width: dynamic.Int64(100)}, []int64{500, 200, 50, 1, 3, 200, 500}, "width"},
+		{"height", Limits{Height: dynamic.Int64(100)}, []int64{500, 50, 200, 1, 3, 200, 500}, "height"},
 		// width/height в пределах 1000, но произведение 200x200=40000 > 10000.
-		{"pixels", Limits{Width: 1000, Height: 1000, Pixels: 10_000}, []int64{500, 200, 200, 1, 3, 200, 500}, "pixels"},
-		{"dpr", Limits{DPR: 2}, []int64{500, 50, 50, 3, 3, 200, 500}, "dpr"},
-		{"frames", Limits{Frames: 5}, []int64{500, 50, 50, 1, 10, 200, 500}, "frames"},
-		{"output_bytes", Limits{OutputBytes: 500}, []int64{500, 50, 50, 1, 3, 600, 500}, "output_bytes"},
-		{"duration", Limits{Duration: 1000}, []int64{500, 50, 50, 1, 3, 200, 2000}, "duration"},
+		{"pixels", Limits{Width: dynamic.Int64(1000), Height: dynamic.Int64(1000), Pixels: dynamic.Int64(10_000)}, []int64{500, 200, 200, 1, 3, 200, 500}, "pixels"},
+		{"dpr", Limits{DPR: dynamic.Int64(2)}, []int64{500, 50, 50, 3, 3, 200, 500}, "dpr"},
+		{"frames", Limits{Frames: dynamic.Int64(5)}, []int64{500, 50, 50, 1, 10, 200, 500}, "frames"},
+		{"output_bytes", Limits{OutputBytes: dynamic.Int64(500)}, []int64{500, 50, 50, 1, 3, 600, 500}, "output_bytes"},
+		{"duration", Limits{Duration: dynamic.Int64(1000)}, []int64{500, 50, 50, 1, 3, 200, 2000}, "duration"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,7 +72,7 @@ func TestLimitsCheck(t *testing.T) {
 
 func TestLimitsCheckPixelsOverflow(t *testing.T) {
 	// Огромные размеры, произведение которых переполняет int64.
-	l, _ := NewLimits(Limits{Pixels: 100})
+	l, _ := NewLimits(Limits{Pixels: dynamic.Int64(100)})
 	r := l.Check(0, math.MaxInt64, math.MaxInt64, 1, 1, 0, 0)
 	if !r.Exceeded() || r.ExceededLimit != "pixels" {
 		t.Errorf("expected pixels overflow exceed, got %+v", r)

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/internal/domain/asset"
 	"github.com/pkg-ru/imager/internal/domain/policy"
 	"github.com/pkg-ru/imager/internal/domain/processing"
@@ -13,11 +14,11 @@ func wmDecls(names ...string) []WatermarkConfig {
 	out := make([]WatermarkConfig, 0, len(names))
 	for _, n := range names {
 		out = append(out, WatermarkConfig{
-			Name:     n,
-			Path:     "/w/" + n + ".png",
-			Position: "center",
-			Repeat:   "no-repeat",
-			Size:     "contain",
+			Name:     dynamic.String(n),
+			Path:     dynamic.String("/w/" + n + ".png"),
+			Position: dynamic.String("center"),
+			Repeat:   dynamic.String("no-repeat"),
+			Size:     dynamic.String("contain"),
 		})
 	}
 	return out
@@ -25,18 +26,18 @@ func wmDecls(names ...string) []WatermarkConfig {
 
 func TestCompileWatermarks(t *testing.T) {
 	cfg := &Config{
-		Version: SupportedVersion,
+		Version: dynamic.String(SupportedVersion),
 		Watermarks: []WatermarkConfig{{
-			Name:     "logo",
-			Path:     "/w/logo.png",
-			Position: "bottom",
-			Repeat:   "repeat-x",
-			Size:     "200px 50px",
+			Name:     dynamic.String("logo"),
+			Path:     dynamic.String("/w/logo.png"),
+			Position: dynamic.String("bottom"),
+			Repeat:   dynamic.String("repeat-x"),
+			Size:     dynamic.String("200px 50px"),
 		}},
 		Policy: policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:   80,
-			DefaultWatermark: "logo",
+			DefaultQuality:   dynamic.Int64(80),
+			DefaultWatermark: dynamic.String("logo"),
 		},
 	}
 	compiled, err := cfg.Compile()
@@ -79,52 +80,52 @@ func TestValidateWatermarkErrors(t *testing.T) {
 			name: "invalid position",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Position = "middle"
+				c.Watermarks[0].Position = dynamic.String("middle")
 			},
 		},
 		{
 			name: "invalid size",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Size = "huge"
+				c.Watermarks[0].Size = dynamic.String("huge")
 			},
 		},
 		{
 			name: "empty path",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Path = ""
+				c.Watermarks[0].Path = dynamic.String("")
 			},
 		},
 		{
 			name: "unknown preset reference",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("other")
-				c.Policy.Presets[0].Watermark = "missing"
+				c.Policy.Presets[0].Watermark = dynamic.String("missing")
 			},
 		},
 		{
 			name: "unknown default",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Processing.DefaultWatermark = "ghost"
+				c.Processing.DefaultWatermark = dynamic.String("ghost")
 			},
 		},
 		{
 			name: "unknown path-policy reference",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Policy.PathPolicies[0].Watermark = "ghost"
+				c.Policy.PathPolicies[0].Watermark = dynamic.String("ghost")
 			},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				Version:    SupportedVersion,
+				Version:    dynamic.String(SupportedVersion),
 				Watermarks: wmDecls("logo"),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: 80},
+				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
 			}
 			tc.mutate(cfg)
 			err := cfg.Validate()
@@ -142,19 +143,19 @@ func TestValidateWatermarkErrors(t *testing.T) {
 func policyConfigForTest() policy.Config {
 	return policy.Config{
 		Global: policy.GlobalConfig{
-			Authorization:  "safe",
-			AllowedPresets: []string{"thumb"},
+			Authorization:  dynamic.String("safe"),
+			AllowedPresets: []dynamic.String{dynamic.String("thumb")},
 		},
 		Presets: []policy.PresetConfig{{
-			Name:         "thumb",
-			Size:         "200x200",
-			OutputFormat: "webp",
-			Quality:      85,
-			Watermark:    "logo",
+			Name:         dynamic.String("thumb"),
+			Size:         dynamic.String("200x200"),
+			OutputFormat: dynamic.String("webp"),
+			Quality:      dynamic.Int64(85),
+			Watermark:    dynamic.String("logo"),
 		}},
 		PathPolicies: []policy.PathPolicyConfig{{
-			Path:      "/",
-			Watermark: "logo",
+			Path:      dynamic.String("/"),
+			Watermark: dynamic.String("logo"),
 		}},
 	}
 }
@@ -171,14 +172,14 @@ func mustPresetReq(t *testing.T) *asset.Request {
 
 func TestCompileDefaultOrientation(t *testing.T) {
 	cfg := &Config{
-		Version:    SupportedVersion,
+		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:    80,
-			DefaultAutoOrient: boolPtr(false),
-			DefaultRotate:     "90",
-			DefaultFlip:       "horizontal",
+			DefaultQuality:    dynamic.Int64(80),
+			DefaultAutoOrient: dynamic.NewNullable(dynamic.Bool(false)),
+			DefaultRotate:     dynamic.String("90"),
+			DefaultFlip:       dynamic.String("horizontal"),
 		},
 	}
 	compiled, err := cfg.Compile()
@@ -196,10 +197,10 @@ func TestCompileDefaultOrientation(t *testing.T) {
 
 func TestCompileDefaultOrientationDefaults(t *testing.T) {
 	cfg := &Config{
-		Version:    SupportedVersion,
+		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
-		Processing: ProcessingConfig{DefaultQuality: 80},
+		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
 	}
 	compiled, err := cfg.Compile()
 	if err != nil {
@@ -216,15 +217,15 @@ func TestValidateDefaultOrientationErrors(t *testing.T) {
 		name   string
 		mutate func(*ProcessingConfig)
 	}{
-		{"invalid rotate", func(p *ProcessingConfig) { p.DefaultRotate = "45" }},
-		{"invalid flip", func(p *ProcessingConfig) { p.DefaultFlip = "diagonal" }},
+		{"invalid rotate", func(p *ProcessingConfig) { p.DefaultRotate = dynamic.String("45") }},
+		{"invalid flip", func(p *ProcessingConfig) { p.DefaultFlip = dynamic.String("diagonal") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				Version:    SupportedVersion,
+				Version:    dynamic.String(SupportedVersion),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: 80},
+				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
 			}
 			tc.mutate(&cfg.Processing)
 			if err := cfg.Validate(); err == nil {
@@ -234,18 +235,16 @@ func TestValidateDefaultOrientationErrors(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 func TestCompileDefaultTrim(t *testing.T) {
 	cfg := &Config{
-		Version:    SupportedVersion,
+		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:       80,
-			DefaultTrimMode:      "color",
-			DefaultTrimColor:     "#ffffff",
-			DefaultTrimTolerance: 0.25,
+			DefaultQuality:       dynamic.Int64(80),
+			DefaultTrimMode:      dynamic.String("color"),
+			DefaultTrimColor:     dynamic.String("#ffffff"),
+			DefaultTrimTolerance: dynamic.Float64(0.25),
 		},
 	}
 	compiled, err := cfg.Compile()
@@ -263,10 +262,10 @@ func TestCompileDefaultTrim(t *testing.T) {
 
 func TestCompileDefaultTrimDefaults(t *testing.T) {
 	cfg := &Config{
-		Version:    SupportedVersion,
+		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
-		Processing: ProcessingConfig{DefaultQuality: 80},
+		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
 	}
 	compiled, err := cfg.Compile()
 	if err != nil {
@@ -286,23 +285,46 @@ func TestValidateDefaultTrimErrors(t *testing.T) {
 		name   string
 		mutate func(*ProcessingConfig)
 	}{
-		{"invalid mode", func(p *ProcessingConfig) { p.DefaultTrimMode = "edge" }},
-		{"color mode without color", func(p *ProcessingConfig) { p.DefaultTrimMode = "color" }},
-		{"invalid color", func(p *ProcessingConfig) { p.DefaultTrimMode = "color"; p.DefaultTrimColor = "white" }},
-		{"tolerance too high", func(p *ProcessingConfig) { p.DefaultTrimTolerance = 1.5 }},
-		{"tolerance negative", func(p *ProcessingConfig) { p.DefaultTrimTolerance = -0.1 }},
+		{"invalid mode", func(p *ProcessingConfig) { p.DefaultTrimMode = dynamic.String("edge") }},
+		{"color mode without color", func(p *ProcessingConfig) { p.DefaultTrimMode = dynamic.String("color") }},
+		{"invalid color", func(p *ProcessingConfig) {
+			p.DefaultTrimMode = dynamic.String("color")
+			p.DefaultTrimColor = dynamic.String("white")
+		}},
+		{"tolerance too high", func(p *ProcessingConfig) { p.DefaultTrimTolerance = dynamic.Float64(1.5) }},
+		{"tolerance negative", func(p *ProcessingConfig) { p.DefaultTrimTolerance = dynamic.Float64(-0.1) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				Version:    SupportedVersion,
+				Version:    dynamic.String(SupportedVersion),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: 80},
+				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
 			}
 			tc.mutate(&cfg.Processing)
 			if err := cfg.Validate(); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestDefaultLoopVar(t *testing.T) {
+	loop := dynamic.NewNullable(dynamic.Bool(true))
+	cfg := &Config{
+		Version:    dynamic.String(SupportedVersion),
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{
+			DefaultQuality: dynamic.Int64(80),
+			DefaultLoop:    loop,
+		},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if compiled.DefaultLoop == nil || !*compiled.DefaultLoop {
+		t.Errorf("DefaultLoop = %v, want true", compiled.DefaultLoop)
 	}
 }

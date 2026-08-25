@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/internal/config"
 )
 
@@ -30,7 +31,7 @@ http:
 
 func TestBuildFailFastInvalidConfig(t *testing.T) {
 	// Невалидная версия.
-	cfg := &config.Config{Version: "999"}
+	cfg := &config.Config{Version: dynamic.String("999")}
 	_, err := Build(context.Background(), AppOptions{
 		Config:    cfg,
 		Processor: fakeProcessor{},
