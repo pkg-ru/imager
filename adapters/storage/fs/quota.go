@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // CacheOptions — конфигурация кэша результатов (квота + eviction).

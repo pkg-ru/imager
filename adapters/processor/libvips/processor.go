@@ -7,7 +7,7 @@
 // (build tag "libvips"); без тэга используется заглушка process_stub.go,
 // возвращающая понятную ошибку об отсутствии поддержки.
 //
-// Адаптер реализует порт processor.Processor (internal/application/ports/
+// Адаптер реализует порт processor.Processor (ports/
 // processor). Используется как primary-движок в routing.Processor. libvips
 // (≥ 8.13) поддерживает все форматы, включая APNG (чтение и запись как
 // multi-page PNG).
@@ -21,11 +21,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
-	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/adapters/processor/detection"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота (bounded

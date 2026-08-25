@@ -7,9 +7,9 @@ import (
 	"context"
 	"io"
 
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/object"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Input — входные данные для обработки.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestDoDedupSameKey(t *testing.T) {

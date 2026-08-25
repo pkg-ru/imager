@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // errSymlinkEscape — внутренняя ошибка: компонент пути является символьной

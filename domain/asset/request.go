@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Request — immutable типизированное представление asset URL.

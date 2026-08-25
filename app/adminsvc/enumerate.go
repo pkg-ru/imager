@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // SourceRef — разобранный путь исходника (path/name.format).

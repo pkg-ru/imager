@@ -3,11 +3,11 @@ package detection
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // PortDetector is a thin adapter over detection.Detector implementing the
-// application port detector.Detector (internal/application/ports/detector)
+// application port detector.Detector (ports/detector)
 // on domain boxes filemeta.FaceInfo/ObjectInfo. It is assembled in the
 // composition root and passed as generatev2.Deps.Detector.
 type PortDetector struct {

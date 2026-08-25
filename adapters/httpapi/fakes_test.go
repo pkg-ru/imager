@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/application/generatev2"
-	"github.com/pkg-ru/imager/internal/application/ports/detector"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // requireLocalhostTCP пропускает тест, если localhost TCP недоступен.

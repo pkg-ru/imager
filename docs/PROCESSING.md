@@ -2,9 +2,9 @@
 
 ## Конвейер генерации
 
-Запрос проходит конвейер (`internal/application/generatev2`):
+Запрос проходит конвейер (`app/generatev2`):
 
-1. Разбор URL и валидация (`internal/domain/asset`).
+1. Разбор URL и валидация (`domain/asset`).
 2. Разрешение пресета (если preset URL) в канонический запрос.
 3. Проверка политики (deny-by-default) и лимитов.
 4. Поиск готового результата в result-хранилище по каноническому ключу.
@@ -24,7 +24,7 @@
 | libvips (govips) | Основной; сборка `-tags libvips` | In-process, без subprocess; все форматы включая APNG (≥ 8.13); smart-crop |
 | ImageMagick | Fallback для сборок без `-tags libvips` | Subprocess на операцию; deny-by-default policy.xml; лимиты через `-limit` |
 
-Маршрутизация между движками — `internal/adapters/processor/routing`. В сборке с работающим libvips ImageMagick не создаётся и не запускается.
+Маршрутизация между движками — `adapters/processor/routing`. В сборке с работающим libvips ImageMagick не создаётся и не запускается.
 
 ## Операции
 

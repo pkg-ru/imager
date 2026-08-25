@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestMapError(t *testing.T) {

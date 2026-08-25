@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/object"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // metaFlightPrefix — префикс singleflight-ключей метаданных.

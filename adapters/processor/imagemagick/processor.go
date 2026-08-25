@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/adapters/processor/shared"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // runner абстрагирует запуск subprocess для тестируемости (dependency

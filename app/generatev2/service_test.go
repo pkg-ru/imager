@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
-	"github.com/pkg-ru/imager/internal/application/ports/coordinator"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/object"
-	"github.com/pkg-ru/imager/internal/domain/policy"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/ports/coordinator"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // testEnv — окружение для тестов.

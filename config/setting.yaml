@@ -5,7 +5,7 @@
 # (например /etc/imager, см. docker-compose.yaml). В нём должны лежать
 # setting.yaml (этот файл) и, опционально, setting-local.yaml.
 #
-# Механизм загрузки (internal/adapters/httpapi/configloader.go):
+# Механизм загрузки (adapters/httpapi/configloader.go):
 #   1. Читается обязательный базовый файл setting.yaml.
 #   2. Если рядом есть setting-local.yaml — его настройки ГЛУБОКО мержатся
 #      поверх базового: вложенные map объединяются рекурсивно, скаляры

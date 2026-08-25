@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/application/adminsvc"
-	"github.com/pkg-ru/imager/internal/application/generatev2"
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/object"
-	"github.com/pkg-ru/imager/internal/domain/policy"
+	"github.com/pkg-ru/imager/app/adminsvc"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // adminTestCtx — контекст для тестов admin handler.

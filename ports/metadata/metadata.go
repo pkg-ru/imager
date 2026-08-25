@@ -9,7 +9,7 @@ package metadata
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // UpdateFn — функция модификации метаданных для Store.Update.

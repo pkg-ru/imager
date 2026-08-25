@@ -11,13 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
-	"github.com/pkg-ru/imager/internal/adapters/storage/ftp"
-	httpadapter "github.com/pkg-ru/imager/internal/adapters/storage/http"
-	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
-	s3adapter "github.com/pkg-ru/imager/internal/adapters/storage/s3"
-	"github.com/pkg-ru/imager/internal/adapters/storage/sftp"
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
+	"github.com/pkg-ru/imager/adapters/storage/fs"
+	"github.com/pkg-ru/imager/adapters/storage/ftp"
+	httpadapter "github.com/pkg-ru/imager/adapters/storage/http"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	s3adapter "github.com/pkg-ru/imager/adapters/storage/s3"
+	"github.com/pkg-ru/imager/adapters/storage/sftp"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // StorageKind — тип удалённого хранилища.

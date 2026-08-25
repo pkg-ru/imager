@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/jlaffaye/ftp"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // fakeConn — минимальный in-memory FTP-сервер, реализующий интерфейс conn.

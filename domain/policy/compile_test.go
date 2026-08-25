@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 func TestValidateConfig(t *testing.T) {

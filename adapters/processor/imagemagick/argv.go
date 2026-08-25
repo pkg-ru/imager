@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // allowlists операций, форматов и coders. Никакие пользовательские аргументы

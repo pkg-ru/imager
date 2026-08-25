@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/internal/config"
+	"github.com/pkg-ru/imager/config"
 )
 
 // testConfigYAML — валидная конфигурация с unsafe policy (разрешает всё).

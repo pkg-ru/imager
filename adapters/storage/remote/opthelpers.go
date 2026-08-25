@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // IsConnErr отличает ошибки соединения (требуют переподключения/discard и

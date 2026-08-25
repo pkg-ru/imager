@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
-	"github.com/pkg-ru/imager/internal/adapters/storage/fs"
-	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
-	"github.com/pkg-ru/imager/internal/application/adminsvc"
-	"github.com/pkg-ru/imager/internal/application/generatev2"
-	"github.com/pkg-ru/imager/internal/application/ports/detector"
-	"github.com/pkg-ru/imager/internal/application/ports/metadata"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/config"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/adapters/storage/fs"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/app/adminsvc"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/config"
 )
 
 // AppOptions — параметры сборки нового pipeline (composition root).

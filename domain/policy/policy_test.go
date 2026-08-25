@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 func mustReq(t *testing.T, url string) *asset.Request {

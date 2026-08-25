@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/observability"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // DefaultGenerateTimeout — таймаут генерации ассета по умолчанию.

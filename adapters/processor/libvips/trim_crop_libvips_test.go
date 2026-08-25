@@ -22,9 +22,9 @@ import (
 	"image/png"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/adapters/processor/detection"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makeTrimPng генерирует PNG WxH: белый фон и сплошной красный прямоугольник

@@ -8,9 +8,9 @@ import (
 	"github.com/pkg-ru/dynamic"
 	"gopkg.in/yaml.v2"
 
-	"github.com/pkg-ru/imager/internal/adapters/processor/imagemagick"
-	"github.com/pkg-ru/imager/internal/adapters/processor/libvips"
-	"github.com/pkg-ru/imager/internal/config"
+	"github.com/pkg-ru/imager/adapters/processor/imagemagick"
+	"github.com/pkg-ru/imager/adapters/processor/libvips"
+	"github.com/pkg-ru/imager/config"
 )
 
 // DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов

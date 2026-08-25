@@ -3,7 +3,7 @@ package ftp
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 )
 
 // pooledConn — соединение, выданное пулом. Жизненным циклом соединения

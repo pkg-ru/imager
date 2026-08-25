@@ -47,16 +47,16 @@ jobs:
         run: go test -race ./... -count=1
 
       - name: fuzz smoke (FuzzParse)
-        run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=10s ./internal/domain/asset
+        run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=10s ./domain/asset
 
       - name: fuzz smoke (FuzzParseSize)
-        run: go test -run=^$ -fuzz=^FuzzParseSize$ -fuzztime=10s ./internal/domain/asset
+        run: go test -run=^$ -fuzz=^FuzzParseSize$ -fuzztime=10s ./domain/asset
 
       - name: fuzz smoke (FuzzCleanRelContainment)
-        run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=10s ./internal/adapters/storage/fs
+        run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=10s ./adapters/storage/fs
 
       - name: fuzz smoke (FuzzSafeKey)
-        run: go test -run=^$ -fuzz=^FuzzSafeKey$ -fuzztime=10s ./internal/adapters/storage/fs
+        run: go test -run=^$ -fuzz=^FuzzSafeKey$ -fuzztime=10s ./adapters/storage/fs
 
       - name: build (cmd/imager)
         run: go build -trimpath -ldflags="-s -w" ./cmd/imager

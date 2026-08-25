@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // SourceStore — filesystem-реализация storage.SourceStore. Читает исходные

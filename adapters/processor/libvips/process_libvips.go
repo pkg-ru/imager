@@ -16,10 +16,10 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"github.com/pkg-ru/imager/internal/adapters/processor/detection"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/adapters/processor/detection"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // startupOnce гарантирует однократный Startup govips на процесс.

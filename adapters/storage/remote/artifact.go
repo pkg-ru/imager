@@ -3,7 +3,7 @@ package remote
 import (
 	"io"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // bufferArtifact — object.Artifact поверх spillable Buffer. Инкапсулирует

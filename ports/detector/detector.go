@@ -1,7 +1,7 @@
 // Package detector defines the application-level port for AI face/object
 // detection.
 //
-// The port mirrors internal/adapters/processor/detection.Detector contract
+// The port mirrors adapters/processor/detection.Detector contract
 // but operates on domain types filemeta.FaceInfo/ObjectInfo, so the
 // application layer does not import adapters. A thin adapter over
 // detection.Detector is built in the composition root.
@@ -10,7 +10,7 @@ package detector
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // Detector detects faces and objects on an RGB image.

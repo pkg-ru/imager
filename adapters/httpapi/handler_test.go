@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/application/generatev2"
+	"github.com/pkg-ru/imager/app/generatev2"
 )
 
 // newTestHandler создаёт handler с fake generator и базовой конфигурацией.

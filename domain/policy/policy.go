@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Authorization определяет режим авторизации запроса.

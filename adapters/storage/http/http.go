@@ -28,9 +28,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // Options — параметры HTTP/HTTPS source-адаптера.

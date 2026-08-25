@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/observability"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // MetricsAuthConfig — конфигурация защиты /metrics endpoint.

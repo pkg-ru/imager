@@ -138,17 +138,21 @@ curl http://localhost:8080/healthz
 ## Архитектура
 
 ```
-cmd/imager            composition root: конфиг, процессоры, runtime, janitor
-internal/
-  domain/asset        грамматика и парсинг канонических URL, пресеты
-  domain/policy       deny-by-default политика авторизации и лимитов
-  domain/processing   план обработки: операции, форматы, ватермарка, ориентация
-  application/generatev2  use case генерации: политика → кэш → singleflight → обработка → publish
-  adapters/httpapi    HTTP-обработчик, mux, health, admission, fallback
-  adapters/storage    fs, s3, sftp, ftp, http, remote-инфраструктура
-  adapters/processor  libvips, imagemagick, маршрутизация, detection (ONNX)
-  adapters/coordination/singleflight  keyed дедупликация запросов
-  observability       логи (slog JSON) и метрики (expvar/Prometheus)
+imager.go             публичный фасад (package imager): NewServer / New(Options)
+bootstrap/            переиспользуемая composition-root логика (процессоры, slog)
+cmd/imager            тонкая обёртка над фасадом: env → NewServer → Run
+domain/asset          грамматика и парсинг канонических URL, пресеты
+domain/policy         deny-by-default политика авторизации и лимитов
+domain/processing     план обработки: операции, форматы, ватермарка, ориентация
+app/generatev2        use case генерации: политика → кэш → singleflight → обработка → publish
+ports/                абстрактные порты (storage, processor, detector, coordinator, buffer, metadata)
+adapters/httpapi      HTTP-обработчик, mux, health, admission, fallback
+adapters/storage      fs, s3, sftp, ftp, http, remote-инфраструктура
+adapters/processor    libvips, imagemagick, маршрутизация, detection (ONNX)
+adapters/pixel        встроенные 1x1 пиксели для not-found fallback
+coordination/singleflight  keyed дедупликация запросов
+observability         логи (slog JSON) и метрики (expvar/Prometheus)
+config/               typed конфигурация (config.go) + YAML (setting.yaml)
 ```
 
 ## Лицензия и репозиторий

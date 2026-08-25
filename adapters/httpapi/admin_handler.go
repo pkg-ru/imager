@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pkg-ru/imager/internal/application/adminsvc"
-	"github.com/pkg-ru/imager/internal/observability"
+	"github.com/pkg-ru/imager/app/adminsvc"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // AdminHandler — HTTP-обработчик административных эндпоинтов.

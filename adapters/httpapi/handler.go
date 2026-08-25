@@ -15,12 +15,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pkg-ru/imager/internal/adapters/lru"
-	"github.com/pkg-ru/imager/internal/adapters/processor/routing"
-	"github.com/pkg-ru/imager/internal/application/generatev2"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/object"
-	"github.com/pkg-ru/imager/internal/observability"
+	"github.com/pkg-ru/imager/adapters/lru"
+	"github.com/pkg-ru/imager/adapters/processor/routing"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // PixelGenerator — генератор прозрачного 1x1 пикселя в заданном формате.

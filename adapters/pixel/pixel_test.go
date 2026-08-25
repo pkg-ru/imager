@@ -1,14 +1,14 @@
-package main
+package pixel
 
 import (
 	"context"
 	"testing"
 )
 
-// TestEmbedPixelGenerator_AllFormats проверяет, что для всех поддерживаемых
+// TestGenerator_AllFormats проверяет, что для всех поддерживаемых
 // форматов есть встроенный пиксель и он непустой.
-func TestEmbedPixelGenerator_AllFormats(t *testing.T) {
-	gen := newEmbedPixelGenerator()
+func TestGenerator_AllFormats(t *testing.T) {
+	gen := New()
 	formats := []string{"png", "apng", "webp", "gif", "avif", "heif", "jpeg", "jpg"}
 	for _, f := range formats {
 		b, err := gen.GeneratePixel(context.Background(), f)
@@ -22,10 +22,10 @@ func TestEmbedPixelGenerator_AllFormats(t *testing.T) {
 	}
 }
 
-// TestEmbedPixelGenerator_UnknownFormat проверяет, что неизвестный формат
+// TestGenerator_UnknownFormat проверяет, что неизвестный формат
 // возвращает ошибку (вызывающий перейдёт к следующему not-found fallback).
-func TestEmbedPixelGenerator_UnknownFormat(t *testing.T) {
-	gen := newEmbedPixelGenerator()
+func TestGenerator_UnknownFormat(t *testing.T) {
+	gen := New()
 	if _, err := gen.GeneratePixel(context.Background(), "bmp"); err == nil {
 		t.Fatal("GeneratePixel(bmp): want error")
 	}
@@ -34,9 +34,9 @@ func TestEmbedPixelGenerator_UnknownFormat(t *testing.T) {
 	}
 }
 
-// TestEmbedPixelGenerator_CaseInsensitive проверяет регистронезависимость.
-func TestEmbedPixelGenerator_CaseInsensitive(t *testing.T) {
-	gen := newEmbedPixelGenerator()
+// TestGenerator_CaseInsensitive проверяет регистронезависимость.
+func TestGenerator_CaseInsensitive(t *testing.T) {
+	gen := New()
 	lower, err := gen.GeneratePixel(context.Background(), "png")
 	if err != nil {
 		t.Fatalf("GeneratePixel(png): %v", err)

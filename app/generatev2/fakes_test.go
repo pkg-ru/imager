@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // wantOutcome проверяет, что err является *OutcomeError с указанной

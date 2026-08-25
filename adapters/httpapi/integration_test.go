@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/application/ports/storage"
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // buildFSApp собирает полный production pipeline с реальными FS-хранилищами

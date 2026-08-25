@@ -6,10 +6,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pkg-ru/imager/internal/application/ports/detector"
-	"github.com/pkg-ru/imager/internal/application/ports/metadata"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // fakeMetadataStore — in-memory metadata.Store со счётчиками вызовов.

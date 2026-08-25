@@ -3,7 +3,7 @@ package sftp
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/internal/adapters/storage/remote"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 )
 
 // pooledClient — клиент, выданный пулом. Close() — no-op: жизненным циклом

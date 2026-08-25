@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Config — конфигурация политики (DTO, не связан с YAML).

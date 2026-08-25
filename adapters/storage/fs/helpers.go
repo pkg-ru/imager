@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/pkg-ru/imager/internal/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // copyBufPool — переиспользуемый буфер для io.CopyBuffer в writeTemp.

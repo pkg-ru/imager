@@ -44,8 +44,8 @@ race:
 
 .PHONY: fuzz
 fuzz:
-	go test -run=^$$ -fuzz=^FuzzParse$$ -fuzztime=10s ./internal/domain/asset
-	go test -run=^$$ -fuzz=^FuzzParseSize$$ -fuzztime=10s ./internal/domain/asset
+	go test -run=^$$ -fuzz=^FuzzParse$$ -fuzztime=10s ./domain/asset
+	go test -run=^$$ -fuzz=^FuzzParseSize$$ -fuzztime=10s ./domain/asset
 
 .PHONY: build-prod
 build-prod:

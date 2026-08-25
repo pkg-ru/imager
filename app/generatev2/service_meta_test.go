@@ -7,11 +7,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/internal/adapters/coordination/singleflight"
-	"github.com/pkg-ru/imager/internal/application/ports/processor"
-	"github.com/pkg-ru/imager/internal/domain/asset"
-	"github.com/pkg-ru/imager/internal/domain/filemeta"
-	"github.com/pkg-ru/imager/internal/domain/processing"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // metaTestLogger — тестовый логгер, реализущий полный Logger
