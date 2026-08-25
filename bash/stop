@@ -1,3 +1,0 @@
-#!/bin/bash
-echo "Imager project stop"
-ps aux | grep '/imager' | awk '{print $2}' | xargs kill

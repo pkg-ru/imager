@@ -1,7 +1,0 @@
-#!/bin/bash
-chmod +x ./bash/build
-chmod +x ./bash/restart
-chmod +x ./bash/stop
-chmod +x ./bash/run
-go mod download
-go mod tidy

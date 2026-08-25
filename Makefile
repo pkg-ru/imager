@@ -1,22 +1,28 @@
+# Imager — Makefile (единый источник истины для локальной разработки).
+# Production-запуск — через docker-compose.yaml / Dockerfile.
+
+# --- Локальная сборка и запуск (заменяют устаревшие bash/ скрипты) ---
+
 .PHONY: install
 install:
-	chmod +x ./bash/install && ./bash/install
+	go mod download
+	go mod tidy
 
 .PHONY: build
 build:
-	./bash/build
-
-.PHONY: restart
-restart:
-	./bash/restart
+	go build -tags libvips -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
 
 .PHONY: run
-run:
-	./bash/run
+run: build
+	IMAGER_CONFIG_DIR=./config ./imager
 
 .PHONY: stop
 stop:
-	./bash/stop
+	@echo "Imager project stop"
+	@taskkill /F /IM imager.exe 2>NUL || true
+
+.PHONY: restart
+restart: stop run
 
 # --- Production quality gates (см. docs/PRODUCTION.md) ---
 
@@ -43,7 +49,7 @@ fuzz:
 
 .PHONY: build-prod
 build-prod:
-	cd cmd/imager && go build -trimpath -ldflags="-s -w" -o ../../imager .
+	cd cmd/imager && go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
 
 .PHONY: docker-build
 docker-build:

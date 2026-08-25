@@ -75,6 +75,19 @@ Compose использует `stop_signal: INT` и `stop_grace_period: 15s`.
 
 Health/metrics остаются доступными при перегрузке asset-обработки (admission control применяется только к asset-запросам).
 
+## nginx как фронт-прокси
+
+Для совместного использования nginx + imager (раздача готовых файлов через `try_files`, проксирование генерации, проброс/скрытие эндпоинтов, выравнивание заголовков ответа) см. подробную документацию:
+
+- **[NGINX.md](NGINX.md)** — настройка nginx как фронт-прокси перед imager.
+
+Ключевые моменты:
+
+- **Раздача готовых файлов.** Ключ результата совпадает с путём в URL (без ведущего `/`), поэтому `try_files $uri @imager` с `root` на `result.path` отдаёт уже сгенерированные ассеты напрямую, не нагружая imager. Пути задаются в `source.path` / `result.path` (см. [STORAGE.md](STORAGE.md)).
+- **Проксирование.** `proxy_pass` на адрес imager с пробросом `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`; таймауты `proxy_read_timeout`/`proxy_send_timeout` должны быть больше `http.generate-timeout` (по умолчанию 30s).
+- **Эндпоинты.** В паблик пробрасываются asset URL (`/`), `/healthz`, `/readyz`. Служебные `/metrics`, `/debug/vars`, `/admin/*` рекомендуется закрыть (см. [NGINX.md](NGINX.md#3-проброс-эндпоинтов)).
+- **Заголовки.** Для идентичности ответов используйте `server_tokens off`, `etag off`, `if_modified_since off`, `expires off` и `proxy_pass_header`/`proxy_hide_header` (см. [NGINX.md](NGINX.md#4-идентичность-заголовков-ответа)).
+
 ## Observability
 
 ### Логи

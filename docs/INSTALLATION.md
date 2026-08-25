@@ -97,9 +97,9 @@ docker compose up -d --build
 
 [`docker-compose.yaml`](../docker-compose.yaml) содержит production hardening: `read_only: true`, tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов (`cpus: 2.0`, `memory: 512M`), healthcheck по `/healthz`. Конфигурация монтируется из `./config` в `/etc/imager` read-only.
 
-## Скрипты
+## Локальная разработка
 
-Каталог [`bash/`](../bash/) содержит вспомогательные скрипты (`build`, `run`, `stop`, `restart`, `install`). Они рассчитаны на упрощённую локальную разработку; для production используйте Docker/Compose или прямую сборку `go build ./cmd/imager`.
+Для упрощённой локальной разработки используйте цели [`Makefile`](../Makefile) (`make install`, `make build`, `make run`, `make stop`, `make restart`). Для production используйте Docker/Compose или прямую сборку `go build -tags libvips ./cmd/imager`.
 
 ## Проверка установки
 
