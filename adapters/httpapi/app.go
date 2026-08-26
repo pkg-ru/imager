@@ -15,6 +15,7 @@ import (
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // AppOptions — параметры сборки нового pipeline (composition root).
@@ -60,6 +61,9 @@ type AppOptions struct {
 	MetadataDir string
 	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция остаётся в процессоре).
 	Detector detector.Detector
+	// VideoExtractor — извлекатель кадра из видео (ffmpeg). nil = видео
+	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
+	VideoExtractor videoframe.Extractor
 }
 
 // App — собранный pipeline.
@@ -153,22 +157,27 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 
 	// Use case.
 	svc, err := generatev2.New(generatev2.Deps{
-		Sources:            sources,
-		Results:            results,
-		Coordinator:        coord,
-		Processor:          proc,
-		Policy:             compiled.Policy,
-		Presets:            compiled.Presets,
-		Buffers:            buffers,
-		OutputLimit:        opt.OutputLimit,
-		Quality:            int(compiled.DefaultQuality),
-		DefaultWatermark:   compiled.DefaultWatermark,
-		DefaultOrientation: compiled.DefaultOrientation,
-		DefaultTrim:        compiled.DefaultTrim,
-		Logger:             opt.HTTP.Logger,
-		Metrics:            opt.HTTP.Metrics,
-		Metadata:           metaStore,
-		Detector:           opt.Detector,
+		Sources:                  sources,
+		Results:                  results,
+		Coordinator:              coord,
+		Processor:                proc,
+		Policy:                   compiled.Policy,
+		Presets:                  compiled.Presets,
+		Buffers:                  buffers,
+		OutputLimit:              opt.OutputLimit,
+		Quality:                  int(compiled.DefaultQuality),
+		DefaultWatermark:         compiled.DefaultWatermark,
+		DefaultOrientation:       compiled.DefaultOrientation,
+		DefaultTrim:              compiled.DefaultTrim,
+		Logger:                   opt.HTTP.Logger,
+		Metrics:                  opt.HTTP.Metrics,
+		Metadata:                 metaStore,
+		Detector:                 opt.Detector,
+		VideoExtractor:           opt.VideoExtractor,
+		DefaultVideoFramePercent: compiled.DefaultVideoFramePercent,
+		DefaultVideoMinContrast:  compiled.DefaultVideoMinContrast,
+		DefaultVideoFrameStep:    compiled.DefaultVideoFrameStep,
+		DefaultVideoAttempts:     compiled.DefaultVideoAttempts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: build: generatev2: %w", err)

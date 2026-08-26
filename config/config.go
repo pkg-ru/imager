@@ -92,6 +92,17 @@ type ProcessingConfig struct {
 	// DefaultTrimTolerance — допуск сравнения пикселей с фоновым цветом
 	// для trim в диапазоне [0,1] (0 — точное совпадение). Дефолт: 0.
 	DefaultTrimTolerance dynamic.Float64 `yaml:"default-trim-tolerance"`
+	// DefaultVideoFramePercent — процент от длительности видео, на котором
+	// выбирается кадр (0-100). Дефолт: 0.
+	DefaultVideoFramePercent dynamic.Int64 `yaml:"default-video-frame-percent,omitempty"`
+	// DefaultVideoMinContrast — минимальная контрастность кадра (0-1), ниже
+	// которой кадр считается неудачным. Дефолт: 0.
+	DefaultVideoMinContrast dynamic.Float64 `yaml:"default-video-min-contrast,omitempty"`
+	// DefaultVideoFrameStep — на сколько кадров идти вперёд при неудачной
+	// проверке контрастности. Дефолт: 0.
+	DefaultVideoFrameStep dynamic.Int64 `yaml:"default-video-frame-step,omitempty"`
+	// DefaultVideoAttempts — сколько всего попыток сделать. Дефолт: 0.
+	DefaultVideoAttempts dynamic.Int64 `yaml:"default-video-attempts,omitempty"`
 }
 
 // SupportedVersion — поддерживаемая версия конфигурации.
@@ -118,6 +129,20 @@ func (c *Config) Validate() error {
 	// допуск [0,1]. Валидируются через TrimSpec.
 	if err := c.compileDefaultTrim().Validate(); err != nil {
 		return fmt.Errorf("config: processing.default-trim: %w", err)
+	}
+	// Глобальные настройки видео-превью. Поля опциональны: валидируются
+	// только заданные (ненулевые) значения.
+	if p := c.Processing.DefaultVideoFramePercent; p != 0 && (p < 0 || p > 100) {
+		return fmt.Errorf("config: default-video-frame-percent must be in [0,100], got %d", p)
+	}
+	if mc := c.Processing.DefaultVideoMinContrast; mc != 0 && (mc < 0 || mc > 1) {
+		return fmt.Errorf("config: default-video-min-contrast must be in [0,1], got %v", mc)
+	}
+	if s := c.Processing.DefaultVideoFrameStep; s != 0 && s < 1 {
+		return fmt.Errorf("config: default-video-frame-step must be >= 1, got %d", s)
+	}
+	if a := c.Processing.DefaultVideoAttempts; a != 0 && a < 1 {
+		return fmt.Errorf("config: default-video-attempts must be >= 1, got %d", a)
 	}
 	// Ватермарки: валидность каждой декларации, уникальность имён.
 	for i, w := range c.Watermarks {
@@ -212,6 +237,17 @@ type Compiled struct {
 	// (режим auto/color + tolerance из processing.default-trim-*). Никогда
 	// не nil: при отсутствии настроек содержит {Mode: auto, Tolerance: 0}.
 	DefaultTrim *processing.TrimSpec
+	// DefaultVideoFramePercent — процент от длительности видео, на котором
+	// выбирается кадр (0-100).
+	DefaultVideoFramePercent int64
+	// DefaultVideoMinContrast — минимальная контрастность кадра (0-1), ниже
+	// которой кадр считается неудачным.
+	DefaultVideoMinContrast float64
+	// DefaultVideoFrameStep — на сколько кадров идти вперёд при неудачной
+	// проверке контрастности.
+	DefaultVideoFrameStep int64
+	// DefaultVideoAttempts — сколько всего попыток сделать.
+	DefaultVideoAttempts int64
 }
 
 // compileDefaultTrim собирает глобальные настройки trim из processing.default-*.
@@ -266,13 +302,17 @@ func (c *Config) Compile() (*Compiled, error) {
 		defLoop = &loop
 	}
 	return &Compiled{
-		Policy:             compiled.Policy,
-		Presets:            compiled.Presets,
-		DefaultQuality:     c.Processing.DefaultQuality.Unwrap(),
-		DefaultLoop:        defLoop,
-		Watermarks:         reg,
-		DefaultWatermark:   defWM,
-		DefaultOrientation: defOr,
-		DefaultTrim:        c.compileDefaultTrim(),
+		Policy:                   compiled.Policy,
+		Presets:                  compiled.Presets,
+		DefaultQuality:           c.Processing.DefaultQuality.Unwrap(),
+		DefaultLoop:              defLoop,
+		Watermarks:               reg,
+		DefaultWatermark:         defWM,
+		DefaultOrientation:       defOr,
+		DefaultTrim:              c.compileDefaultTrim(),
+		DefaultVideoFramePercent: c.Processing.DefaultVideoFramePercent.Unwrap(),
+		DefaultVideoMinContrast:  c.Processing.DefaultVideoMinContrast.Unwrap(),
+		DefaultVideoFrameStep:    c.Processing.DefaultVideoFrameStep.Unwrap(),
+		DefaultVideoAttempts:     c.Processing.DefaultVideoAttempts.Unwrap(),
 	}, nil
 }

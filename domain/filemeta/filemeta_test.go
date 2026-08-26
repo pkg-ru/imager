@@ -138,6 +138,7 @@ func TestClone(t *testing.T) {
 		Faces:          []FaceInfo{{PixelBox: PixelBox{X: 1, Y: 2, Width: 3, Height: 4}, Confidence: 0.9}},
 		Objects:        []ObjectInfo{{PixelBox: PixelBox{X: 5, Y: 6, Width: 7, Height: 8}, Confidence: 0.8, Label: "dog"}},
 		LargestAIAsset: &AIAssetInfo{Width: 100, Height: 50, Format: "png", Key: "k"},
+		VideoFrameKey:  "photos/cat-jpg/x.jpg",
 		CreatedAt:      time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC),
 		UpdatedAt:      time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC),
 	}
@@ -148,12 +149,16 @@ func TestClone(t *testing.T) {
 	if *cp.LargestAIAsset == *(src.LargestAIAsset) && cp.LargestAIAsset == src.LargestAIAsset {
 		t.Fatal("LargestAIAsset not deep-copied")
 	}
+	if cp.VideoFrameKey != src.VideoFrameKey {
+		t.Fatalf("VideoFrameKey not copied: got %q, want %q", cp.VideoFrameKey, src.VideoFrameKey)
+	}
 
 	// Мутация копии не затрагивает оригинал.
 	cp.Faces[0].Confidence = 0.1
 	cp.Objects[0].Label = "cat"
 	cp.LargestAIAsset.Width = 999
-	if src.Faces[0].Confidence != 0.9 || src.Objects[0].Label != "dog" || src.LargestAIAsset.Width != 100 {
+	cp.VideoFrameKey = "other.jpg"
+	if src.Faces[0].Confidence != 0.9 || src.Objects[0].Label != "dog" || src.LargestAIAsset.Width != 100 || src.VideoFrameKey != "photos/cat-jpg/x.jpg" {
 		t.Fatalf("mutation of clone leaked into source: %+v", src)
 	}
 
@@ -179,6 +184,7 @@ func TestJSONRoundTrip(t *testing.T) {
 		Faces:          []FaceInfo{{PixelBox: PixelBox{X: 120, Y: 80, Width: 64, Height: 64}, Confidence: 0.97}},
 		Objects:        []ObjectInfo{{PixelBox: PixelBox{X: 40, Y: 30, Width: 220, Height: 180}, Confidence: 0.88, Label: "person"}},
 		LargestAIAsset: &AIAssetInfo{Width: 4000, Height: 3000, Format: "webp", Key: "photos/cat-jpg/x4000@2.webp"},
+		VideoFrameKey:  "photos/cat-jpg/x.jpg",
 		CreatedAt:      time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC),
 		UpdatedAt:      time.Date(2026, 8, 24, 13, 5, 12, 0, time.UTC),
 	}
@@ -192,6 +198,7 @@ func TestJSONRoundTrip(t *testing.T) {
 		`"x":120`, `"y":80`, `"w":64`, `"h":64`, `"confidence":0.97`,
 		`"objects":[`, `"label":"person"`,
 		`"largest_ai_asset":{`, `"width":4000`, `"format":"webp"`, `"key":"photos/cat-jpg/x4000@2.webp"`,
+		`"video_frame_key":"photos/cat-jpg/x.jpg"`,
 		`"created_at":"2026-08-24T13:00:00Z"`,
 		`"updated_at":"2026-08-24T13:05:12Z"`,
 	} {
@@ -217,7 +224,7 @@ func TestJSONOmitEmpty(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	s := string(data)
-	for _, unwanted := range []string{"faces", "objects", "largest_ai_asset"} {
+	for _, unwanted := range []string{"faces", "objects", "largest_ai_asset", "video_frame_key"} {
 		if strings.Contains(s, unwanted) {
 			t.Fatalf("empty field %q must be omitted, got %s", unwanted, s)
 		}

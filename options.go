@@ -12,6 +12,7 @@ import (
 	"github.com/pkg-ru/imager/ports/detector"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // Options — параметры программной сборки pipeline без YAML (New).
@@ -58,6 +59,9 @@ type Options struct {
 	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция
 	// остаётся в процессоре).
 	Detector detector.Detector
+	// VideoExtractor — извлекатель кадра из видео (ffmpeg). nil = видео
+	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
+	VideoExtractor videoframe.Extractor
 }
 
 // App — собранный pipeline (обёртка над httpapi.App).
@@ -96,6 +100,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		MetadataEnabled: opts.MetadataEnabled,
 		MetadataDir:     opts.MetadataDir,
 		Detector:        opts.Detector,
+		VideoExtractor:  opts.VideoExtractor,
 	})
 	if err != nil {
 		return nil, err

@@ -21,6 +21,7 @@ import (
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // Logger — единый интерфейс логирования из observability.
@@ -90,6 +91,22 @@ type Deps struct {
 	// nil = детекция остаётся в процессоре (self-detection).
 	// Используется только вместе с Metadata; оба nil или оба заданы.
 	Detector detector.Detector
+	// VideoExtractor — извлекатель кадра из видео (ffmpeg). nil = видео
+	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
+	VideoExtractor videoframe.Extractor
+	// DefaultVideoFramePercent — процент от длительности видео, на котором
+	// выбирается кадр (0-100). 0 = дефолт 50.
+	DefaultVideoFramePercent int64
+	// DefaultVideoMinContrast — минимальная контрастность кадра (0-1), ниже
+	// которой кадр считается неудачным. 0 = проверка контрастности
+	// пропускается.
+	DefaultVideoMinContrast float64
+	// DefaultVideoFrameStep — на сколько кадров идти вперёд при неудачной
+	// проверке контрастности. 0 = дефолт 1.
+	DefaultVideoFrameStep int64
+	// DefaultVideoAttempts — сколько всего попыток извлечения кадра. 0 =
+	// дефолт 3.
+	DefaultVideoAttempts int64
 }
 
 func (d *Deps) validate() error {
@@ -275,6 +292,14 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 		_ = st.Close()
 		// Кэш уже заполнен другим запросом — читаем из remote.
 		return s.readResultBuffer(ctx, key)
+	}
+
+	// Видео-источник и не-original запрос: ассет генерируется из ОДНОГО
+	// кадра видео (извлечённого через VideoExtractor или закэшированного
+	// x.jpg), а не из самого видео (процессоры не умеют декодировать
+	// видео). Оригинал видео отдаётся как есть через serveOriginal выше.
+	if isVideoFormat(req.SourceFormat().String()) {
+		return s.generateVideoLocked(ctx, key, req)
 	}
 
 	// Поиск и открытие источника одним round-trip: Open возвращает
@@ -469,15 +494,22 @@ func (s *Service) resolveOrientation(req *asset.Request) *processing.Orientation
 // Ватермарка: пресет → path-policy → default (см. resolveWatermark).
 // Ориентация: пресет → default (см. resolveOrientation).
 func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, error) {
+	srcFmt, err := processing.ParseFormat(req.SourceFormat().String())
+	if err != nil {
+		return nil, err
+	}
+	return s.buildPlanForSource(req, srcFmt)
+}
+
+// buildPlanForSource строит план обработки с заданным исходным форматом.
+// Для видео-источников исходным форматом служит JPEG (извлечённый кадр),
+// а не сам видео-формат (процессоры не умеют декодировать видео).
+func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Format) (*processing.ProcessingPlan, error) {
 	// Кроп и trim — НЕЗАВИСИМЫЕ фильтры. Transform URL — код вида
 	// "c"/"t"/"ct"/"sc"/"fc"/"oc"/"sct"/"fct"/"oct": trim в коде всегда
 	// последний ("t"-суффикс). Операция плана — только режим кропа/ресайза,
 	// trim выделяется в отдельное булево поле (применяется первым).
 	op, trim := transformFromPlan(req.Transform())
-	srcFmt, err := processing.ParseFormat(req.SourceFormat().String())
-	if err != nil {
-		return nil, err
-	}
 	outFmt, err := processing.ParseFormat(req.OutputFormat().String())
 	if err != nil {
 		return nil, err
@@ -926,12 +958,28 @@ func isOriginalRequest(req *asset.Request) bool {
 		return false
 	}
 	// Выходной формат должен совпадать с исходным (иначе нужна конвертация).
-	srcFmt, err1 := processing.ParseFormat(req.SourceFormat().String())
-	outFmt, err2 := processing.ParseFormat(req.OutputFormat().String())
-	if err1 != nil || err2 != nil {
-		return false
+	// Сравнение выполняется по нормализованным строкам, чтобы работало и для
+	// видео-форматов (mp4/webm/mov/mkv/avi/m4v), которые processing.ParseFormat
+	// не распознаёт (он знает только картинки). Для картинок нормализация
+	// через ParseFormat приводит алиасы к каноническому виду (jpg→jpeg,
+	// heic→heif, jpegxl→jxl).
+	return normalizeFormatForCompare(req.SourceFormat().String()) ==
+		normalizeFormatForCompare(req.OutputFormat().String())
+}
+
+// normalizeFormatForCompare приводит формат к канонической строке для
+// сравнения srcFmt==outFmt. Для картинок использует processing.ParseFormat
+// (нормализует алиасы jpg→jpeg и т.п.); для видео-форматов (которые ParseFormat
+// не знает) возвращает нижний регистр как есть.
+func normalizeFormatForCompare(f string) string {
+	lower := strings.ToLower(f)
+	if isVideoFormat(lower) {
+		return lower
 	}
-	return srcFmt == outFmt
+	if parsed, err := processing.ParseFormat(lower); err == nil {
+		return parsed.String()
+	}
+	return lower
 }
 
 // serveOriginal — fast-path отдачи ОРИГИНАЛА: открывает исходный файл и

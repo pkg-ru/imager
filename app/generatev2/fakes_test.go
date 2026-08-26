@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
-	"github.com/pkg-ru/imager/domain/object"
 )
 
 // wantOutcome проверяет, что err является *OutcomeError с указанной
@@ -97,8 +97,10 @@ func (s *memStream) Metadata() object.ObjectMetadata { return s.meta }
 
 // memSourceStore — storage.SourceStore в памяти.
 type memSourceStore struct {
-	mu    sync.Mutex
-	files map[object.ObjectKey][]byte
+	mu        sync.Mutex
+	files     map[object.ObjectKey][]byte
+	openCalls int
+	openKeys  []object.ObjectKey
 }
 
 func newMemSourceStore() *memSourceStore {
@@ -124,11 +126,20 @@ func (s *memSourceStore) Lookup(_ context.Context, key object.ObjectKey) (object
 func (s *memSourceStore) Open(_ context.Context, key object.ObjectKey) (object.Artifact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.openCalls++
+	s.openKeys = append(s.openKeys, key)
 	d, ok := s.files[key]
 	if !ok {
 		return nil, &object.NotFoundError{Key: key}
 	}
 	return &memArtifact{buf: append([]byte(nil), d...), meta: object.ObjectMetadata{Key: key, Size: int64(len(d))}}, nil
+}
+
+// openedKeys возвращает копию списка ключей, открытых через Open.
+func (s *memSourceStore) openedKeys() []object.ObjectKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]object.ObjectKey(nil), s.openKeys...)
 }
 
 var _ storage.SourceStore = (*memSourceStore)(nil)
@@ -143,6 +154,13 @@ type memResultStore struct {
 
 func newMemResultStore() *memResultStore {
 	return &memResultStore{data: map[object.ObjectKey][]byte{}}
+}
+
+// add напрямую кладёт данные в store (для подготовки состояния в тестах).
+func (r *memResultStore) add(key object.ObjectKey, data []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[key] = append([]byte(nil), data...)
 }
 
 func (r *memResultStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
@@ -201,6 +219,21 @@ func (r *memResultStore) Delete(_ context.Context, key object.ObjectKey) error {
 	return nil
 }
 
+// has возвращает true, если объект с ключом опубликован.
+func (r *memResultStore) has(key object.ObjectKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.data[key]
+	return ok
+}
+
+// get возвращает данные, опубликованные под ключом (nil, если нет).
+func (r *memResultStore) get(key object.ObjectKey) []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]byte(nil), r.data[key]...)
+}
+
 func (r *memResultStore) Stats(_ context.Context) (object.StoreStats, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -217,25 +250,30 @@ var _ storage.ResultStore = (*memResultStore)(nil)
 // fakeProcessor — processor.Processor с детерминированным выводом и
 // возможностью эмулировать ошибки/блокировку.
 type fakeProcessor struct {
-	mu      sync.Mutex
-	payload []byte
-	procErr error
-	block   chan struct{}
-	calls   int
-	lastCtx context.Context
+	mu        sync.Mutex
+	payload   []byte
+	procErr   error
+	block     chan struct{}
+	calls     int
+	lastCtx   context.Context
+	lastInput []byte
 }
 
 func newFakeProcessor(payload []byte) *fakeProcessor {
 	return &fakeProcessor{payload: payload}
 }
 
-func (f *fakeProcessor) Process(ctx context.Context, _ processor.Input, out io.Writer) (*processor.Result, error) {
+func (f *fakeProcessor) Process(ctx context.Context, in processor.Input, out io.Writer) (*processor.Result, error) {
 	f.mu.Lock()
 	f.calls++
 	f.lastCtx = ctx
 	block := f.block
 	procErr := f.procErr
 	payload := f.payload
+	if in.Source != nil {
+		data, _ := io.ReadAll(in.Source)
+		f.lastInput = data
+	}
 	f.mu.Unlock()
 
 	if block != nil {
@@ -258,6 +296,12 @@ func (f *fakeProcessor) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeProcessor) lastInputData() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastInput
 }
 
 func (f *fakeProcessor) setBlock(ch chan struct{}) {

@@ -328,3 +328,80 @@ func TestDefaultLoopVar(t *testing.T) {
 		t.Errorf("DefaultLoop = %v, want true", compiled.DefaultLoop)
 	}
 }
+
+func TestCompileDefaultVideo(t *testing.T) {
+	cfg := &Config{
+		Version:    dynamic.String(SupportedVersion),
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{
+			DefaultQuality:           dynamic.Int64(80),
+			DefaultVideoFramePercent: 25,
+			DefaultVideoMinContrast:  0.3,
+			DefaultVideoFrameStep:    5,
+			DefaultVideoAttempts:     10,
+		},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if compiled.DefaultVideoFramePercent != 25 {
+		t.Errorf("DefaultVideoFramePercent = %d, want 25", compiled.DefaultVideoFramePercent)
+	}
+	if compiled.DefaultVideoMinContrast != 0.3 {
+		t.Errorf("DefaultVideoMinContrast = %v, want 0.3", compiled.DefaultVideoMinContrast)
+	}
+	if compiled.DefaultVideoFrameStep != 5 {
+		t.Errorf("DefaultVideoFrameStep = %d, want 5", compiled.DefaultVideoFrameStep)
+	}
+	if compiled.DefaultVideoAttempts != 10 {
+		t.Errorf("DefaultVideoAttempts = %d, want 10", compiled.DefaultVideoAttempts)
+	}
+}
+
+func TestCompileDefaultVideoDefaults(t *testing.T) {
+	cfg := &Config{
+		Version:    dynamic.String(SupportedVersion),
+		Watermarks: wmDecls("logo"),
+		Policy:     policyConfigForTest(),
+		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+	}
+	compiled, err := cfg.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if compiled.DefaultVideoFramePercent != 0 || compiled.DefaultVideoMinContrast != 0 ||
+		compiled.DefaultVideoFrameStep != 0 || compiled.DefaultVideoAttempts != 0 {
+		t.Errorf("expected zero video defaults, got %+v", compiled)
+	}
+}
+
+func TestValidateDefaultVideoErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*ProcessingConfig)
+	}{
+		{"frame percent too high", func(p *ProcessingConfig) { p.DefaultVideoFramePercent = 101 }},
+		{"frame percent negative", func(p *ProcessingConfig) { p.DefaultVideoFramePercent = -1 }},
+		{"min contrast too high", func(p *ProcessingConfig) { p.DefaultVideoMinContrast = 1.5 }},
+		{"min contrast negative", func(p *ProcessingConfig) { p.DefaultVideoMinContrast = -0.1 }},
+		{"frame step zero", func(p *ProcessingConfig) { p.DefaultVideoFrameStep = 0 }},
+		{"frame step negative", func(p *ProcessingConfig) { p.DefaultVideoFrameStep = -3 }},
+		{"attempts zero", func(p *ProcessingConfig) { p.DefaultVideoAttempts = 0 }},
+		{"attempts negative", func(p *ProcessingConfig) { p.DefaultVideoAttempts = -2 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Version:    dynamic.String(SupportedVersion),
+				Policy:     policyConfigForTest(),
+				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+			}
+			tc.mutate(&cfg.Processing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/httpapi"
 	"github.com/pkg-ru/imager/adapters/pixel"
 	"github.com/pkg-ru/imager/adapters/storage/fs"
+	"github.com/pkg-ru/imager/adapters/videoframe/ffmpeg"
 	"github.com/pkg-ru/imager/bootstrap"
 	"github.com/pkg-ru/imager/observability"
 )
@@ -151,6 +152,9 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	}
 
 	// 4) Composition root: собирает pipeline (fail-fast на invalid config).
+	// Видео-экстрактор кадра (ffmpeg/ffprobe из PATH). Если бинарники
+	// недоступны, извлечение кадра вернёт понятную ошибку на запросе.
+	videoExt := ffmpeg.NewDefault()
 	app, err := httpapi.Build(context.Background(), httpapi.AppOptions{
 		Config:          rc.Pipeline,
 		HTTP:            rc.HTTP,
@@ -164,6 +168,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 		MetadataEnabled: rc.MetadataEnabled,
 		MetadataDir:     rc.MetadataDir,
 		Detector:        proc.Detector,
+		VideoExtractor:  videoExt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("imager: build: %w", err)
