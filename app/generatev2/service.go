@@ -199,7 +199,23 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	}
 	key := object.ObjectKey(url)
 
-	// Fast-path cache lookup (без гонки Exists+Open).
+	// Ограничение: отдаём ТОЛЬКО медиа-файлы (картинки/анимации/векторы/
+	// видео). Не-медиа форматы (HTML, метаданные, исходники и т.п.) не
+	// отдаются, даже если файл существует.
+	if !isMediaFormat(req.OutputFormat().String()) {
+		return nil, outcome(OutcomeInvalid, "unsupported media format", nil)
+	}
+
+	// Fast-path: запрос ОРИГИНАЛА (size=x, без transform, выходной формат
+	// равен исходному) — отдаём исходный файл как есть, без построения
+	// плана, без чтения метаданных, без обработки процессором.
+	if isOriginalRequest(req) {
+		return s.serveOriginal(ctx, key, url, req)
+	}
+
+	// Fast-path cache lookup (без гонки Exists+Open): если готовый ассет
+	// уже существует, отдаём его как есть, без построения плана и без
+	// получения информации.
 	if st, ok, err := s.tryCache(ctx, key); err != nil {
 		return nil, err
 	} else if ok {
@@ -876,3 +892,77 @@ func isTooManyConcurrency(err error) bool {
 	}
 	return strings.Contains(err.Error(), "too many concurrent")
 }
+
+// mediaFormats — множество форматов, которые сервис отдаёт клиенту.
+// Только медиа-файлы: картинки/анимации (jpeg/png/webp/gif/avif/heif/apng/
+// jxl), векторы (svg) и видео (mp4/webm/mov/mkv/avi/m4v). Любые другие
+// форматы (HTML, метаданные, исходники и т.п.) не отдаются, даже если
+// файл существует.
+var mediaFormats = map[string]struct{}{
+	"jpeg": {}, "jpg": {}, "png": {}, "webp": {}, "gif": {},
+	"avif": {}, "heif": {}, "heic": {}, "apng": {}, "jxl": {},
+	"svg": {}, "svgz": {},
+	"mp4": {}, "webm": {}, "mov": {}, "mkv": {}, "avi": {}, "m4v": {},
+}
+
+// isMediaFormat сообщает, является ли формат (расширение) медиа-файлом,
+// который сервис отдаёт клиенту.
+func isMediaFormat(f string) bool {
+	_, ok := mediaFormats[strings.ToLower(f)]
+	return ok
+}
+
+// isOriginalRequest сообщает, является ли запрос запросом ОРИГИНАЛА:
+// size=x (сохранить исходный размер), без transform и с выходным форматом,
+// совпадающим с исходным. Такой запрос отдаётся как есть, без обработки.
+func isOriginalRequest(req *asset.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.Transform() != "" {
+		return false
+	}
+	if !req.Size().IsOriginal() {
+		return false
+	}
+	// Выходной формат должен совпадать с исходным (иначе нужна конвертация).
+	srcFmt, err1 := processing.ParseFormat(req.SourceFormat().String())
+	outFmt, err2 := processing.ParseFormat(req.OutputFormat().String())
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return srcFmt == outFmt
+}
+
+// serveOriginal — fast-path отдачи ОРИГИНАЛА: открывает исходный файл и
+// отдаёт его как есть, без построения плана, без чтения метаданных и без
+// обработки процессором.
+func (s *Service) serveOriginal(ctx context.Context, key object.ObjectKey, url string, req *asset.Request) (*Result, error) {
+	srcKey := s.sourceKey(req)
+	src, err := s.deps.Sources.Open(ctx, srcKey)
+	if err != nil {
+		if object.IsNotFound(err) {
+			return nil, outcome(OutcomeNotFound, "source not found", err)
+		}
+		return nil, s.mapSourceError(ctx, err)
+	}
+	return &Result{
+		Key:       key,
+		URL:       url,
+		Request:   req,
+		Opened:    &artifactStream{art: src},
+		FromCache: false,
+	}, nil
+}
+
+// artifactStream — object.Stream поверх object.Artifact (исходного файла).
+// Отдаёт исходник как есть; Close закрывает артефакт.
+type artifactStream struct {
+	art object.Artifact
+}
+
+func (s *artifactStream) Read(p []byte) (int, error) { return s.art.Read(p) }
+
+func (s *artifactStream) Close() error { return s.art.Close() }
+
+func (s *artifactStream) Metadata() object.ObjectMetadata { return s.art.Metadata() }
