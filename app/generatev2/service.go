@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg-ru/imager/coordination/singleflight"
@@ -261,28 +262,66 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	}
 
 	// Поиск и открытие источника одним round-trip: Open возвращает
-	// ErrNotFound, если объект отсутствует, поэтому предварительный Lookup
+	// ErrNotFound, если источник отсутствует, поэтому предварительный Lookup
 	// (дополнительный сетевой запрос для remote-хранилищ) не нужен.
+	//
+	// Открытие источника и построение плана обработки НЕ зависят друг от
+	// друга, поэтому выполняются параллельно (fan-out/fan-in через каналы).
+	// Это сокращает критический путь генерации на время самого медленного
+	// из двух шагов вместо их суммы.
 	srcKey := s.sourceKey(req)
-	openStart := time.Now()
-	src, err := s.deps.Sources.Open(ctx, srcKey)
-	if err != nil {
-		s.metrics.IncStorageOp(observability.OpSourceOpen, true)
-		s.metrics.ObserveStorageDuration(observability.OpSourceOpen, true, time.Since(openStart))
-		if object.IsNotFound(err) {
-			return nil, outcome(OutcomeNotFound, "source not found", err)
-		}
-		return nil, s.mapSourceError(ctx, err)
+
+	type openResult struct {
+		src object.Artifact
+		err error
 	}
-	s.metrics.IncStorageOp(observability.OpSourceOpen, false)
-	s.metrics.ObserveStorageDuration(observability.OpSourceOpen, false, time.Since(openStart))
+	type planResult struct {
+		plan *processing.ProcessingPlan
+		err  error
+	}
+
+	openCh := make(chan openResult, 1)
+	planCh := make(chan planResult, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		openStart := time.Now()
+		src, err := s.deps.Sources.Open(ctx, srcKey)
+		if err != nil {
+			s.metrics.IncStorageOp(observability.OpSourceOpen, true)
+			s.metrics.ObserveStorageDuration(observability.OpSourceOpen, true, time.Since(openStart))
+		} else {
+			s.metrics.IncStorageOp(observability.OpSourceOpen, false)
+			s.metrics.ObserveStorageDuration(observability.OpSourceOpen, false, time.Since(openStart))
+		}
+		openCh <- openResult{src: src, err: err}
+	}()
+	go func() {
+		defer wg.Done()
+		plan, err := s.buildPlan(req)
+		planCh <- planResult{plan: plan, err: err}
+	}()
+	wg.Wait()
+	close(openCh)
+	close(planCh)
+
+	or := <-openCh
+	if or.err != nil {
+		if object.IsNotFound(or.err) {
+			return nil, outcome(OutcomeNotFound, "source not found", or.err)
+		}
+		return nil, s.mapSourceError(ctx, or.err)
+	}
+	src := or.src
 	defer src.Close()
 
-	// План обработки.
-	plan, err := s.buildPlan(req)
-	if err != nil {
-		return nil, outcome(OutcomeInvalid, "build processing plan", err)
+	pr := <-planCh
+	if pr.err != nil {
+		return nil, outcome(OutcomeInvalid, "build processing plan", pr.err)
 	}
+	plan := pr.plan
 
 	// C1: проверка лимитов политики ДО обработки. Размер источника берём из
 	// метаданных открытого объекта (без дополнительного round-trip). Размеры
@@ -605,12 +644,17 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	// не создавать на каждый publish. Размеры берём из Result процессора
 	// (0 = неизвестно → ShouldTrackAsAIAsset вернёт false).
 	// Метаданные привязаны к АССЕТУ-результату, поэтому ключом служит key.
+	//
+	// Обновление largest_ai_asset НЕ влияет на результат генерации (клиент
+	// уже получил буфер), поэтому выполняется асинхронно (fire-and-forget)
+	// вместе с записью created_unix. Обе операции — best-effort и не
+	// блокируют ответ клиенту. Используется context.Background, чтобы
+	// запись завершилась даже после отмены запроса.
 	if procRes != nil && filemeta.ShouldTrackAsAIAsset(
 		procRes.SourceWidth, procRes.SourceHeight,
 		procRes.Width, procRes.Height,
 	) {
-		s.updateLargestAIAsset(
-			ctx,
+		s.updateLargestAIAssetAsync(
 			key,
 			in.Plan.OutputFormat.String(),
 			procRes.Width, procRes.Height,

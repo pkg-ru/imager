@@ -305,12 +305,23 @@ func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	}
 	_ = res.Close()
 
-	// created_unix записывается асинхронно; largest_ai_asset — синхронно.
-	metaS.waitForUpdate(t, 1)
-	metaS.mu.Lock()
-	saved := metaS.data["photo-png/100x100.webp"]
-	metaS.mu.Unlock()
-	if saved == nil || saved.LargestAIAsset == nil {
+	// created_unix и largest_ai_asset записываются асинхронно (fire-and-forget).
+	// Ждём, пока largest_ai_asset появится в sidecar (polling с таймаутом).
+	deadline := time.Now().Add(2 * time.Second)
+	var saved *filemeta.FileMetadata
+	for {
+		metaS.mu.Lock()
+		saved = metaS.data["photo-png/100x100.webp"]
+		metaS.mu.Unlock()
+		if saved != nil && saved.LargestAIAsset != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("largest_ai_asset не сохранён: %+v", saved)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if saved.LargestAIAsset == nil {
 		t.Fatalf("largest_ai_asset не сохранён: %+v", saved)
 	}
 	if saved.LargestAIAsset.Width != 2000 || saved.LargestAIAsset.Height != 2000 {
@@ -409,4 +420,42 @@ func TestRecordAssetCreationTimeDisabled(t *testing.T) {
 	s := &Service{deps: Deps{Metadata: nil}}
 	// Не должен паниковать и не должен ничего писать.
 	s.recordAssetCreationTime(context.Background(), "asset.webp")
+}
+
+// TestEnsureDetectionsObjectCropOnlyObjects — план object-crop требует ТОЛЬКО
+// объекты (не лица): вызывается только DetectObjects, результат сохраняется
+// в sidecar. Проверяет корректность параллельной реализации детекции
+// (не теряет результаты и не вызывает лишние модели).
+func TestEnsureDetectionsObjectCropOnlyObjects(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	plan := testMetaPlan(t, processing.OpObjectCrop)
+
+	ready, boxes := s.ensureDetections(context.Background(), "src", plan, nil)
+	if !ready {
+		t.Fatalf("ready = false, want true")
+	}
+	// Только объекты: DetectObjects вызван 1 раз, DetectFaces — 0.
+	if got := det.objectsCalls.Load(); got != 1 {
+		t.Fatalf("DetectObjects calls = %d, want 1", got)
+	}
+	if got := det.facesCalls.Load(); got != 0 {
+		t.Fatalf("DetectFaces calls = %d, want 0", got)
+	}
+	// Боксы содержат только объект.
+	if len(boxes) != 1 {
+		t.Fatalf("boxes = %+v, want 1 (object)", boxes)
+	}
+	// Sidecar сохранил объекты, лица не тронуты.
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved == nil || len(saved.Objects) != 1 {
+		t.Fatalf("sidecar = %+v, want 1 object", saved)
+	}
+	if len(saved.Faces) != 0 {
+		t.Fatalf("sidecar faces = %+v, want empty", saved.Faces)
+	}
 }

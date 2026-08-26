@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/pkg-ru/imager/domain/filemeta"
@@ -153,27 +154,64 @@ func (s *Service) ensureDetectionsLocked(
 		if frame == nil || len(frame.Pixels) == 0 || frame.Width <= 0 || frame.Height <= 0 {
 			return nil, fmt.Errorf("generatev2: prepare RGB returned empty frame (asset=%s)", assetKey)
 		}
+
+		// DetectFaces и DetectObjects НЕ зависят друг от друга и используют
+		// один и тот же RGB-кадр, поэтому выполняются параллельно
+		// (fan-out/fan-in через каналы). Это сокращает время детекции до
+		// самого медленного из двух вызовов вместо их суммы. Оба детектора
+		// потокобезопасны (см. ports/detector и OnnxDetector).
+		type detectResult struct {
+			faces   []filemeta.FaceInfo
+			objects []filemeta.ObjectInfo
+			err     error
+		}
+		resCh := make(chan detectResult, 1)
+		var wg sync.WaitGroup
 		if detectFaces {
-			faces, err := s.deps.Detector.DetectFaces(ctx, frame.Pixels, frame.Width, frame.Height)
-			if err != nil {
-				return nil, fmt.Errorf("generatev2: detect faces (asset=%s): %w", assetKey, err)
-			}
-			// non-nil (в т.ч. пустой) срез — «проверено, пусто»: кэшируется.
-			// append([]FaceInfo{}, ...) гарантирует non-nil даже при пустом
-			// результате (append([]FaceInfo(nil), ...) вернул бы nil).
-			m.Faces = append([]filemeta.FaceInfo{}, faces...)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				faces, err := s.deps.Detector.DetectFaces(ctx, frame.Pixels, frame.Width, frame.Height)
+				if err != nil {
+					resCh <- detectResult{err: fmt.Errorf("generatev2: detect faces (asset=%s): %w", assetKey, err)}
+					return
+				}
+				resCh <- detectResult{faces: faces}
+			}()
 		}
 		if detectObjects {
-			objects, err := s.deps.Detector.DetectObjects(ctx, frame.Pixels, frame.Width, frame.Height)
-			if err != nil {
-				return nil, fmt.Errorf("generatev2: detect objects (asset=%s): %w", assetKey, err)
-			}
-			m.Objects = append([]filemeta.ObjectInfo{}, objects...)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				objects, err := s.deps.Detector.DetectObjects(ctx, frame.Pixels, frame.Width, frame.Height)
+				if err != nil {
+					resCh <- detectResult{err: fmt.Errorf("generatev2: detect objects (asset=%s): %w", assetKey, err)}
+					return
+				}
+				resCh <- detectResult{objects: objects}
+			}()
 		}
+		wg.Wait()
+		close(resCh)
+		for r := range resCh {
+			if r.err != nil {
+				return nil, r.err
+			}
+			if r.faces != nil {
+				// non-nil (в т.ч. пустой) срез — «проверено, пусто»: кэшируется.
+				// append([]FaceInfo{}, ...) гарантирует non-nil даже при пустом
+				// результате (append([]FaceInfo(nil), ...) вернул бы nil).
+				m.Faces = append([]filemeta.FaceInfo{}, r.faces...)
+			}
+			if r.objects != nil {
+				m.Objects = append([]filemeta.ObjectInfo{}, r.objects...)
+			}
+		}
+
 		// Сохраняем под уже удерживаемой keyed-блокировкой "meta:"+assetKey
 		// (Coordinator.Do выше). Save вместо Update (атомарный read-modify-write
 		// внутри Update сделал бы ВТОРОЙ Load того же sidecar-файла за один
-		// запрос и занял бы вложенную блокировку на тот же ключ). Атомарность
+		// запрос и вызов бы вложенную блокировку на тот же ключ). Атомарность
 		// записи обеспечивает temp+rename внутри MetadataStore.Save.
 		if err := s.deps.Metadata.Save(ctx, assetKey.String(), m); err != nil {
 			return nil, fmt.Errorf("generatev2: save detections (asset=%s): %w", assetKey, err)
@@ -243,6 +281,36 @@ func (s *Service) updateLargestAIAsset(
 	if err != nil {
 		s.log.Warnf("generatev2: update largest_ai_asset failed (asset=%s): %v", assetKey, err)
 	}
+}
+
+// updateLargestAIAssetAsync — асинхронная (fire-and-forget) версия
+// updateLargestAIAsset. Обновление largest_ai_asset НЕ влияет на результат
+// генерации (клиент уже получил буфер), поэтому выполняется в фоне и не
+// блокирует ответ клиенту.
+//
+// Используется context.Background, чтобы запись завершилась даже после
+// отмены запроса (иначе обновление терялось бы при быстром ответе).
+// best-effort: ошибки логируются и не влияют на генерацию.
+func (s *Service) updateLargestAIAssetAsync(
+	assetKey object.ObjectKey,
+	outFormat string,
+	outW, outH, srcW, srcH int,
+) {
+	if s.deps.Metadata == nil {
+		return
+	}
+	if !filemeta.ShouldTrackAsAIAsset(srcW, srcH, outW, outH) {
+		return
+	}
+	go func() {
+		s.updateLargestAIAsset(
+			context.Background(),
+			assetKey,
+			outFormat,
+			outW, outH,
+			srcW, srcH,
+		)
+	}()
 }
 
 // recordAssetCreationTime — ленивая асинхронная запись unix-времени создания
