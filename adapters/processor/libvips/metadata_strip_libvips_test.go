@@ -40,6 +40,31 @@ func makeBasePng(t *testing.T) []byte {
 	return out.Bytes()
 }
 
+// Имена тестовых полей метаданных. Зарезервированные имена ("exif-data",
+// "icc-profile-data") НЕ используются: кодеки libvips требуют для них тип
+// VipsBlob, а установить blob через govips v2.18.0 невозможно — см. комментарий
+// setTestMetadata. Не-зарезервированные имена с теми же префиксами проверяют
+// ту же семантику зачистки (RemoveMetadata удаляет все не-технические поля).
+const (
+	testExifField = "exif-fake-data"
+	testXmpField  = "xmp-fake-data"
+	testIccField  = "icc-fake-data"
+)
+
+// setTestMetadata устанавливает на ImageRef пользовательские метаданные
+// (EXIF, XMP, ICC) для проверки их зачистки. Используется SetString вместо
+// SetBlob: govips v2.18.0 vipsImageSetBlob (operations.go:780) передаёт
+// unsafe.Pointer(&data) (указатель на Go slice header) в C, что нарушает
+// правила cgo и падает с "cgo argument has Go pointer to unpinned Go pointer"
+// на Go >= 1.21. SetString копирует значение через C.CString — cgo-безопасно.
+// stripAllMetadata удаляет поля по имени независимо от типа (RemoveMetadata —
+// все не-технические поля), поэтому проверка зачистки сохраняет смысл.
+func setTestMetadata(v *vips.ImageRef) {
+	v.SetString(testExifField, "fake-exif")
+	v.SetString(testXmpField, "<x:xmpmeta>test</x:xmpmeta>")
+	v.SetString(testIccField, "fake-icc")
+}
+
 // makePngWithMetadata создаёт PNG, содержащий EXIF, XMP и ICC-профиль.
 // Метаданные добавляются через govips и сохраняются в PNG (StripMetadata=false).
 func makePngWithMetadata(t *testing.T) []byte {
@@ -50,9 +75,7 @@ func makePngWithMetadata(t *testing.T) []byte {
 	}
 	defer v.Close()
 
-	v.SetBlob("exif-data", []byte{0x45, 0x78, 0x69, 0x66, 0x00, 0x00}) // "Exif\0\0"
-	v.SetString("xmp-data", "<x:xmpmeta>test</x:xmpmeta>")
-	v.SetBlob("icc-profile-data", []byte{0x00, 0x01, 0x02, 0x03})
+	setTestMetadata(v)
 
 	p := vips.NewPngExportParams()
 	p.StripMetadata = false // сохранить метаданные в PNG
@@ -71,11 +94,11 @@ func assertNoUserMetadata(t *testing.T, img *vips.ImageRef) {
 		if strings.HasPrefix(f, "exif-") {
 			t.Errorf("field %q leaked: EXIF/GPS metadata not stripped", f)
 		}
-		if f == "xmp-data" {
+		if f == testXmpField {
 			t.Errorf("field %q leaked: XMP metadata not stripped", f)
 		}
-		if f == "icc-profile-data" {
-			t.Errorf("field %q leaked: ICC profile not stripped", f)
+		if f == testIccField {
+			t.Errorf("field %q leaked: ICC-like metadata not stripped", f)
 		}
 	}
 }
@@ -90,17 +113,15 @@ func TestStripAllMetadataRemovesUserMetadata(t *testing.T) {
 	}
 	defer v.Close()
 
-	v.SetBlob("exif-data", []byte{0x45, 0x78, 0x69, 0x66})
-	v.SetString("xmp-data", "<x:xmpmeta>test</x:xmpmeta>")
-	v.SetBlob("icc-profile-data", []byte{0x00, 0x01, 0x02, 0x03})
+	setTestMetadata(v)
 
 	// Санити-проверка: метаданные действительно установлены до вызова.
 	fields := v.GetFields()
-	if !hasField(fields, "exif-data") || !hasField(fields, "icc-profile-data") {
+	if !hasField(fields, testExifField) || !hasField(fields, testIccField) {
 		t.Fatal("precondition failed: metadata not present on ImageRef")
 	}
 
-	if err := stripAllMetadata(v); err != nil {
+	if err := stripAllMetadata(v, false); err != nil {
 		t.Fatalf("stripAllMetadata: %v", err)
 	}
 	assertNoUserMetadata(t, v)
@@ -123,7 +144,7 @@ func TestProcessStripsMetadataPng(t *testing.T) {
 	}
 
 	src := makePngWithMetadata(t)
-	out, err := b.process(context.Background(), src, plan, false, nil)
+	out, err := b.process(context.Background(), src, plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -163,7 +184,7 @@ func TestProcessStripsMetadataHeifJxl(t *testing.T) {
 			t.Fatalf("%s: newLibvipsBackend: %v", c.name, err)
 		}
 
-		res, err := b.process(context.Background(), makePngWithMetadata(t), plan, false, nil)
+		res, err := b.process(context.Background(), makePngWithMetadata(t), plan, false, nil, nil)
 		if err != nil {
 			// Кодек может отсутствовать в сборке libvips (heif/jxl не
 			// скомпилированы). Это не провал зачистки — пропускаем.

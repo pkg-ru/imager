@@ -621,3 +621,599 @@ admin:
 		})
 	}
 }
+
+// TestParseRuntimeConfigLibvipsEncoders проверяет декодирование секции
+// libvips.encoders (per-format параметры кодировщиков).
+func TestParseRuntimeConfigLibvipsEncoders(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
+version: "1"
+policy:
+	global:
+		authorization: unsafe
+libvips:
+	encoders:
+		webp-reduction-effort: 2
+		avif-speed: 8
+		png-compression-level: 9
+		jxl-effort: 3
+		jpeg-progressive: true
+		png-interlace: true
+		png-palette: true
+		png-palette-colors: 128
+		png-palette-bit-depth: 4
+		gif-bit-depth: 4
+`, "\t", "  ")))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	e := rc.Libvips.Encoders
+	if e.WebPReductionEffort != 2 {
+		t.Errorf("WebPReductionEffort = %d, want 2", e.WebPReductionEffort)
+	}
+	if e.AVIFSpeed != 8 {
+		t.Errorf("AVIFSpeed = %d, want 8", e.AVIFSpeed)
+	}
+	if e.PNGCompression != 9 {
+		t.Errorf("PNGCompression = %d, want 9", e.PNGCompression)
+	}
+	if e.JXLEffort != 3 {
+		t.Errorf("JXLEffort = %d, want 3", e.JXLEffort)
+	}
+	if !e.JPEGProgressive {
+		t.Error("JPEGProgressive must be true")
+	}
+	if !e.PNGInterlace {
+		t.Error("PNGInterlace must be true")
+	}
+	if !e.PNGPalette {
+		t.Error("PNGPalette must be true")
+	}
+	if e.PNGPaletteColors != 128 {
+		t.Errorf("PNGPaletteColors = %d, want 128", e.PNGPaletteColors)
+	}
+	if e.PNGPaletteBitDepth != 4 {
+		t.Errorf("PNGPaletteBitDepth = %d, want 4", e.PNGPaletteBitDepth)
+	}
+	if e.GIFBitDepth != 4 {
+		t.Errorf("GIFBitDepth = %d, want 4", e.GIFBitDepth)
+	}
+}
+
+// TestParseRuntimeConfigLibvipsEncodersDefaults проверяет дефолты секции
+// libvips.encoders при её отсутствии.
+func TestParseRuntimeConfigLibvipsEncodersDefaults(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
+version: "1"
+policy:
+	global:
+		authorization: unsafe
+`, "\t", "  ")))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	e := rc.Libvips.Encoders
+	if e.WebPReductionEffort != 0 || e.AVIFSpeed != 0 || e.PNGCompression != 0 ||
+		e.JXLEffort != 0 || e.JPEGProgressive || e.PNGInterlace || e.PNGPalette ||
+		e.PNGPaletteColors != 0 || e.PNGPaletteBitDepth != 0 || e.GIFBitDepth != 0 {
+		t.Errorf("encoders = %+v, want zero values (= встроенные умолчания движка)", e)
+	}
+}
+
+// TestParseRuntimeConfigLibvipsShrinkOnLoad — секция libvips.shrink-on-load:
+// явное значение, отсутствие (дефолт = включено) и неизвестный ключ
+// (strict-декодирование).
+func TestParseRuntimeConfigLibvipsShrinkOnLoad(t *testing.T) {
+	t.Run("explicit false", func(t *testing.T) {
+		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
+version: "1"
+policy:
+	global:
+		authorization: unsafe
+libvips:
+	shrink-on-load:
+		enabled: false
+`, "\t", "  ")))
+		if err != nil {
+			t.Fatalf("ParseRuntimeConfig: %v", err)
+		}
+		if rc.Libvips.ShrinkOnLoad.Enabled() {
+			t.Error("shrink-on-load.enabled=false must disable shrink-on-load")
+		}
+	})
+	t.Run("explicit true", func(t *testing.T) {
+		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
+version: "1"
+policy:
+	global:
+		authorization: unsafe
+libvips:
+	shrink-on-load:
+		enabled: true
+`, "\t", "  ")))
+		if err != nil {
+			t.Fatalf("ParseRuntimeConfig: %v", err)
+		}
+		if !rc.Libvips.ShrinkOnLoad.Enabled() {
+			t.Error("shrink-on-load.enabled=true must keep shrink-on-load enabled")
+		}
+	})
+	t.Run("absent defaults to enabled", func(t *testing.T) {
+		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
+version: "1"
+policy:
+	global:
+		authorization: unsafe
+`, "\t", "  ")))
+		if err != nil {
+			t.Fatalf("ParseRuntimeConfig: %v", err)
+		}
+		if !rc.Libvips.ShrinkOnLoad.Enabled() {
+			t.Error("absent shrink-on-load must default to enabled")
+		}
+	})
+	t.Run("unknown field rejected", func(t *testing.T) {
+		yaml := strings.ReplaceAll(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  shrink-on-load:
+    jpeg-quality: 80
+`, "\t", "  ")
+		if _, err := ParseRuntimeConfig([]byte(yaml)); err == nil {
+			t.Fatal("expected error for unknown libvips.shrink-on-load.jpeg-quality field")
+		}
+	})
+}
+
+// TestParseRuntimeConfigLibvipsEncodersInvalid — fail-fast валидация
+// диапазонов: невалидное значение — ошибка старта, не runtime.
+func TestParseRuntimeConfigLibvipsEncodersInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "webp effort > 6",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 webp-reduction-effort: 7
+`,
+		},
+		{
+			name: "webp effort negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 webp-reduction-effort: -1
+`,
+		},
+		{
+			name: "avif speed > 9",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 avif-speed: 10
+`,
+		},
+		{
+			name: "avif speed negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 avif-speed: -3
+`,
+		},
+		{
+			name: "png compression > 9",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-compression-level: 10
+`,
+		},
+		{
+			name: "png compression negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-compression-level: -1
+`,
+		},
+		{
+			name: "jxl effort > 9",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 jxl-effort: 10
+`,
+		},
+		{
+			name: "jxl effort negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 jxl-effort: -1
+`,
+		},
+		{
+			name: "png palette colors > 256",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-palette-colors: 257
+`,
+		},
+		{
+			name: "png palette colors negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-palette-colors: -4
+`,
+		},
+		{
+			name: "png palette bit depth > 8",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-palette-bit-depth: 16
+`,
+		},
+		{
+			name: "png palette bit depth negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 png-palette-bit-depth: -2
+`,
+		},
+		{
+			name: "gif bit depth > 8",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 gif-bit-depth: 9
+`,
+		},
+		{
+			name: "gif bit depth negative",
+			yaml: `
+version: "1"
+policy:
+		global:
+			 authorization: unsafe
+libvips:
+		encoders:
+			 gif-bit-depth: -1
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseRuntimeConfig([]byte(tc.yaml)); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestParseRuntimeConfigLibvipsEncodersUnknownField — strict-декодирование:
+// неизвестный ключ в libvips.encoders — ошибка старта.
+func TestParseRuntimeConfigLibvipsEncodersUnknownField(t *testing.T) {
+	yaml := `
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  encoders:
+    jpeg-quality: 90
+`
+	if _, err := ParseRuntimeConfig([]byte(yaml)); err == nil {
+		t.Fatal("expected error for unknown libvips.encoders.jpeg-quality field")
+	}
+}
+
+// TestParseRuntimeConfigLibvipsDetectionSem проверяет декодирование секции
+// libvips.detection (detection-семофор, Фаза 4) и libvips.metrics-interval.
+func TestParseRuntimeConfigLibvipsDetectionSem(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   detection:
+     concurrency: 3
+     max-wait: "2s"
+   metrics-interval: "30s"
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.Libvips.DetectionSem.Concurrency != 3 {
+		t.Errorf("detection.concurrency = %d, want 3", rc.Libvips.DetectionSem.Concurrency)
+	}
+	if rc.Libvips.DetectionSem.MaxWait != 2*time.Second {
+		t.Errorf("detection.max-wait = %s, want 2s", rc.Libvips.DetectionSem.MaxWait)
+	}
+	if rc.Libvips.VipsMetricsInterval != 30*time.Second {
+		t.Errorf("metrics-interval = %s, want 30s", rc.Libvips.VipsMetricsInterval)
+	}
+}
+
+// TestParseRuntimeConfigLibvipsDetectionSemDefaults — при пустой секции
+// значения нулевые (дефолты применяются в libvips.New через Normalized).
+func TestParseRuntimeConfigLibvipsDetectionSemDefaults(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips: {}
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.Libvips.DetectionSem.Concurrency != 0 || rc.Libvips.DetectionSem.MaxWait != 0 {
+		t.Errorf("expected zero defaults, got %+v", rc.Libvips.DetectionSem)
+	}
+	if rc.Libvips.VipsMetricsInterval != 0 {
+		t.Errorf("metrics-interval default = %s, want 0 (runtime default)", rc.Libvips.VipsMetricsInterval)
+	}
+}
+
+// TestParseRuntimeConfigLibvipsDetectionSemInvalid — fail-fast валидация:
+// отрицательная конкурентность, отрицательный max-wait/interval — ошибка старта.
+func TestParseRuntimeConfigLibvipsDetectionSemInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "negative concurrency",
+			yaml: `
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   detection:
+     concurrency: -1
+`,
+		},
+		{
+			name: "negative max-wait",
+			yaml: `
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   detection:
+     max-wait: "-5s"
+`,
+		},
+		{
+			name: "bad max-wait duration",
+			yaml: `
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   detection:
+     max-wait: "soon"
+`,
+		},
+		{
+			name: "negative metrics-interval",
+			yaml: `
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   metrics-interval: "-15s"
+`,
+		},
+		{
+			name: "unknown detection key",
+			yaml: `
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+   detection:
+     enabled: true
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseRuntimeConfig([]byte(tc.yaml)); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestParseRuntimeConfigLibvipsColor — декодирование политики color
+// management (Фаза 5a): явные режимы, дефолт (strip) и fail-fast на
+// неизвестном значении.
+func TestParseRuntimeConfigLibvipsColor(t *testing.T) {
+	// transform.
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+   global:
+     authorization: unsafe
+libvips:
+  color:
+    mode: transform
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.Libvips.Color != "transform" {
+		t.Errorf("color.mode = %q, want transform", rc.Libvips.Color)
+	}
+
+	// keep.
+	rc, err = ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  color:
+    mode: keep
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(keep): %v", err)
+	}
+	if rc.Libvips.Color != "keep" {
+		t.Errorf("color.mode = %q, want keep", rc.Libvips.Color)
+	}
+
+	// Дефолт: пустая секция → strip.
+	rc, err = ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips: {}
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(default): %v", err)
+	}
+	if rc.Libvips.Color != "strip" {
+		t.Errorf("color.mode default = %q, want strip", rc.Libvips.Color)
+	}
+}
+
+// TestParseRuntimeConfigLibvipsColorInvalid — fail-fast: неизвестный режим
+// color.mode — ошибка старта.
+func TestParseRuntimeConfigLibvipsColorInvalid(t *testing.T) {
+	_, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  color:
+    mode: icm
+`))
+	if err == nil {
+		t.Fatal("expected error for unknown color.mode")
+	}
+}
+
+// TestParseRuntimeConfigLibvipsOperationCache — декодирование operation cache
+// (Фаза 5b): явное false/true и дефолт (включено).
+func TestParseRuntimeConfigLibvipsOperationCache(t *testing.T) {
+	// Явное false → отключено.
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  operation-cache:
+    enabled: false
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.Libvips.OperationCache.Enabled() {
+		t.Error("operation-cache.enabled=false must disable operation cache")
+	}
+
+	// Явное true → включено.
+	rc, err = ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips:
+  operation-cache:
+    enabled: true
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(true): %v", err)
+	}
+	if !rc.Libvips.OperationCache.Enabled() {
+		t.Error("operation-cache.enabled=true must keep operation cache enabled")
+	}
+
+	// Дефолт: пустая секция → включено (обратная совместимость).
+	rc, err = ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+libvips: {}
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(default): %v", err)
+	}
+	if !rc.Libvips.OperationCache.Enabled() {
+		t.Error("absent operation-cache must default to enabled")
+	}
+}

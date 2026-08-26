@@ -85,8 +85,15 @@ func BuildProcessor(logger Logger, rc *httpapi.RuntimeConfig) (*ProcessorBuild, 
 			MaxCacheFiles: rc.Libvips.Limits.MaxCacheFiles,
 			MaxCacheSize:  rc.Libvips.Limits.MaxCacheSize,
 		},
-		Detector:       det,
-		DetectorMargin: rc.Detection.Margin,
+		Encoders:            rc.Libvips.Encoders,
+		ShrinkOnLoad:        rc.Libvips.ShrinkOnLoad,
+		Color:               rc.Libvips.Color,
+		OperationCache:      rc.Libvips.OperationCache,
+		WatermarkCache:      rc.Libvips.WatermarkCache,
+		DetectionSem:        rc.Libvips.DetectionSem,
+		VipsMetricsInterval: rc.Libvips.VipsMetricsInterval,
+		Detector:            det,
+		DetectorMargin:      rc.Detection.Margin,
 	})
 
 	if libvips.Compiled() && lvErr == nil {

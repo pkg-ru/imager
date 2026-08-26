@@ -118,6 +118,30 @@ type ImageMagickConfig struct {
 type LibvipsConfig struct {
 	// Limits — resource limits обработчика libvips.
 	Limits libvips.Limits
+	// Encoders — per-format параметры сжатия кодировщиков (WebP effort,
+	// AVIF speed, PNG compression, JXL effort, JPEG progressive, PNG
+	// interlace/quantization, GIF bit-depth). Нулевые поля = встроенные
+	// умолчания.
+	Encoders libvips.EncoderParams
+	// ShrinkOnLoad — настройки shrink-on-load (предварительное уменьшение
+	// при декодировании JPEG/WebP/GIF/HEIF/AVIF).
+	ShrinkOnLoad libvips.ShrinkOnLoadOpts
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
+	WatermarkCache libvips.WatermarkCacheOpts
+	// DetectionSem — настройки detection-семафора (Фаза 4): отдельный лимит
+	// конкурентности ONNX-инференса вне libvips-слотов.
+	DetectionSem libvips.DetectionSemaphoreOpts
+	// Color — политика ICC color management (Фаза 5a): strip (дефолт,
+	// удалять профиль), transform (конвертация в sRGB перед обработкой),
+	// keep (сохранить embedded-профиль в выход).
+	Color libvips.ColorMode
+	// OperationCache — настройки operation cache libvips (Фаза 5b).
+	// Включено по умолчанию (обратная совместимость); false = нулевые
+	// лимиты кэша при Startup (кэш отключён).
+	OperationCache libvips.OperationCacheOpts
+	// VipsMetricsInterval — интервал периодического сбора vips-метрик
+	// (0 = дефолт 15s).
+	VipsMetricsInterval time.Duration
 }
 
 // DetectionConfig — конфигурация детектора лиц/объектов для операций
@@ -300,10 +324,94 @@ type ImageMagickYAML struct {
 	Limits LimitsYAML `yaml:"limits"`
 }
 
-// LibvipsYAML — YAML-представление libvips.Limits.
+// LibvipsYAML — YAML-представление конфигурации libvips.
 type LibvipsYAML struct {
 	// Limits — resource limits обработчика libvips.
 	Limits LibvipsLimitsYAML `yaml:"limits"`
+	// Encoders — per-format параметры сжатия кодировщиков.
+	Encoders LibvipsEncodersYAML `yaml:"encoders"`
+	// ShrinkOnLoad — настройки shrink-on-load при декодировании.
+	ShrinkOnLoad ShrinkOnLoadYAML `yaml:"shrink-on-load"`
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
+	WatermarkCache WatermarkCacheYAML `yaml:"watermark-cache"`
+	// DetectionSem — настройки detection-семафора (Фаза 4).
+	DetectionSem DetectionSemYAML `yaml:"detection"`
+	// Color — политика ICC color management (Фаза 5a): strip/transform/keep.
+	Color ColorYAML `yaml:"color"`
+	// OperationCache — настройки operation cache (Фаза 5b).
+	OperationCache OperationCacheYAML `yaml:"operation-cache"`
+	// MetricsInterval — интервал сбора vips-метрик (duration; 0 = дефолт 15s).
+	MetricsInterval dynamic.String `yaml:"metrics-interval"`
+}
+
+// ColorYAML — YAML-представление политики color management (Фаза 5a).
+type ColorYAML struct {
+	// Mode — режим: strip (дефолт), transform, keep.
+	Mode dynamic.String `yaml:"mode"`
+}
+
+// OperationCacheYAML — YAML-представление настроек operation cache (Фаза 5b).
+type OperationCacheYAML struct {
+	// Enabled — включить operation cache libvips (nil = включено по
+	// умолчанию, обратная совместимость).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+}
+
+// DetectionSemYAML — YAML-представление libvips.DetectionSemaphoreOpts.
+type DetectionSemYAML struct {
+	// Concurrency — максимум одновременных ONNX-инференсов (0 = дефолт
+	// max(1, GOMAXPROCS/2)).
+	Concurrency dynamic.Int64 `yaml:"concurrency"`
+	// MaxWait — бюджет ожидания detection-слота (duration; 0 = дефолт 5s).
+	MaxWait dynamic.String `yaml:"max-wait"`
+}
+
+// WatermarkCacheYAML — YAML-представление libvips.WatermarkCacheOpts.
+type WatermarkCacheYAML struct {
+	// Enabled — включить кэш файлов ватермарок (nil = включено по умолчанию).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+	// MaxFiles — максимум записей (файлов) в кэше (0 = дефолт 32).
+	MaxFiles dynamic.Int64 `yaml:"max-files"`
+	// MaxBytes — суммарный бюджет памяти кэша в байтах (0 = дефолт 64 MiB).
+	MaxBytes dynamic.Int64 `yaml:"max-bytes"`
+	// TTL — время жизни записи (duration; 0 = дефолт 5m).
+	TTL dynamic.String `yaml:"ttl"`
+}
+
+// ShrinkOnLoadYAML — YAML-представление libvips.ShrinkOnLoadOpts.
+type ShrinkOnLoadYAML struct {
+	// Enabled — включить shrink-on-load (nil = включено по умолчанию).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+}
+
+// LibvipsEncodersYAML — YAML-представление libvips.EncoderParams.
+type LibvipsEncodersYAML struct {
+	// WebPReductionEffort — reduction effort WebP [0..6] (больше = лучше
+	// сжатие, медленнее; 0 = умолчание 4).
+	WebPReductionEffort dynamic.Int64 `yaml:"webp-reduction-effort"`
+	// AVIFSpeed — speed/effort AVIF [0..9] (больше = быстрее, хуже сжатие;
+	// 0 = умолчание govips).
+	AVIFSpeed dynamic.Int64 `yaml:"avif-speed"`
+	// PNGCompressionLevel — уровень сжатия PNG [0..9] (0 = умолчание 6).
+	PNGCompressionLevel dynamic.Int64 `yaml:"png-compression-level"`
+	// JXLEffort — effort JPEG XL [0..9] (больше = лучше сжатие, медленнее;
+	// 0 = умолчание govips, 7).
+	JXLEffort dynamic.Int64 `yaml:"jxl-effort"`
+	// JPEGProgressive — прогрессивный (interlaced) JPEG. false = baseline.
+	JPEGProgressive dynamic.Bool `yaml:"jpeg-progressive"`
+	// PNGInterlace — чересстрочный (interlaced/Adam7) PNG. false = обычный.
+	PNGInterlace dynamic.Bool `yaml:"png-interlace"`
+	// PNGPalette — включить PNG-квантование (палитровый экспорт). По
+	// умолчанию выключено (применяется ТОЛЬКО при явном включении).
+	PNGPalette dynamic.Bool `yaml:"png-palette"`
+	// PNGPaletteColors — максимальное число цветов палитры [2..256]
+	// (0 = 256). Значимо при png-palette=true.
+	PNGPaletteColors dynamic.Int64 `yaml:"png-palette-colors"`
+	// PNGPaletteBitDepth — битность палитры [1..8] (0 = 8). Позволяет
+	// сохранить палитровую битность исходника. Значимо при png-palette=true.
+	PNGPaletteBitDepth dynamic.Int64 `yaml:"png-palette-bit-depth"`
+	// GIFBitDepth — битность палитры GIF [1..8] (0 = умолчание govips, 8).
+	GIFBitDepth dynamic.Int64 `yaml:"gif-bit-depth"`
 }
 
 // LibvipsLimitsYAML — YAML-представление libvips.Limits.
@@ -962,6 +1070,107 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout.Unwrap())
 		}
 		cfg.Limits.Timeout = d
+	}
+	// Per-format параметры кодировщиков: fail-fast валидация диапазонов
+	// на старте (невалидное значение — ошибка конфигурации, не runtime).
+	cfg.Encoders = libvips.EncoderParams{
+		WebPReductionEffort: int(l.Encoders.WebPReductionEffort.Unwrap()),
+		AVIFSpeed:           int(l.Encoders.AVIFSpeed.Unwrap()),
+		PNGCompression:      int(l.Encoders.PNGCompressionLevel.Unwrap()),
+		JXLEffort:           int(l.Encoders.JXLEffort.Unwrap()),
+		JPEGProgressive:     l.Encoders.JPEGProgressive.Unwrap(),
+		PNGInterlace:        l.Encoders.PNGInterlace.Unwrap(),
+		PNGPalette:          l.Encoders.PNGPalette.Unwrap(),
+		PNGPaletteColors:    int(l.Encoders.PNGPaletteColors.Unwrap()),
+		PNGPaletteBitDepth:  int(l.Encoders.PNGPaletteBitDepth.Unwrap()),
+		GIFBitDepth:         int(l.Encoders.GIFBitDepth.Unwrap()),
+	}
+	if v := cfg.Encoders.WebPReductionEffort; v < 0 || v > 6 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.webp-reduction-effort: must be in [0,6], got %d", v)
+	}
+	if v := cfg.Encoders.AVIFSpeed; v < 0 || v > 9 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.avif-speed: must be in [0,9], got %d", v)
+	}
+	if v := cfg.Encoders.PNGCompression; v < 0 || v > 9 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.png-compression-level: must be in [0,9], got %d", v)
+	}
+	if v := cfg.Encoders.JXLEffort; v < 0 || v > 9 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.jxl-effort: must be in [0,9], got %d", v)
+	}
+	if v := cfg.Encoders.PNGPaletteColors; v < 0 || v > 256 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.png-palette-colors: must be in [0,256], got %d", v)
+	}
+	if v := cfg.Encoders.PNGPaletteBitDepth; v < 0 || v > 8 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.png-palette-bit-depth: must be in [0,8], got %d", v)
+	}
+	if v := cfg.Encoders.GIFBitDepth; v < 0 || v > 8 {
+		return LibvipsConfig{}, fmt.Errorf("encoders.gif-bit-depth: must be in [0,8], got %d", v)
+	}
+	// Shrink-on-load: nil (ключ не задан) = включено по умолчанию.
+	if l.ShrinkOnLoad.Enabled.Set {
+		cfg.ShrinkOnLoad = libvips.NewShrinkOnLoadOpts(l.ShrinkOnLoad.Enabled.Value.Unwrap(), true)
+	}
+	// Кэш ватермарок (Фаза 3): fail-fast валидация значений на старте.
+	wc := libvips.WatermarkCacheOpts{Enabled: true}
+	if l.WatermarkCache.Enabled.Set {
+		wc.Enabled = l.WatermarkCache.Enabled.Value.Unwrap()
+	}
+	wc.MaxFiles = int(l.WatermarkCache.MaxFiles.Unwrap())
+	wc.MaxBytes = l.WatermarkCache.MaxBytes.Unwrap()
+	if l.WatermarkCache.TTL.Unwrap() != "" {
+		d, err := time.ParseDuration(l.WatermarkCache.TTL.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("watermark-cache.ttl: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("watermark-cache.ttl: negative duration %q", l.WatermarkCache.TTL.Unwrap())
+		}
+		wc.TTL = d
+	}
+	if err := wc.Validate(); err != nil {
+		return LibvipsConfig{}, fmt.Errorf("watermark-cache: %w", err)
+	}
+	cfg.WatermarkCache = wc
+	// Detection-семофор (Фаза 4): fail-fast валидация значений на старте.
+	ds := libvips.DetectionSemaphoreOpts{
+		Concurrency: int(l.DetectionSem.Concurrency.Unwrap()),
+	}
+	if l.DetectionSem.MaxWait.Unwrap() != "" {
+		d, err := time.ParseDuration(l.DetectionSem.MaxWait.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("detection.max-wait: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("detection.max-wait: negative duration %q", l.DetectionSem.MaxWait.Unwrap())
+		}
+		ds.MaxWait = d
+	}
+	if err := ds.Validate(); err != nil {
+		return LibvipsConfig{}, fmt.Errorf("detection: %w", err)
+	}
+	cfg.DetectionSem = ds
+	// Цветовой менеджмент (Фаза 5a): строгая политика mode (strip/transform/
+	// keep). Empty = strip (дефолт, обратная совместимость); неизвестное
+	// значение — fail-fast ошибка конфигурации.
+	colorMode, err := libvips.ParseColorMode(l.Color.Mode.Unwrap())
+	if err != nil {
+		return LibvipsConfig{}, fmt.Errorf("color: %w", err)
+	}
+	cfg.Color = colorMode
+	// Operation cache (Фаза 5b): nil (ключ не задан) = включено по умолчанию.
+	if l.OperationCache.Enabled.Set {
+		cfg.OperationCache = libvips.NewOperationCacheOpts(l.OperationCache.Enabled.Value.Unwrap(), true)
+	}
+	// Интервал сбора vips-метрик.
+	if l.MetricsInterval.Unwrap() != "" {
+		d, err := time.ParseDuration(l.MetricsInterval.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("metrics-interval: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("metrics-interval: negative duration %q", l.MetricsInterval.Unwrap())
+		}
+		cfg.VipsMetricsInterval = d
 	}
 	return cfg, nil
 }

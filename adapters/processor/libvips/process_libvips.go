@@ -10,16 +10,19 @@ package libvips
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/davidbyttow/govips/v2/vips"
 
 	"github.com/pkg-ru/imager/adapters/processor/detection"
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // startupOnce гарантирует однократный Startup govips на процесс.
@@ -50,12 +53,31 @@ func Compiled() bool { return true }
 // newLibvipsBackend создаёт движок и выполняет однократный Startup govips с
 // конфигурацией из Limits (ConcurrencyLevel, MaxCacheMem/Files/Size).
 func newLibvipsBackend(opts Options) (backend, error) {
+	// Кэш ватермарок (Фаза 3): инициализируется один раз на процесс
+	// настройками из конфигурации (идемпотентно).
+	configureWatermarkCache(opts.WatermarkCache)
+	// Vips-метрики (Фаза 4): регистрируем провайдер снимков libvips +
+	// кэша ватермарок в observability (периодический сборщик, отказоустойчивый).
+	registerVipsStatsProvider(opts.VipsMetricsInterval)
 	startupOnce.Do(func() {
+		// Лимиты кэша (Фаза 5b): при отключённом operation cache передаются
+		// НУЛЕВЫЕ значения. В govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша
+		// (vips_cache_set_max_mem(0) / vips_cache_set_max(0) /
+		// vips_cache_set_max_files(0)); значение < 0 = default govips.
+		cacheMem := opts.Limits.MaxCacheMem
+		cacheFiles := opts.Limits.MaxCacheFiles
+		cacheSize := opts.Limits.MaxCacheSize
+		if !opts.OperationCache.Enabled() {
+			cacheMem, cacheFiles, cacheSize = 0, 0, 0
+		}
 		cfg := &vips.Config{
 			ConcurrencyLevel: opts.Limits.Threads,
-			MaxCacheMem:      opts.Limits.MaxCacheMem,
-			MaxCacheFiles:    opts.Limits.MaxCacheFiles,
-			MaxCacheSize:     opts.Limits.MaxCacheSize,
+			MaxCacheMem:      cacheMem,
+			MaxCacheFiles:    cacheFiles,
+			MaxCacheSize:     cacheSize,
+			// CollectStats (Фаза 4): включает счётчик операций govips
+			// (ReadRuntimeStats) для метрики imager_vips_operations_total.
+			CollectStats: true,
 		}
 		startupErr = vips.Startup(cfg)
 	})
@@ -66,6 +88,11 @@ func newLibvipsBackend(opts Options) (backend, error) {
 }
 
 func (b *libvipsBackend) close() error {
+	// Останавливаем периодический сборщик vips-метрик ДО Shutdown: после
+	// vips.Shutdown() cgo-вызовы ReadVipsMemStats/ReadRuntimeStats из
+	// провайдера недопустимы, а горутина-collector иначе остаётся жить
+	// (утечка + риск падения процесса). Идемпотентно.
+	observability.StopVipsMetrics()
 	// vips.Shutdown() безопасен только когда все ImageRef закрыты. Адаптер
 	// не держит глобальных изображений между вызовами Process, поэтому
 	// завершаем libvips идемпотентно.
@@ -80,7 +107,7 @@ func (b *libvipsBackend) close() error {
 // sidecar-кэша: при true процессор НЕ
 // вызывает ИИ-модель, а использует переданные боксы (в координатах
 // оригинала; для fct/oct транслируются на trim-offset).
-func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error) {
+func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) (*backendResult, error) {
 	// Отмена контекста проверяется перед затратной работой.
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -90,11 +117,28 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, fmt.Errorf("libvips: plan: %w", err)
 	}
 
+	// Passthrough fast-path: если план ничего не меняет (формат совпадает,
+	// размер тот же, нет watermark/trim/ориентации/детекции/strip-работы),
+	// возвращаем исходные байты без decode/encode. При любых сомнениях —
+	// полная обработка (см. passthroughEligible).
+	if res, ok, err := b.tryPassthrough(ctx, data, plan); ok || err != nil {
+		return res, err
+	}
+
 	img, err := b.load(ctx, data, plan)
 	if err != nil {
 		return nil, err
 	}
 	defer img.Close()
+
+	// ICC color management (Фаза 5a): политика transform конвертирует
+	// embedded-профиль в sRGB ПЕРЕД пиксельной обработкой. Fast-path:
+	// sRGB-совместимые профили и изображения уже в sRGB без профиля не
+	// конвертируются (нулевой оверхед). Ошибки lcms не роняют запрос —
+	// fallback на strip-поведение с warning-логом.
+	if err := b.applyColorManagement(img); err != nil {
+		return nil, err
+	}
 
 	// Размеры входа (из заголовка) для Result; для анимации — высота кадра.
 	srcW := img.Width()
@@ -118,7 +162,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, err
 	}
 
-	if err := b.applyOperation(ctx, img, plan, detectionsReady, boxes); err != nil {
+	if err := b.applyOperation(ctx, img, plan, detectionsReady, boxes, slot); err != nil {
 		return nil, err
 	}
 
@@ -220,19 +264,178 @@ func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processo
 // load загружает изображение из памяти. FailOnError всегда включён;
 // AutoRotate (EXIF orientation) управляется планом: nil-спецификация =
 // включён. Для анимированных входов/выходов (включая APNG) загружаются
-// все кадры (NumPages=-1).
+// все кадры (NumPages=-1), либо не более plan.Frames кадров, если лимит
+// задан. Sequential access mode выставляется там, где операция выполняет
+// ровно один линейный проход по пикселям (см. resolveImportPlan).
 func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	params := vips.NewImportParams()
 	params.AutoRotate.Set(plan.Orientation == nil || plan.Orientation.AutoOrient)
 	params.FailOnError.Set(true)
-	if plan.OutputFormat.Animated() || plan.SourceFormat.Animated() {
-		params.NumPages.Set(-1)
+	ip := resolveImportPlan(plan)
+	if ip.SetPages {
+		params.NumPages.Set(ip.NumPages)
+	}
+	if ip.Sequential {
+		params.Access.Set(vips.AccessSequential)
+	}
+	// Shrink-on-load (Фаза 2): предварительное уменьшение при декодировании.
+	// Заголовок читается лёгкой загрузкой libvips (пиксели декодируются
+	// лениво — это дёшево); решение принимает чистая функция
+	// resolveShrinkOnLoad. При любой ошибке чтения заголовка shrink просто
+	// не применяется (отказоустойчивость): полная загрузка вернёт понятную
+	// ошибку декодирования.
+	if so := b.resolveShrinkForLoad(data, plan); so.JpegShrink > 1 {
+		params.JpegShrinkFactor.Set(so.JpegShrink)
+	} else if so.Scale < 1 {
+		params.WebpScaleFactor.Set(so.Scale)
 	}
 	img, err := vips.LoadImageFromBuffer(data, params)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: load: %w", err)
 	}
 	return img, nil
+}
+
+// resolveShrinkForLoad вычисляет параметры shrink-on-load для загрузки:
+// читает лёгкий заголовок исходника и вызывает чистую функцию
+// resolveShrinkOnLoad. Выключатель берётся из конфигурации движка
+// (b.opts.ShrinkOnLoad; nil = включён по умолчанию).
+func (b *libvipsBackend) resolveShrinkForLoad(data []byte, plan *processing.ProcessingPlan) shrinkOnLoadDecision {
+	none := shrinkOnLoadDecision{JpegShrink: 1, Scale: 1}
+	head, err := vips.LoadImageFromBuffer(data, vips.NewImportParams())
+	if err != nil {
+		return none
+	}
+	defer head.Close()
+	src := shrinkOnLoadInfo{
+		Width:  head.Width(),
+		Height: frameHeight(head),
+		Pages:  head.Pages(),
+	}
+	return resolveShrinkOnLoad(plan, src, head.Orientation(), b.opts.ShrinkOnLoad.Enabled())
+}
+
+// applyColorManagement применяет политику ICC color management (Фаза 5a) к
+// загруженному изображению ПЕРЕД пиксельной обработкой.
+//
+// Режимы:
+//   - strip (дефолт): профиль удаляется при экспорте (stripAllMetadata);
+//     здесь ничего не делается;
+//   - transform: embedded-профиль конвертируется в стандартный sRGB через
+//     PCS (govips TransformICCProfile → vips_icc_transform с профилем
+//     SRGBIEC61966-2.1); CMYK без профиля обрабатывается fallback-профилем;
+//   - keep: профиль сохраняется в выходе (stripAllMetadata не удаляет его);
+//     здесь ничего не делается.
+//
+// Fast-path (нулевой оверхед) в режиме transform:
+//   - изображение уже в sRGB colorspace и без профиля;
+//   - embedded-профиль sRGB-совместим (проверка по сигнатуре/имени без
+//     lcms-конверсии — isSRGBProfile).
+//
+// Отказоустойчивость: битый/отсутствующий профиль или ошибка lcms НЕ
+// роняют запрос — выполняется fallback на strip-поведение (профиль
+// удалится при экспорте) с warning-логом.
+func (b *libvipsBackend) applyColorManagement(img *vips.ImageRef) error {
+	// Fast-path (нулевой оверхед): режим не transform, изображение уже в
+	// sRGB без профиля либо embedded-профиль sRGB-совместим — конверсия
+	// не требуется (решение — чистая функция colorNeedsTransform).
+	srgbProfile := img.HasICCProfile() && isSRGBProfile(img.GetICCProfile())
+	if !colorNeedsTransform(b.opts.Color, img.HasICCProfile(), srgbProfile, img.Interpretation() == vips.InterpretationSRGB) {
+		return nil
+	}
+	// Трансформация embedded-профиля (или CMYK/иного без профиля) в sRGB.
+	// TransformICCProfile использует fallback-профиль SRGBIEC61966-2.1 для
+	// изображений без embedded-профиля и преобразует через PCS.
+	if err := img.TransformICCProfile(vips.SRGBIEC6196621ICCProfilePath); err != nil {
+		// Fallback на strip-поведение: профиль удалится при экспорте,
+		// запрос продолжит обработку как раньше (без transform).
+		slog.Default().Warn("libvips: icc transform failed, falling back to strip",
+			"error", err.Error())
+		return nil
+	}
+	return nil
+}
+
+// premultiplyResize выполняет изменение размера изображения с альфа-каналом
+// без тёмных ореолов на полупрозрачных краях: Premultiply → resize →
+// Unpremultiply. Для изображений без альфы выполняет resize напрямую.
+// Premultiply/Unpremultiply govips работают корректно на многостраничных
+// изображениях (операция применяется ко всему вертикальному стеку кадров,
+// метаданные анимации page-height/delay/loop сохраняются), поэтому отдельная
+// покадровая обработка не требуется.
+func premultiplyResize(img *vips.ImageRef, fn func() error) error {
+	hasAlpha := img.HasAlpha()
+	if hasAlpha {
+		if err := img.PremultiplyAlpha(); err != nil {
+			return fmt.Errorf("libvips: premultiply: %w", err)
+		}
+	}
+	if err := fn(); err != nil {
+		return err
+	}
+	if hasAlpha {
+		if err := img.UnpremultiplyAlpha(); err != nil {
+			return fmt.Errorf("libvips: unpremultiply: %w", err)
+		}
+	}
+	return nil
+}
+
+// tryPassthrough проверяет применимость fast-path и возвращает исходные
+// байты как есть (без decode/encode). Заголовок читается лёгкой загрузкой
+// libvips (пиксели декодируются лениво, поэтому это дёшево).
+//
+// Возвращаемые значения:
+//   - ok=true  — passthrough применён, res содержит исходные данные;
+//   - ok=false, err=nil — passthrough неприменим, нужна полная обработка;
+//   - err!=nil — ошибка чтения заголовка; для отказоустойчивости она НЕ
+//     прерывает запрос: вызывающий выполняет полную обработку.
+func (b *libvipsBackend) tryPassthrough(ctx context.Context, data []byte, plan *processing.ProcessingPlan) (*backendResult, bool, error) {
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
+	head, err := vips.LoadImageFromBuffer(data, vips.NewImportParams())
+	if err != nil {
+		// Не удалось прочитать заголовок — полная обработка вернёт
+		// понятную ошибку загрузки.
+		return nil, false, nil
+	}
+	defer head.Close()
+
+	src := sourceInfo{
+		Width:       head.Width(),
+		Height:      frameHeight(head),
+		Pages:       head.Pages(),
+		Orientation: head.Orientation(),
+		MetaFields:  head.GetFields(),
+		HasICC:      head.HasICCProfile(),
+	}
+	// sRGB-совместимость embedded-профиля (Фаза 5a): проверка по
+	// сигнатуре/имени БЕЗ lcms-конверсии; false при битом/отсутствующем
+	// профиле. Значимо только для режима transform.
+	if src.HasICC {
+		src.SRGBProfile = isSRGBProfile(head.GetICCProfile())
+	}
+	if !passthroughEligible(plan, src, b.opts.Color) {
+		return nil, false, nil
+	}
+	return &backendResult{
+		data:         data,
+		width:        src.Width,
+		height:       src.Height,
+		sourceWidth:  src.Width,
+		sourceHeight: src.Height,
+	}, true, nil
+}
+
+// frameHeight возвращает высоту ОДНОГО кадра (для анимации — page-height,
+// а не высота всего вертикального стека страниц).
+func frameHeight(img *vips.ImageRef) int {
+	h := img.Height()
+	if ph := img.PageHeight(); img.Pages() > 1 && ph > 0 && h > ph {
+		h = ph
+	}
+	return h
 }
 
 // applyOrientation применяет ручные rotate/flip из плана. EXIF auto-orient
@@ -417,7 +620,7 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 // detectionsReady/boxes — готовые боксы из sidecar-кэша (координаты
 // оригинала); при trim они транслируются на trim-offset внутри
 // applyDetectionCrop.
-func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) error {
+func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -438,19 +641,32 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	w, h := plan.Size.Width, plan.Size.Height
 	switch plan.Operation {
 	case processing.OpResize:
-		// Пропорциональное изменение размера (без обрезки).
-		if err := img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth); err != nil {
+		// Пропорциональное изменение размера (без обрезки). Для изображений
+		// с альфой — Premultiply → resize → Unpremultiply (без тёмных
+		// ореолов на полупрозрачных краях).
+		err := premultiplyResize(img, func() error {
+			return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
+		})
+		if err != nil {
 			return fmt.Errorf("libvips: resize: %w", err)
 		}
 	case processing.OpCrop:
-		// Центрированная обрезка до точного размера.
-		if err := img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeForce); err != nil {
+		// Центрированная обрезка до точного размера (с premultiply для
+		// альфы — см. OpResize).
+		err := premultiplyResize(img, func() error {
+			return img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeForce)
+		})
+		if err != nil {
 			return fmt.Errorf("libvips: crop: %w", err)
 		}
 	case processing.OpSmartCrop:
 		// Умная обрезка: внимание (attention) libvips — центр тяжести
-		// изображения; масштаб и кроп до точного размера одним проходом.
-		if err := img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeForce); err != nil {
+		// изображения; масштаб и кроп до точного размера одним проходом
+		// (с premultiply для альфы — см. OpResize).
+		err := premultiplyResize(img, func() error {
+			return img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeForce)
+		})
+		if err != nil {
 			return fmt.Errorf("libvips: smart-crop: %w", err)
 		}
 	case processing.OpFaceCrop:
@@ -459,7 +675,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера.
-		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes); err != nil {
+		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot); err != nil {
 			return err
 		}
 	default:
@@ -476,11 +692,19 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) error {
 	if spec == nil {
 		spec = processing.DefaultTrimSpec()
 	}
-	// Режим color: фиксированный цвет фона. Режим auto: nil (автоопределение
-	// по краевому пикселю).
+	// Режим color: фиксированный цвет фона. Режим auto: цвет фона берётся из
+	// углового пикселя (0,0) — govips v2.18.0 не поддерживает nil-фон (см.
+	// edgeBackgroundColor), поэтому явно передаём не-nil *vips.Color.
 	var bg *vips.Color
-	if spec.Mode == processing.TrimModeColor {
+	switch spec.Mode {
+	case processing.TrimModeColor:
 		bg = hexToColor(spec.Color)
+	default:
+		var err error
+		bg, err = edgeBackgroundColor(img)
+		if err != nil {
+			return fmt.Errorf("libvips: trim: edge background: %w", err)
+		}
 	}
 	left, top, tw, th, err := img.FindTrim(spec.Tolerance, bg)
 	if err != nil {
@@ -493,6 +717,33 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) error {
 		return fmt.Errorf("libvips: trim: %w", err)
 	}
 	return nil
+}
+
+// edgeBackgroundColor возвращает цвет фона для авто-trim, считывая угловой
+// пиксель (0,0). Нужен, потому что vips.FindTrim у govips v2.18.0 не
+// поддерживает nil-фон: vipsFindTrim (operations.go:21) безусловно
+// разыменовывает backgroundColor.R/G/B, из-за чего авто-trim
+// (spec.Mode == TrimModeAuto) падает с nil-pointer dereference. Обходим,
+// передавая явный цвет края.
+func edgeBackgroundColor(img *vips.ImageRef) (*vips.Color, error) {
+	p, err := img.GetPoint(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(p) < 3 {
+		return nil, fmt.Errorf("unexpected pixel bands %d", len(p))
+	}
+	// 16-битные изображения возвращают значения 0..65535; приводим к 0..255.
+	scale := 1.0
+	switch img.Interpretation() {
+	case vips.InterpretationRGB16, vips.InterpretationGrey16:
+		scale = 257.0
+	}
+	return &vips.Color{
+		R: uint8(p[0] / scale),
+		G: uint8(p[1] / scale),
+		B: uint8(p[2] / scale),
+	}, nil
 }
 
 // hexToColor преобразует hex-цвет "#RRGGBB" в vips.Color.
@@ -530,7 +781,20 @@ func hexToColor(hex string) *vips.Color {
 // Для анимированных изображений детекция выполняется по первому кадру
 // (PageHeight), а область применяется ко всему стеку кадров — это
 // согласовано с поведением trim/crop для анимации.
-func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) error {
+// applyDetectionCrop выполняет детекторную обрезку (face-crop/object-crop).
+//
+// Двухуровневые семафоры (Фаза 4): при self-detection (модель вызывается
+// здесь) тяжёлый CPU-bound ONNX-инференс выполняется ВНЕ libvips-слота —
+// слот перекладывается на detection-семофор (handoffToDetection) и
+// возвращается обратно (reacquireVips) после инференса. Лёгкие cgo-операции
+// (подготовка RGB до инференса, кроп/ресайз после) выполняются в обычном
+// libvips-слоте.
+//
+// Отказоустойчивость: при неудаче любого перекладывания слот(ы) остаются в
+// консистентном состоянии (владение не теряется), а slot.Release() в defer
+// Process освобождает всё удерживаемое; ошибка перегрузки detection-семафора
+// пробрасывается вызывающему как есть.
+func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -585,6 +849,21 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 			return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
 		}
 
+		// Handoff (Фаза 4): захватываем detection-слот и освобождаем
+		// libvips-слот НА ВРЕМЯ ИНФЕРЕНСА. Порядок строго детерминирован
+		// (см. detectionsemaphore.go): Acquire detection при удержании
+		// libvips-слота → Release libvips. При ошибке ожидания libvips-слот
+		// остаётся у нас — обработка завершится ошибкой без утечки слотов.
+		//
+		// slot может быть nil только в тестах движка вне Process; в этом
+		// случае инференс выполняется в текущем контексте конкурентности
+		// (деградация к прежнему поведению, не ошибка).
+		if slot != nil {
+			if err := slot.handoffToDetection(ctx); err != nil {
+				return fmt.Errorf("libvips: %s: detection semaphore: %w", plan.Operation, err)
+			}
+		}
+
 		// Детекция. Trim — независимый фильтр и не влияет на тип детекции:
 		// face-crop всегда ищет лица, object-crop — объекты.
 		var err2 error
@@ -599,12 +878,26 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		}
 	}
 
+	// Возврат libvips-слота после инференса (фаза кропа/ресайза/экспорта).
+	// Detection-слот удерживается до успешного возврата libvips-слота —
+	// суммарная конкурентность не превышает лимиты ни на мгновение.
+	if slot != nil && !detectionsReady {
+		if err := slot.reacquireVips(ctx); err != nil {
+			return fmt.Errorf("libvips: %s: reacquire vips slot: %w", plan.Operation, err)
+		}
+	}
+
 	// Выбор области кропа и применение.
 	rect := detection.SelectCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
 	if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
 		return fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
 	}
-	if err := img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeForce); err != nil {
+	// Финальный ресайз после кропа — тоже с premultiply для альфы
+	// (консистентно с applyOperation).
+	err := premultiplyResize(img, func() error {
+		return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeForce)
+	})
+	if err != nil {
 		return fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
 	}
 	return nil
@@ -672,7 +965,8 @@ func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, p
 }
 
 // stripAllMetadata принудительно удаляет все пользовательские метаданные
-// (EXIF/GPS, XMP, IPTC, описания) и ICC-профиль перед экспортом.
+// (EXIF/GPS, XMP, IPTC, описания) и (по умолчанию) ICC-профиль перед
+// экспортом.
 //
 // Вызывается для ВСЕХ форматов как defense-in-depth: часть кодеков libvips
 // (heifsave, jxlsave) не поддерживает опцию strip и копирует метаданные
@@ -681,9 +975,18 @@ func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, p
 // корректного отображения; orientation к этому моменту уже применён при
 // загрузке (AutoRotate). RemoveICCProfile удаляет цветовой профиль —
 // консистентно с ImageMagick -strip.
-func stripAllMetadata(img *vips.ImageRef) error {
+//
+// keepICC (Фаза 5a, режим ColorKeep) сохраняет embedded-профиль в выходе:
+// профиль описывает цвет пикселей, и при совпадении формата/без конверсии
+// он остаётся валидным. В режиме transform конвертированные пиксели уже в
+// sRGB, профиль (sRGB) удаляется как лишний. В режиме strip (дефолт)
+// профиль всегда удаляется.
+func stripAllMetadata(img *vips.ImageRef, keepICC bool) error {
 	if err := img.RemoveMetadata(); err != nil {
 		return fmt.Errorf("libvips: remove metadata: %w", err)
+	}
+	if keepICC {
+		return nil
 	}
 	if err := img.RemoveICCProfile(); err != nil {
 		return fmt.Errorf("libvips: remove icc profile: %w", err)
@@ -691,43 +994,90 @@ func stripAllMetadata(img *vips.ImageRef) error {
 	return nil
 }
 
-// exportImage экспортирует изображение в целевой формат.
+// exportImage экспортирует изображение в целевой формат. Per-format
+// параметры сжатия кодировщиков берутся из конфигурации (b.opts.Encoders;
+// нулевые значения = встроенные умолчания).
 func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.ProcessingPlan) ([]byte, error) {
 	// Единая принудительная зачистка метаданных на готовом ассете — до
-	// экспорта, независимо от поддержки strip конкретным кодеком.
-	if err := stripAllMetadata(img); err != nil {
+	// экспорта, независимо от поддержки strip конкретным кодеком. Режим
+	// keep (Фаза 5a) сохраняет embedded-профиль в выходе (keepICC=true).
+	if err := stripAllMetadata(img, b.opts.Color == ColorKeep); err != nil {
 		return nil, err
 	}
+	// DPI-нормализация (Волна 5d): после strip сбрасываем xres/yres к 72 DPI,
+	// чтобы просмотрщики не масштабировали изображение по DPI-метаданным
+	// исходника. Решение (нужна ли копия) — чистая функция
+	// needsResolutionNormalization; при необходимости создаётся новый ImageRef.
+	//
+	// ВАЖНО: новый ImageRef живёт ТОЛЬКО до конца экспорта (defer Close) —
+	// исходный img остаётся у вызывающего (process) и читается им после
+	// exportImage (Width/Height для Result). Копия размеров не меняет, поэтому
+	// закрытие здесь безопасно и не приводит к двойному освобождению.
+	norm, err := normalizeResolution(img, defaultResolutionDPI)
+	if err != nil {
+		return nil, err
+	}
+	if norm != img {
+		defer norm.Close()
+		img = norm
+	}
+	enc := b.opts.Encoders
 	switch plan.OutputFormat {
 	case processing.FormatJPEG:
 		p := vips.NewJpegExportParams()
 		p.Quality = plan.Quality
 		p.StripMetadata = true
 		p.SubsampleMode = vips.VipsForeignSubsampleOn
+		// JPEG progressive (Волна 5d): false = baseline (обычный) JPEG.
+		p.Interlace = enc.JPEGProgressive
 		out, _, err := img.ExportJpeg(p)
 		return out, err
 	case processing.FormatPNG:
 		p := vips.NewPngExportParams()
 		p.StripMetadata = true
-		p.Compression = 6
+		p.Compression = pngCompression(enc.PNGCompression)
+		// PNG interlace (Волна 5d): false = обычный (не-интерлейсный) PNG.
+		p.Interlace = enc.PNGInterlace
+		// PNG quantization (Волна 5c): палитровый экспорт. Применяется
+		// ТОЛЬКО при явном включении (PNGPalette); при ошибке квантования —
+		// fallback на обычный PNG-экспорт без падения запроса.
+		if q := resolvePNGQuantize(enc); q.Palette {
+			p.Palette = true
+			p.Bitdepth = q.Bitdepth
+			out, _, err := img.ExportPng(p)
+			if err == nil {
+				return out, nil
+			}
+			slog.Default().Warn("libvips: png quantization failed, falling back to plain png",
+				"error", err.Error())
+			// Fallback: обычный PNG-экспорт (без палитры).
+			p.Palette = false
+			p.Bitdepth = 0
+		}
 		out, _, err := img.ExportPng(p)
 		return out, err
 	case processing.FormatWebP:
 		p := vips.NewWebpExportParams()
 		p.Quality = plan.Quality
 		p.StripMetadata = true
-		p.ReductionEffort = 4
+		p.ReductionEffort = webpReductionEffort(enc.WebPReductionEffort)
 		out, _, err := img.ExportWebp(p)
 		return out, err
 	case processing.FormatGIF:
 		p := vips.NewGifExportParams()
 		p.Dither = 1.0
+		// GIF bit-depth (Волна 5c): govips поддерживает Bitdepth для gifsave
+		// (native gifsave vips ≥ 8.12). 0 = умолчание govips (8).
+		p.Bitdepth = gifBitDepth(enc.GIFBitDepth)
 		out, _, err := img.ExportGIF(p)
 		return out, err
 	case processing.FormatAVIF:
 		p := vips.NewAvifExportParams()
 		p.Quality = plan.Quality
 		p.StripMetadata = true
+		if s := avifSpeed(enc.AVIFSpeed); s > 0 {
+			p.Effort = s
+		}
 		out, _, err := img.ExportAvif(p)
 		return out, err
 	case processing.FormatHEIF:
@@ -738,6 +1088,10 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 	case processing.FormatJPEGXL:
 		p := vips.NewJxlExportParams()
 		p.Quality = plan.Quality
+		// JXL effort (Волна 5d): 0 = умолчание govips (7).
+		if e := jxlEffort(enc.JXLEffort); e > 0 {
+			p.Effort = e
+		}
 		out, _, err := img.ExportJxl(p)
 		return out, err
 	case processing.FormatAPNG:
@@ -747,9 +1101,14 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		// изображения результат — статичный PNG, который также является
 		// валидным APNG (без анимации). Метаданные анимации (delay/loop)
 		// сохраняются из исходника (см. applyAnimation).
+		//
+		// PNG quantization НЕ применяется к APNG: палитровый экспорт
+		// анимации не поддерживается pngsave (палитра на каждый кадр
+		// несовместима с APNG-чанками) — обычный PNG-экспорт с interlace.
 		p := vips.NewPngExportParams()
 		p.StripMetadata = true
-		p.Compression = 6
+		p.Compression = pngCompression(enc.PNGCompression)
+		p.Interlace = enc.PNGInterlace
 		out, _, err := img.ExportPng(p)
 		return out, err
 	default:
@@ -757,35 +1116,104 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 	}
 }
 
+// normalizeResolution сбрасывает xres/yres изображения к целевому DPI
+// (по умолчанию 72), чтобы просмотрщики не масштабировали изображение по
+// DPI-метаданным исходника. Решение о необходимости копии — чистая функция
+// needsResolutionNormalization.
+//
+// Возвращает новый ImageRef, если разрешение отличалось (вызывающий обязан
+// закрыть старый), либо тот же img, если нормализация не требуется.
+// Отказоустойчивость: ошибка копирования — понятная ошибка экспорта.
+func normalizeResolution(img *vips.ImageRef, targetDPI float64) (*vips.ImageRef, error) {
+	if !needsResolutionNormalization(img.ResX(), img.ResY(), targetDPI) {
+		return img, nil
+	}
+	// libvips хранит разрешение в px/mm, поэтому целевой DPI переводится
+	// в px/mm (72 DPI = 72/25.4 ≈ 2.8346 px/mm).
+	targetPxPerMm := dpiToPxPerMm(targetDPI)
+	out, err := img.CopyChangingResolution(targetPxPerMm, targetPxPerMm)
+	if err != nil {
+		return nil, fmt.Errorf("libvips: normalize resolution to %.0f dpi: %w", targetDPI, err)
+	}
+	return out, nil
+}
+
 // maxWatermarkTiles — защитный лимит числа копий ватермарки на холсте
 // (защита от патологических конфигураций тайлинга: крошечный файл при
 // repeat покроет холст миллионами копий).
 const maxWatermarkTiles = 4096
 
-// wmCacheMu / wmCache — кэш содержимого файлов ватермарок по пути.
-// Файлы задаются администратором в конфиге и не меняются в рантайме;
-// кэш избавляет от чтения с диска на каждый запрос.
+// wmCache — глобальный in-memory кэш байтов файлов ватермарок (LRU + TTL +
+// singleflight; см. watermarkcache.go). Настройки применяются один раз при
+// создании движка через configureWatermarkCache.
 var (
-	wmCacheMu sync.RWMutex
-	wmCache   = map[string][]byte{}
+	wmCacheOnce sync.Once
+	wmCache     *watermarkCache
 )
 
-// loadWatermark читает файл ватермарки (с кэшем по пути).
+// configureWatermarkCache инициализирует глобальный кэш ватермарок настройками
+// из конфигурации. Вызывается при создании движка (newLibvipsBackend);
+// повторные вызовы идемпотентны (первая конфигурация выигрывает).
+func configureWatermarkCache(opts WatermarkCacheOpts) {
+	wmCacheOnce.Do(func() {
+		wmCache = newWatermarkCache(opts)
+	})
+}
+
+// registerVipsStatsProvider публикует провайдер vips-метрик в observability:
+// tracked memory/allocs, open files, mem highwater, operation cache hits/
+// misses (govips ReadVipsMemStats + счётчики операций) и метрики кэша
+// ватермарок Фазы 3. Вызывается при создании движка; повторные вызовы
+// заменяют провайдер без перезапуска сборщика.
+//
+// Отказоустойчивость: сам провайдер не паникует (cgo-вызовы обёрнуты
+// recover'ом на стороне collector'а); до Startup значения нулевые — это
+// корректное состояние.
+func registerVipsStatsProvider(interval time.Duration) {
+	observability.SetVipsStatsProvider(func() (observability.VipsSnapshot, error) {
+		var snap observability.VipsSnapshot
+		var ms vips.MemoryStats
+		vips.ReadVipsMemStats(&ms)
+		snap.TrackedMemory = ms.Mem
+		snap.MemHighwater = ms.MemHigh
+		snap.OpenFiles = ms.Files
+		snap.TrackedAllocs = ms.Allocs
+		var stats vips.RuntimeStats
+		vips.ReadRuntimeStats(&stats)
+		var total int64
+		for _, n := range stats.OperationCounts {
+			total += n
+		}
+		snap.OperationsTotal = total
+		if wmCache != nil {
+			entries, bytes, hits, misses := wmCache.stats()
+			snap.WatermarkCacheEntries = int64(entries)
+			snap.WatermarkCacheBytes = bytes
+			snap.WatermarkCacheHits = hits
+			snap.WatermarkCacheMisses = misses
+		}
+		return snap, nil
+	}, interval)
+}
+
+// loadWatermark читает файл ватермарки через кэш байтов: stat файла выполняется
+// на каждый вызов (дёшево) для инвалидации по mtime/размеру; сами байты берутся
+// из памяти при попадании. При любой ошибке кэша/чтения возвращается ошибка —
+// вызывающий не должен «ломаться» молча (ватермарка обязательна для запроса),
+// но сам кэш ошибок не генерирует: промах просто означает чтение с диска.
 func loadWatermark(path string) ([]byte, error) {
-	wmCacheMu.RLock()
-	data, ok := wmCache[path]
-	wmCacheMu.RUnlock()
-	if ok {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat watermark file: %w", err)
+	}
+	loader := func() ([]byte, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read watermark file: %w", err)
+		}
 		return data, nil
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read watermark file: %w", err)
-	}
-	wmCacheMu.Lock()
-	wmCache[path] = data
-	wmCacheMu.Unlock()
-	return data, nil
+	return wmCache.getOrLoad(path, st.ModTime(), st.Size(), loader)
 }
 
 // applyWatermark накладывает ватермарку из плана на изображение.
@@ -812,6 +1240,9 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 	if err != nil {
 		return nil, fmt.Errorf("libvips: watermark %q: %w", wm.Name, err)
 	}
+	// Декодирование из кэшированных байтов: libvips кэширует операции
+	// декодирования, поэтому повторный decode одного файла быстрый.
+	// ImageRef создаётся НА КАЖДЫЙ запрос и мутируется локально — cgo-безопасно.
 	wmImg, err := vips.NewImageFromBuffer(data)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: watermark %q: decode: %w", wm.Name, err)
@@ -819,24 +1250,35 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 	defer wmImg.Close()
 
 	W, H := img.Width(), img.Height()
-	tw, th := wm.TargetSize(W, H, wmImg.Width(), wmImg.Height())
+	// Для анимации ватермарка накладывается на КАЖДЫЙ кадр (высота ph), а не
+	// на весь вертикально сшитый холст (высота H). Поэтому целевой размер и
+	// раскладку ватермарки нужно вычислять относительно размеров ОДНОГО кадра
+	// (W×ph); иначе координаты по Y (например, center при H=2*ph) окажутся
+	// смещены вниз на сшитом холсте и не попадут в центр кадра.
+	ph := img.PageHeight()
+	animated := img.Pages() > 1 && ph > 0 && H > ph
+	canvasH := H
+	if animated {
+		canvasH = ph
+	}
+	tw, th := wm.TargetSize(W, canvasH, wmImg.Width(), wmImg.Height())
 	// Режим round: копия масштабируется до шага сетки, чтобы целое число
 	// копий точно укладывалось по осям холста.
 	if wm.RoundScale() {
-		tw, th = wm.RoundStep(W, H, tw, th)
+		tw, th = wm.RoundStep(W, canvasH, tw, th)
 	}
 	if err := wmImg.ThumbnailWithSize(tw, th, vips.InterestingNone, vips.SizeForce); err != nil {
 		return nil, fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
 	}
 
-	pts := wm.Layout(W, H, tw, th)
+	pts := wm.Layout(W, canvasH, tw, th)
 	if len(pts) > maxWatermarkTiles {
 		return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, len(pts), maxWatermarkTiles)
 	}
 
 	// Анимация (кадры = вертикальный стек страниц): покадровый композит.
 	// Композит на весь сшитый холст попал бы только в область первого кадра.
-	if ph := img.PageHeight(); img.Pages() > 1 && ph > 0 && H > ph {
+	if animated {
 		out, err := compositeWatermarkPerFrame(img, wmImg, pts, W, ph)
 		if err != nil {
 			return nil, fmt.Errorf("libvips: watermark %q: animated output %q: %w", wm.Name, plan.OutputFormat, err)
@@ -844,24 +1286,55 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		return out, nil
 	}
 
-	for _, pt := range pts {
-		if err := img.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
-			return nil, fmt.Errorf("libvips: watermark %q: composite at (%d,%d): %w", wm.Name, pt.X, pt.Y, err)
-		}
+	if err := compositeWatermarkOnce(img, wmImg, pts); err != nil {
+		return nil, fmt.Errorf("libvips: watermark %q: composite: %w", wm.Name, err)
 	}
 	return img, nil
 }
 
+// compositeWatermarkOnce накладывает все копии ватермарки ОДНИМ вызовом
+// CompositeMulti (единый vips_composite со всеми слоями) вместо N
+// последовательных Composite. Для одиночной позиции это тот же один композит,
+// что и раньше; для repeat/tile — N слоёв одной операции: libvips выполняет
+// один проход композиции вместо N промежуточных изображений.
+//
+// Требование vips_composite: все входы должны иметь одинаковое число каналов;
+// если у цели и копии оно различается — недостающая альфа добавляется
+// AddAlpha. BlendModeOver консистентен с premultiply-семантикой Фазы 2
+// (composite выполняет смешивание в premultiplied пространстве внутри
+// операции).
+func compositeWatermarkOnce(target *vips.ImageRef, tile *vips.ImageRef, pts []processing.Point) error {
+	if len(pts) == 0 {
+		return nil
+	}
+	// Выравниваем число каналов: composite требует одинаковую структуру
+	// входов. Обе картинки мутируются локально (владелец — текущий запрос).
+	targetBands, tileBands := target.Bands(), tile.Bands()
+	if targetBands != tileBands {
+		if targetBands < tileBands {
+			if err := target.AddAlpha(); err != nil {
+				return fmt.Errorf("add alpha to target: %w", err)
+			}
+		} else if err := tile.AddAlpha(); err != nil {
+			return fmt.Errorf("add alpha to watermark: %w", err)
+		}
+	}
+	layers := make([]*vips.ImageComposite, len(pts))
+	for i, pt := range pts {
+		layers[i] = &vips.ImageComposite{Image: tile, BlendMode: vips.BlendModeOver, X: pt.X, Y: pt.Y}
+	}
+	return target.CompositeMulti(layers)
+}
+
 // compositeWatermarkPerFrame накладывает ватермарку на каждый кадр
 // многокадрового изображения и собирает кадры обратно в вертикальный стек.
-// Механика разборки/сборки анимации инкапсулирована в withFrames.
+// Механика разборки/сборки анимации инкапсулирована в withFrames; каждый кадр
+// получает ЕДИНЫЙ композит всех копий (см. compositeWatermarkOnce).
 func compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
 	n := img.Pages()
 	return withFrames(img, func(f *vips.ImageRef, i int) error {
-		for _, pt := range pts {
-			if err := f.Composite(wmImg, vips.BlendModeOver, pt.X, pt.Y); err != nil {
-				return fmt.Errorf("composite frame %d/%d at (%d,%d): %w", i+1, n, pt.X, pt.Y, err)
-			}
+		if err := compositeWatermarkOnce(f, wmImg, pts); err != nil {
+			return fmt.Errorf("frame %d/%d: %w", i+1, n, err)
 		}
 		return nil
 	})

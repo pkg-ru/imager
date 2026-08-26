@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/adapters/processor/shared"
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeBackend — тестовый движок без cgo: возвращает данные или ошибку.
@@ -23,7 +23,7 @@ type fakeBackend struct {
 	processed int32
 }
 
-func (f *fakeBackend) process(ctx context.Context, data []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
+func (f *fakeBackend) process(ctx context.Context, data []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox, _ *gateSlot) (*backendResult, error) {
 	atomic.AddInt32(&f.processed, 1)
 	if f.block != nil {
 		select {
@@ -117,7 +117,7 @@ func TestProcessNilArgs(t *testing.T) {
 // Не зависит от build tags (в отличие от stubBackend из process_stub.go).
 type notCompiledBackend struct{}
 
-func (n *notCompiledBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
+func (n *notCompiledBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox, _ *gateSlot) (*backendResult, error) {
 	return nil, ErrNotCompiled
 }
 

@@ -23,9 +23,9 @@ import (
 
 	"github.com/pkg-ru/imager/adapters/processor/detection"
 	"github.com/pkg-ru/imager/adapters/processor/shared"
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота (bounded
@@ -101,10 +101,95 @@ type Limits struct {
 	MaxCacheSize int
 }
 
+// ShrinkOnLoadOpts — настройки shrink-on-load (предварительное уменьшение
+// при декодировании JPEG/WebP/GIF/HEIF/AVIF). Платформенно-независимы:
+// применение параметров — в load (process_libvips.go), решение — чистая
+// функция resolveShrinkOnLoad (shrinkonload.go). Создаётся через
+// NewShrinkOnLoadOpts; нулевое значение = включено (умолчание).
+type ShrinkOnLoadOpts struct {
+	value bool
+	set   bool
+}
+
+// NewShrinkOnLoadOpts создаёт настройки shrink-on-load. value=true/false
+// фиксирует явное значение из конфигурации; explicit=false означает «ключ
+// не задан» → включено по умолчанию.
+func NewShrinkOnLoadOpts(value, explicit bool) ShrinkOnLoadOpts {
+	return ShrinkOnLoadOpts{value: value, set: explicit}
+}
+
+// Enabled сообщает, включён ли shrink-on-load. По умолчанию (ключ не задан)
+// — включён.
+func (o ShrinkOnLoadOpts) Enabled() bool {
+	if !o.set {
+		return true
+	}
+	return o.value
+}
+
+// OperationCacheOpts — настройки operation cache libvips (Фаза 5b).
+//
+// libvips кэширует результаты операций (vips_cache): кэш полезен для
+// повторяющихся операций на одних и тех же изображениях, но для
+// stateless-обработчика он бесполезен, ест память и несёт риск на
+// musl/Alpine. Рекомендация для продакшена — false.
+//
+// При отключении в Startup передаются НУЛЕВЫЕ лимиты кэша
+// (vips_cache_set_max_mem(0) / vips_cache_set_max(0) / set_max_files(0)):
+// в govips значение 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша (а не "без лимита" —
+// см. Startup: значение < 0 = default govips, 0 = отключение).
+type OperationCacheOpts struct {
+	value bool
+	set   bool
+}
+
+// NewOperationCacheOpts создаёт настройки operation cache. value=true/false
+// фиксирует явное значение из конфигурации; explicit=false означает «ключ
+// не задан» → включено по умолчанию (обратная совместимость).
+func NewOperationCacheOpts(value, explicit bool) OperationCacheOpts {
+	return OperationCacheOpts{value: value, set: explicit}
+}
+
+// Enabled сообщает, включён ли operation cache. По умолчанию (ключ не задан)
+// — включён.
+func (o OperationCacheOpts) Enabled() bool {
+	if !o.set {
+		return true
+	}
+	return o.value
+}
+
 // Options — параметры создания Processor.
 type Options struct {
 	// Limits — resource limits обработчика.
 	Limits Limits
+	// Encoders — per-format параметры сжатия кодировщиков (WebP effort,
+	// AVIF speed, PNG compression, JXL effort, JPEG progressive, PNG
+	// interlace/quantization, GIF bit-depth). Нулевые поля = встроенные
+	// умолчания.
+	Encoders EncoderParams
+	// ShrinkOnLoad — настройки shrink-on-load при декодировании. Нулевое
+	// значение = включено (умолчание).
+	ShrinkOnLoad ShrinkOnLoadOpts
+	// Color — политика ICC color management (Фаза 5a): strip (дефолт,
+	// удалять профиль), transform (конвертация в sRGB перед обработкой),
+	// keep (сохранить embedded-профиль в выход). Нулевое значение = strip.
+	Color ColorMode
+	// OperationCache — настройки operation cache libvips (Фаза 5b).
+	// Нулевое значение = включено (умолчание, обратная совместимость);
+	// false = нулевые лимиты кэша при Startup (кэш отключён).
+	OperationCache OperationCacheOpts
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок (Фаза 3).
+	// Нулевое значение = кэш включён с дефолтами (см.
+	// DefaultWatermarkCacheOpts).
+	WatermarkCache WatermarkCacheOpts
+	// DetectionSem — настройки отдельного detection-семафора (Фаза 4):
+	// тяжёлые CPU-bound ONNX-инференсы выполняются вне libvips-слотов.
+	// Нулевое значение = дефолты (см. DetectionSemaphoreOpts.Normalized).
+	DetectionSem DetectionSemaphoreOpts
+	// VipsMetricsInterval — интервал периодического сбора vips-метрик
+	// (observability, Фаза 4). 0 = дефолт observability.DefaultVipsMetricsInterval.
+	VipsMetricsInterval time.Duration
 	// Detector — детектор лиц/объектов для операций face-crop/object-crop.
 	// nil = детекция недоступна: запросы с fc/oc вернут понятную ошибку.
 	// Детектор создаётся в composition root (cmd/imager/main.go) из секции
@@ -139,8 +224,11 @@ type backend interface {
 	// LimitError. detectionsReady/boxes — готовые боксы детекции из
 	// sidecar-кэша: при true процессор
 	// НЕ вызывает ИИ-модель, а использует переданные боксы (в координатах
-	// оригинала).
-	process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox) (*backendResult, error)
+	// оригинала). slot — ручка двухуровневых семафоров: при self-detection
+	// движок перекладывает libvips-слот на detection-семофор на время
+	// инференса (см. detectionsemaphore.go); владение возвращается движком
+	// перед выходом.
+	process(ctx context.Context, data []byte, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) (*backendResult, error)
 	// prepareRGB извлекает RGB-пиксели источника в размерах ОРИГИНАЛА
 	// (без trim) для детекции на уровне приложения (ensureDetections).
 	// Возвращает nil, если движок не поддерживает подготовку RGB.
@@ -161,7 +249,7 @@ var newBackend func(opts Options) (backend, error)
 // ОДИН раз на процесс (sync.Once в process_libvips.go).
 type Processor struct {
 	limits    Limits
-	sem       *shared.Semaphore
+	gate      *detectionGate
 	backend   backend
 	closeOnce sync.Once
 }
@@ -188,13 +276,21 @@ func New(opts Options) (*Processor, error) {
 	if conc <= 0 {
 		conc = 16
 	}
+	if err := opts.DetectionSem.Validate(); err != nil {
+		return nil, fmt.Errorf("libvips: detection semaphore: %w", err)
+	}
+	detOpts := opts.DetectionSem.Normalized()
 	bk, err := newBackend(opts)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: new backend: %w", err)
 	}
+	gate := newDetectionGate(
+		shared.NewSemaphore(conc, 0, ErrTooManyConcurrency),
+		shared.NewSemaphore(detOpts.Concurrency, detOpts.MaxWait, ErrTooManyDetectionConcurrency),
+	)
 	return &Processor{
 		limits:  opts.Limits,
-		sem:     shared.NewSemaphore(conc, 0, ErrTooManyConcurrency),
+		gate:    gate,
 		backend: bk,
 	}, nil
 }
@@ -230,11 +326,14 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 
 	// Ожидание слота конкурентности с bounded очередью. При переполнении
-	// очереди — быстрый отказ, а не бесконечное ожидание.
-	if err := p.sem.Acquire(ctx); err != nil {
+	// очереди — быстрый отказ, а не бесконечное ожидание. Слот возвращается
+	// через gateSlot.Release (defer): во время ONNX-инференса libvips-слот
+	// перекладывается на detection-семофор (см. detectionsemaphore.go).
+	slot, err := p.gate.acquireVips(ctx)
+	if err != nil {
 		return nil, err
 	}
-	defer p.sem.Release()
+	defer slot.Release()
 
 	// Application-level context deadline (не полагаемся только на libvips).
 	runCtx := ctx
@@ -261,10 +360,10 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 
 	// Обработка (govips или заглушка). К2: watchdog-обёртка — зависшая
 	// cgo-операция не прерывается по ctx, но сервис не блокируется:
-	// по истечении контекста возвращается ошибка, а слот семафора
+	// по истечении контекста возвращается ошибка, а слот(ы) семафора
 	// освобождается (defer p.sem.release() выше).
 	br, err := runWatchdog(runCtx, func() (*backendResult, error) {
-		return p.backend.process(runCtx, data, in.Plan, in.DetectionsReady, in.Boxes)
+		return p.backend.process(runCtx, data, in.Plan, in.DetectionsReady, in.Boxes, slot)
 	})
 	if err != nil {
 		if runCtx.Err() != nil {

@@ -118,7 +118,7 @@ func TestWatermarkAppliedToEveryFrame(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	res, err := b.process(context.Background(), makeGif(t), plan, false, nil)
+	res, err := b.process(context.Background(), makeGif(t), plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestWatermarkNoWatermark(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	res, err := b.process(context.Background(), makeGif(t), plan, false, nil)
+	res, err := b.process(context.Background(), makeGif(t), plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}

@@ -6,9 +6,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 func init() {
@@ -33,7 +33,7 @@ func newStubBackend(Options) (backend, error) {
 	return &stubBackend{}, nil
 }
 
-func (s *stubBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox) (*backendResult, error) {
+func (s *stubBackend) process(_ context.Context, _ []byte, _ *processing.ProcessingPlan, _ bool, _ []filemeta.PixelBox, _ *gateSlot) (*backendResult, error) {
 	return nil, fmt.Errorf("%w: process_libvips.go: libvips (govips) is not available in this build; rebuild with -tags libvips", ErrNotCompiled)
 }
 

@@ -119,7 +119,7 @@ func TestOpSmartCropTrim(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestOpFaceCropTrimUsesTrimmedDimensions(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestOpObjectCropTrimUsesTrimmedDimensions(t *testing.T) {
 		t.Fatalf("newLibvipsBackend: %v", err)
 	}
 
-	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, false, nil, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestOpFaceCropWithReadyBoxes(t *testing.T) {
 	// Красный прямоугольник [20,20)x[80,60) на холсте 120x80. Бокс в
 	// координатах оригинала совпадает с ним.
 	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
-	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
 
 	// Бокс в координатах оригинала: весь красный прямоугольник.
 	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 60, Height: 40}}
-	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes)
+	res, err := b.process(context.Background(), makeTrimPng(t, 120, 80, 20, 20, 80, 60), plan, true, boxes, nil)
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}

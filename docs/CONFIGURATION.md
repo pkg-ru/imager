@@ -227,7 +227,7 @@ path-policies:
 | `repeat` | string | `no-repeat` | `no-repeat\|repeat\|repeat-x\|repeat-y\|round\|space` |
 | `size` | string | `contain` | `contain\|cover\|"200px 50px"` |
 
-Ограничения движков: ImageMagick поддерживает точный размер только в px-форме и все repeat-режимы рендерит сплошной плиткой; анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips возвращают ошибку обработки.
+Ограничения движков: ImageMagick поддерживает точный размер только в px-форме и все repeat-режимы рендерит сплошной плиткой; libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
 Приоритет применения ватермарки: пресет → path-policy → `processing.default-watermark`.
 
@@ -287,6 +287,49 @@ watermarks:
 | `max-cache-files` | int | default govips | Максимум открытых файлов кэша |
 | `max-cache-size` | int | `100` | Максимум операций в кэше |
 
+Per-format параметры сжатия кодировщиков (`libvips.encoders.*`). Значение `0` = встроенное умолчание движка. Диапазоны валидируются при старте: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
+
+| Ключ (`libvips.encoders.*`) | Тип | По умолчанию | Описание |
+|------------------------------|-----|--------------|----------|
+| `webp-reduction-effort` | int `[0,6]` | `4` | Reduction effort WebP: больше = лучше сжатие, медленнее |
+| `avif-speed` | int `[0,9]` | default govips (`5`) | Speed/effort AVIF: больше = быстрее, хуже сжатие |
+| `png-compression-level` | int `[0,9]` | `6` | Уровень сжатия PNG (применяется и к APNG) |
+| `jxl-effort` | int `[0,9]` | default govips (`7`) | Effort JPEG XL: больше = лучше сжатие, медленнее |
+| `jpeg-progressive` | bool | `false` | Прогрессивный (interlaced) JPEG; `false` = baseline |
+| `png-interlace` | bool | `false` | Чересстрочный (interlaced/Adam7) PNG; `false` = обычный |
+| `png-palette` | bool | `false` | PNG-квантование (палитровый экспорт) для статичных PNG. Выключено по умолчанию: применяется только при явном включении (градиенты дешёво не определяется — решение конфигом); при ошибке — fallback на обычный PNG, запрос не падает. К APNG не применяется |
+| `png-palette-colors` | int `[2,256]` | `256` | Максимум цветов палитры при `png-palette=true` (`0` = 256) |
+| `png-palette-bit-depth` | int `[1,8]` | `8` | Битность палитры при `png-palette=true`; позволяет сохранить палитровую битность исходника (`0` = 8) |
+| `gif-bit-depth` | int `[1,8]` | default govips (`8`) | Битность палитры GIF (`0` = умолчание govips) |
+
+DPI-нормализация: при экспорте `xres`/`yres` сбрасываются к 72 DPI (после `stripAllMetadata`), чтобы просмотрщики не масштабировали изображение по DPI-метаданным исходника (например 300 DPI из сканера). Изображения уже с 72 DPI не перекопируются (быстрый путь). Константа не конфигурируется.
+
+> **WebP preset**: в govips v2.18.0 `WebpExportParams` не содержит поля `Preset` (`default`/`photo`/`picture`/`drawing`/`icon`/`text`), поэтому параметр `webp-preset` не добавляется в конфиг — он пропущен до появления API в govips.
+
+Shrink-on-load (`libvips.shrink-on-load.*`) — предварительное уменьшение при декодировании JPEG/WebP/GIF/HEIF/AVIF. Коэффициент вычисляется из целевого размера плана с запасом ×2 (после shrink размер гарантированно ≥ цели; точный resize выполняется далее как обычно). Решение консервативно: shrink НЕ применяется при trim/smart-crop/face-crop/object-crop, ручной ориентации или ненейтральном EXIF-повороте, `size=x`, неизвестных размерах исходника и для анимированных GIF.
+
+| Ключ (`libvips.shrink-on-load.*`) | Тип | По умолчанию | Описание |
+|------------------------------------|-----|--------------|----------|
+| `enabled` | bool | `true` | Включить shrink-on-load при декодировании |
+
+ICC color management (`libvips.color.mode`) — политика обработки embedded-ICC-профиля исходника. Проблема, которую решает: без color management цвета CMYK/ProPhoto/Display-P3 исходников искажаются (профиль просто удаляется). Режимы:
+
+- `strip` (дефолт, обратная совместимость): профиль удаляется при обработке (`stripAllMetadata`).
+- `transform`: embedded-профиль конвертируется в стандартный sRGB через PCS (govips `TransformICCProfile` → `vips_icc_transform` с профилем sRGB IEC61966-2.1) ПЕРЕД пиксельной обработкой; после конверсии изображение обрабатывается как обычное sRGB. **Fast-path (нулевой оверхед)**: sRGB-совместимый профиль (проверка по сигнатуре/имени без lcms-конверсии) или изображение уже в sRGB colorspace без профиля — конверсия не выполняется. **Отказоустойчивость**: битый/отсутствующий профиль или ошибка lcms не роняют запрос — fallback на strip-поведение с warning-логом.
+- `keep`: embedded-профиль сохраняется в выходном изображении (профиль не удаляется при экспорте).
+
+| Ключ (`libvips.color.*`) | Тип | По умолчанию | Описание |
+|---------------------------|-----|--------------|----------|
+| `mode` | string | `"strip"` | Режим: `strip` \| `transform` \| `keep` (fail-fast: неизвестное значение — ошибка старта) |
+
+Passthrough fast-path: в режиме `transform` исходники с sRGB-совместимым профилем могут возвращаться без перекодирования (конверсия была бы no-op); в режиме `keep` passthrough допустим для любого профиля (профиль сохраняется в выходе). EXIF/XMP/IPTC и прочие метаданные по-прежнему блокируют passthrough.
+
+Operation cache libvips (`libvips.operation-cache.enabled`) — управление кэшем результатов операций libvips (`vips_cache`). Кэш полезен для повторяющихся операций на одних и тех же изображениях, но для stateless-обработчика он **бесполезен, ест память и несёт риск на musl/Alpine** — рекомендуемое значение для продакшена: `false`. При отключении в Startup передаются нулевые лимиты кэша (`vips_cache_set_max_mem(0)` / `vips_cache_set_max(0)` / `vips_cache_set_max_files(0)`): в govips значение `0` означает **полное отключение** кэша (не "без лимита"; значение `< 0` = default govips).
+
+| Ключ (`libvips.operation-cache.*`) | Тип | По умолчанию | Описание |
+|-------------------------------------|-----|--------------|----------|
+| `enabled` | bool | `true` | Включить operation cache; `false` = кэш отключён (нулевые лимиты при Startup) |
+
 ```yaml
 libvips:
   limits:
@@ -295,7 +338,74 @@ libvips:
     concurrency: 2
     threads: 4
     max-cache-mem: 52428800
+  encoders:
+    webp-reduction-effort: 4
+    avif-speed: 6
+    png-compression-level: 6
+    jxl-effort: 0
+    jpeg-progressive: false
+    png-interlace: false
+    png-palette: false
+    png-palette-colors: 0
+    png-palette-bit-depth: 0
+    gif-bit-depth: 0
+  shrink-on-load:
+    enabled: true
+  color:
+    mode: strip
+  operation-cache:
+    enabled: false
+  watermark-cache:
+    enabled: true
+    max-files: 32
+    max-bytes: 67108864
+    ttl: "5m"
+  detection:
+    concurrency: 0
+    max-wait: "5s"
+  metrics-interval: "15s"
 ```
+
+Кэш файлов ватермарок (`libvips.watermark-cache.*`) — in-memory кэш исходных БАЙТОВ файлов ватермарок, keyed по пути файла (не по конфигурации наложения): один файл обслуживает любое число настроек позиции/масштаба/repeat. Декодирование выполняется libvips на каждый запрос (ускоряется его operation cache), чтение с диска устраняется. Инвалидация записи — по mtime/размеру файла (лёгкий `stat` на каждый запрос) плюс TTL; вытеснение — LRU по числу записей и суммарному бюджету байтов; параллельная загрузка одного файла дедуплицируется (singleflight). При промахе кэша выполняется прозрачное чтение с диска — запрос не ломается. Файл больше `max-bytes` не кэшируется.
+
+| Ключ (`libvips.watermark-cache.*`) | Тип | По умолчанию | Описание |
+|------------------------------------|-----|--------------|----------|
+| `enabled` | bool | `true` | Включить кэш; `false` = каждое использование читает диск |
+| `max-files` | int | `32` | Максимум записей (файлов) в кэше |
+| `max-bytes` | int | 64 MiB | Суммарный бюджет памяти кэша в байтах |
+| `ttl` | duration | `"5m"` | Страховочное время жизни записи |
+
+Detection-семофор (`libvips.detection.*`) — отдельный bounded-семафор для тяжёлых CPU-bound ONNX-инференсов (face-crop/object-crop). Схема handoff (Фаза 4): на время инференса libvips-слот освобождается и берётся detection-слот, после инференса слоты меняются обратно. Это защищает лёгкие операции (decode/resize/encode) от голодания при потоке fc/oc-запросов, сохраняя ограничение суммарной конкурентности (защита от OOM). Порядок захвата строго детерминирован (detection-слот берётся только при удержании libvips-слота), вложенного удержания обоих слотов во время долгих операций нет — дедлок невозможен. При переполнении очереди ожидания или истечении `max-wait` — быстрый отказ перегрузки.
+
+| Ключ (`libvips.detection.*`) | Тип | По умолчанию | Описание |
+|-------------------------------|-----|--------------|----------|
+| `concurrency` | int | `max(1, GOMAXPROCS/2)` | Максимум одновременных ONNX-инференсов |
+| `max-wait` | duration | `"5s"` | Бюджет ожидания detection-слота; истечение → быстрый отказ |
+
+Vips-метрики (`libvips.metrics-interval`) — периодический сбор метрик libvips и кэша ватермарок в observability; экспортируются через `/metrics` как gauge-и:
+
+- `imager_vips_tracked_memory_bytes` — tracked memory libvips;
+- `imager_vips_tracked_allocs` — число активных аллокаций;
+- `imager_vips_open_files` — открытые файлы libvips;
+- `imager_vips_mem_highwater_bytes` — пик tracked memory;
+- `imager_vips_operations_total` — суммарное число операций govips;
+- `imager_vips_watermark_cache_hits_total` / `imager_vips_watermark_cache_misses_total` / `imager_vips_watermark_cache_entries` / `imager_vips_watermark_cache_bytes` — метрики кэша ватермарок Фазы 3.
+
+Сбор отказоустойчивен: паника/ошибка провайдера не влияет на обработку запросов (значения просто не обновляются до следующего тика); goroutine-сборщик останавливается при graceful shutdown.
+
+| Ключ (`libvips.*`) | Тип | По умолчанию | Описание |
+|--------------------|-----|--------------|----------|
+| `metrics-interval` | duration | `"15s"` | Интервал сбора vips-метрик (минимум `"1s"`; `0` = дефолт) |
+
+Примечания по производительности libvips-адаптера:
+
+- **Passthrough**: если план обработки ничего не меняет (целевой формат совпадает с исходным, размер уже целевой или `size=x`, нет watermark/trim/ориентации/детекции/ограничений кадров, исходник без EXIF/XMP/ICC-метаданных) — исходные байты возвращаются как есть, без decode/encode. В режиме `libvips.color.mode: transform` passthrough дополнительно допускается для исходников с sRGB-совместимым ICC-профилем (конверсия была бы no-op); в режиме `keep` — для любого профиля.
+- **Лимит кадров анимации** (`frames` в пресетах/лимитах) применяется на этапе загрузки (`NumPages`), что дешевле пост-обрезки стека кадров.
+- **Sequential access** выставляется при загрузке для операций с одним линейным проходом по пикселям (resize/crop/smart-crop без trim).
+- **Shrink-on-load**: для JPEG применяется shrink степени двойки (1/2/1/4/1/8), для WebP/HEIF/AVIF/GIF — scale-on-load. Отключается ключом `libvips.shrink-on-load.enabled: false`.
+- **ICC color management** (`libvips.color.mode: transform`): embedded-профиль конвертируется в sRGB через PCS перед обработкой (не после!). Fast-path исключает конверсию для sRGB-совместимых профилей и изображений уже в sRGB — нулевой оверхед для большинства веб-исходников. Ошибки lcms не роняют запрос (fallback на strip).
+- **Operation cache** (`libvips.operation-cache.enabled: false`): при отключении в Startup передаются нулевые лимиты кэша (`vips_cache_set_max_mem(0)`/`vips_cache_set_max(0)`/`vips_cache_set_max_files(0)`) — в govips `0` означает полное отключение кэша, а не «без лимита». Рекомендуется для stateless-обработчика (меньше памяти, меньше риска на musl/Alpine).
+- **Premultiply**: перед resize изображений с альфа-каналом (PNG/WebP/GIF/APNG с прозрачностью) выполняется Premultiply → resize → Unpremultiply — исключает тёмные ореолы на полупрозрачных краях. Для анимаций операция применяется ко всему стеку кадров с сохранением delay/loop.
 
 ## detection
 
