@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -619,6 +620,311 @@ processing:
 	if ts.Mode != processing.TrimModeColor || ts.Color != "#f0f0f0" || ts.Tolerance != 0.1 {
 		t.Errorf("DefaultTrim = %+v, want {color, #f0f0f0, 0.1}", ts)
 	}
+}
+
+// TestLoadConfigDirThreeLayers проверяет загрузку трёх слоёв: setting
+// (обязательный), generate и failback (оба опциональные). Значения из всех
+// слоёв объединяются в единый RuntimeConfig.
+func TestLoadConfigDirThreeLayers(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
+version: "1"
+server:
+  addr: ":8080"
+source:
+  storage: fs
+  path: /data/source
+result:
+  storage: fs
+  path: /data/result
+`)
+	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
+policy:
+  global:
+    authorization: safe
+    allowed-presets: ["thumb"]
+  presets:
+    - name: thumb
+      size: 200x200
+      output-format: webp
+processing:
+  default-quality: 80
+application:
+  output-limit: 10485760
+`)
+	writeConfig(t, filepath.Join(dir, FailbackConfigFile), `
+imagemagick:
+  binary: /usr/bin/magick
+http:
+  not-found:
+    pixel: true
+  source-fallback:
+    enabled: true
+    status: 200
+`)
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	// Из setting.
+	if rc.Server.Addr != ":8080" {
+		t.Errorf("Server.Addr = %q, want :8080", rc.Server.Addr)
+	}
+	// Из generate.
+	if rc.OutputLimit != 10485760 {
+		t.Errorf("OutputLimit = %d, want 10485760", rc.OutputLimit)
+	}
+	if rc.Pipeline.Policy.Global.Authorization != "safe" {
+		t.Errorf("Authorization = %q, want safe", rc.Pipeline.Policy.Global.Authorization)
+	}
+	if rc.Pipeline.Processing.DefaultQuality != 80 {
+		t.Errorf("DefaultQuality = %d, want 80", rc.Pipeline.Processing.DefaultQuality)
+	}
+	// Из failback.
+	if rc.ImageMagick.Binary != "/usr/bin/magick" {
+		t.Errorf("ImageMagick.Binary = %q, want /usr/bin/magick", rc.ImageMagick.Binary)
+	}
+	if !rc.HTTP.NotFound.Pixel {
+		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
+	}
+	if !rc.HTTP.SourceFallback.Enabled || rc.HTTP.SourceFallback.Status != 200 {
+		t.Errorf("SourceFallback = %+v, want enabled + status 200", rc.HTTP.SourceFallback)
+	}
+}
+
+// TestLoadConfigDirGenerateLocalOverride проверяет, что generate-local.yaml
+// глубоко переопределяет generate.yaml (скаляр заменяется, отсутствующий
+// ключ сохраняется из base).
+func TestLoadConfigDirGenerateLocalOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
+	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
+processing:
+  default-quality: 80
+  default-trim-mode: auto
+`)
+	writeConfig(t, filepath.Join(dir, GenerateLocalFile), `
+processing:
+  default-quality: 90
+`)
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	if rc.Pipeline.Processing.DefaultQuality != 90 {
+		t.Errorf("DefaultQuality = %d, want 90 (overridden by local)", rc.Pipeline.Processing.DefaultQuality)
+	}
+	if rc.Pipeline.Processing.DefaultTrimMode != "auto" {
+		t.Errorf("DefaultTrimMode = %q, want auto (kept from base)", rc.Pipeline.Processing.DefaultTrimMode)
+	}
+}
+
+// TestLoadConfigDirFailbackLocalOverride проверяет, что failback-local.yaml
+// переопределяет failback.yaml.
+func TestLoadConfigDirFailbackLocalOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
+	writeConfig(t, filepath.Join(dir, FailbackConfigFile), `
+imagemagick:
+  binary: magick
+`)
+	writeConfig(t, filepath.Join(dir, FailbackLocalFile), `
+imagemagick:
+  binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
+`)
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	if rc.ImageMagick.Binary != "D:/OSPanel/addons/ImageMagick-vs17/magick.exe" {
+		t.Errorf("ImageMagick.Binary = %q, want overridden Windows path", rc.ImageMagick.Binary)
+	}
+}
+
+// TestLoadConfigDirMissingGenerateFailback проверяет обратную совместимость:
+// отсутствие generate.yaml / failback.yaml — нормальная ситуация, сервис
+// работает как раньше (только setting.yaml).
+func TestLoadConfigDirMissingGenerateFailback(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
+version: "1"
+server:
+  addr: ":9090"
+source:
+  storage: fs
+  path: /data/source
+result:
+  storage: fs
+  path: /data/result
+`)
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	if rc.Server.Addr != ":9090" {
+		t.Errorf("Server.Addr = %q, want :9090", rc.Server.Addr)
+	}
+	// Умолчания схемы для отсутствующих слоёв.
+	if rc.OutputLimit != 0 {
+		t.Errorf("OutputLimit = %d, want 0 (default)", rc.OutputLimit)
+	}
+	if rc.ImageMagick.Binary != "magick" {
+		t.Errorf("ImageMagick.Binary = %q, want default magick", rc.ImageMagick.Binary)
+	}
+}
+
+// captureLogger — тестовый логгер, собирающий warning-сообщения.
+type captureLogger struct {
+	warnings []string
+}
+
+func (c *captureLogger) Debugf(string, ...any) {}
+func (c *captureLogger) Infof(string, ...any)  {}
+func (c *captureLogger) Warnf(format string, args ...any) {
+	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
+}
+func (c *captureLogger) Errorf(string, ...any) {}
+
+// TestLoadConfigDirTopLevelConflict проверяет, что при совпадении top-level
+// ключа между базовыми файлами слоёв пишется warning, а deep merge выполняется
+// в порядке setting -> generate -> failback (более специализированный слой
+// выигрывает при конфликте скаляров).
+func TestLoadConfigDirTopLevelConflict(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
+version: "1"
+application:
+  buffer-max-bytes: 524288000
+`)
+	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
+application:
+  output-limit: 10485760
+`)
+
+	prev := configLogger
+	cl := &captureLogger{}
+	configLogger = cl
+	defer func() { configLogger = prev }()
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	// Deep merge: оба ключа из разных слоёв сохраняются.
+	if rc.BufferMaxBytes != 524288000 {
+		t.Errorf("BufferMaxBytes = %d, want 524288000 (from setting)", rc.BufferMaxBytes)
+	}
+	if rc.OutputLimit != 10485760 {
+		t.Errorf("OutputLimit = %d, want 10485760 (from generate)", rc.OutputLimit)
+	}
+	// Warning о конфликте top-level ключа "application".
+	found := false
+	for _, w := range cl.warnings {
+		if contains(w, "application") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about top-level key conflict, got warnings: %v", cl.warnings)
+	}
+}
+
+// TestLoadConfigDirInvalidGenerateVersion проверяет, что невалидный version
+// в generate.yaml — ошибка старта (защита от рассинхронизации версий слоёв).
+func TestLoadConfigDirInvalidGenerateVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
+	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `version: "2"`)
+	if _, err := LoadConfigDir(dir); err == nil {
+		t.Fatal("expected error for invalid version in generate.yaml")
+	}
+}
+
+// TestLoadConfigDirUnknownFieldInGenerate проверяет strict-декодирование:
+// неизвестное поле в generate.yaml — ошибка.
+func TestLoadConfigDirUnknownFieldInGenerate(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
+	writeConfig(t, filepath.Join(dir, GenerateConfigFile), "bogus-section:\n  foo: bar\n")
+	if _, err := LoadConfigDir(dir); err == nil {
+		t.Fatal("expected error for unknown field in generate.yaml")
+	}
+}
+
+// TestLoadConfigDirUnknownFieldInFailback проверяет strict-декодирование:
+// неизвестное поле в failback.yaml — ошибка.
+func TestLoadConfigDirUnknownFieldInFailback(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
+	writeConfig(t, filepath.Join(dir, FailbackConfigFile), "bogus: 42\n")
+	if _, err := LoadConfigDir(dir); err == nil {
+		t.Fatal("expected error for unknown field in failback.yaml")
+	}
+}
+
+// TestLoadConfigDirBackwardCompatSingleFile проверяет обратную совместимость:
+// старый монолитный setting.yaml, содержащий секции, которые "переехали" в
+// generate/failback, продолжает работать без ошибок.
+func TestLoadConfigDirBackwardCompatSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
+version: "1"
+server:
+  addr: ":8080"
+policy:
+  global:
+    authorization: safe
+    allowed-presets: ["thumb"]
+  presets:
+    - name: thumb
+      size: 200x200
+      output-format: webp
+processing:
+  default-quality: 80
+imagemagick:
+  binary: /usr/bin/magick
+http:
+  not-found:
+    pixel: true
+application:
+  output-limit: 10485760
+`)
+
+	rc, err := LoadConfigDir(dir)
+	if err != nil {
+		t.Fatalf("LoadConfigDir: %v", err)
+	}
+	if rc.Server.Addr != ":8080" {
+		t.Errorf("Server.Addr = %q, want :8080", rc.Server.Addr)
+	}
+	if rc.OutputLimit != 10485760 {
+		t.Errorf("OutputLimit = %d, want 10485760", rc.OutputLimit)
+	}
+	if rc.ImageMagick.Binary != "/usr/bin/magick" {
+		t.Errorf("ImageMagick.Binary = %q, want /usr/bin/magick", rc.ImageMagick.Binary)
+	}
+	if !rc.HTTP.NotFound.Pixel {
+		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		(len(s) > 0 && indexOf(s, sub) >= 0))
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 func writeConfig(t *testing.T, path, content string) {

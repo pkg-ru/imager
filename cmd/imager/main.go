@@ -1,7 +1,8 @@
 // Command imager — тонкая обёртка над публичным фасадом package imager.
 //
-// Вся логика (загрузка YAML-конфига, сборка pipeline, запуск HTTP-сервера,
-// graceful shutdown) вынесена в библиотечный фасад github.com/pkg-ru/imager.
+// Вся логика (загрузка YAML-конфига из трёх слоёв — setting/generate/failback,
+// сборка pipeline, запуск HTTP-сервера, graceful shutdown) вынесена в
+// библиотечный фасад github.com/pkg-ru/imager.
 // Здесь остаётся только чтение env-переменной IMAGER_CONFIG_DIR и вызов
 // imager.NewServer + imager.Server.Run.
 package main

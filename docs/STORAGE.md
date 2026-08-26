@@ -166,7 +166,7 @@ URL:      https://cdn.example.com/images/foo/bar.jpg
 ```yaml
 metadata:
   enabled: true                  # дефолт true
-  dir: "./data/meta"             # пусто = <локальный result-каталог>/.meta
+  dir: "./data/meta"             # пусто = <локальный result-каталог>
 ```
 
 - каждая модель вызывается ровно один раз на родительский файл; последующие запросы читают боксы из sidecar;

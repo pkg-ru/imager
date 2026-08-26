@@ -48,7 +48,7 @@ go build -tags libvips,onnx -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 IMAGER_CONFIG_DIR=./config ./imager
 ```
 
-Единственная переменная окружения — `IMAGER_CONFIG_DIR`: путь к каталогу с `setting.yaml` (обязателен) и опциональным `setting-local.yaml`. Если переменная не задана — используется текущий каталог.
+Единственная переменная окружения — `IMAGER_CONFIG_DIR`: путь к каталогу с файлами конфигурации. Обязателен `setting.yaml`; остальные (`setting-local.yaml`, `generate.yaml`/`generate-local.yaml`, `failback.yaml`/`failback-local.yaml`) — опциональны. Если переменная не задана — используется текущий каталог.
 
 Проверка запуска:
 
@@ -67,7 +67,7 @@ docker build -t imager:production .
 Образ двухэтапный:
 
 - **builder**: `golang:1.25.0-alpine3.20` + `build-base`, `vips-dev ~=8.15`, `libheif-dev`, `libjxl-dev`, `librsvg-dev`, `poppler-dev`, `libraw-dev`; бинарь собирается с `-tags libvips`;
-- **runtime**: `alpine:3.20` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`; non-root пользователь `imager` (uid 10001); бинарь `/usr/local/bin/imager`, базовый конфиг `/etc/imager/setting.yaml`.
+- **runtime**: `alpine:3.20` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`; non-root пользователь `imager` (uid 10001); бинарь `/usr/local/bin/imager`, каталог конфигурации `/etc/imager` (монтируется из `./config`, см. [CONFIGURATION.md](CONFIGURATION.md)).
 
 HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 

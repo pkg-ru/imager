@@ -4,18 +4,17 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"path/filepath"
 
-	"github.com/pkg-ru/imager/coordination/singleflight"
 	"github.com/pkg-ru/imager/adapters/storage/fs"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/app/adminsvc"
 	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/coordination/singleflight"
 	"github.com/pkg-ru/imager/ports/detector"
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
-	"github.com/pkg-ru/imager/config"
 )
 
 // AppOptions — параметры сборки нового pipeline (composition root).
@@ -57,7 +56,7 @@ type AppOptions struct {
 	// MetadataDir — КОРЕНЬ sidecar-хранилища метаданных (metadata.dir):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
 	// source/result. Пусто = дефолт `<эффективный локальный
-	// result-каталог>/.meta`. Применяется, только если MetadataEnabled и Detector задан.
+	// result-каталог>`. Применяется, только если MetadataEnabled и Detector задан.
 	MetadataDir string
 	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция остаётся в процессоре).
 	Detector detector.Detector
@@ -124,7 +123,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	//
 	// metaRoot задаётся metadata.dir (ЯВНЫЙ локальный путь, независимый от
 	// хранилищ source/result); если не задан — дефолт
-	// `<эффективный локальный result-каталог>/.meta` (обратно совместимо).
+	// `<эффективный локальный result-каталог>` (без подкаталога .meta).
 	// Эффективный локальный result-каталог = result.path, иначе ResultDir.
 	// Отключён, если metadata выключено, детектор не задан или локальный
 	// result-каталог не определён (best-effort: ошибки не ломают генерацию).
@@ -137,7 +136,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 				localResultDir = opt.ResultDir
 			}
 			if localResultDir != "" {
-				metaRoot = filepath.Join(localResultDir, ".meta")
+				metaRoot = localResultDir
 			}
 		}
 		if metaRoot != "" {
@@ -189,12 +188,13 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	var adminHandler http.Handler
 	if opt.HTTP.Admin.Enabled {
 		adminSvc, err = adminsvc.New(adminsvc.Deps{
-			Gen:     svc,
-			Sources: sources,
-			Results: results,
-			Presets: compiled.Presets,
-			Policy:  compiled.Policy,
-			Logger:  opt.HTTP.Logger,
+			Gen:      svc,
+			Sources:  sources,
+			Results:  results,
+			Presets:  compiled.Presets,
+			Policy:   compiled.Policy,
+			Metadata: metaStore,
+			Logger:   opt.HTTP.Logger,
 		}, adminsvc.Config{
 			Workers:     opt.HTTP.Admin.Workers,
 			QueueSize:   opt.HTTP.Admin.QueueSize,

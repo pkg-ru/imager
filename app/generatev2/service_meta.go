@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // metaFlightPrefix — префикс singleflight-ключей метаданных.
@@ -64,11 +65,13 @@ func planNeedsObjects(plan *processing.ProcessingPlan) bool {
 //   - сбой любой стадии                                  → лог + (false, nil):
 //     процессор работает в режиме self-detection (деградация 8.2).
 //
-// Модель вызывается ровно один раз на родителя под keyed singleflight
-// "meta:"+srcKey; sidecar создаётся лениво (только при реальных данных).
+// Модель вызывается ровно один раз на ассет под keyed singleflight
+// "meta:"+assetKey; sidecar создаётся лениво (только при реальных данных).
+// Метаданные привязаны к АССЕТУ-результату (файл .meta.json лежит рядом с
+// ассетом), поэтому ключом служит assetKey, а не ключ источника.
 func (s *Service) ensureDetections(
 	ctx context.Context,
-	srcKey object.ObjectKey,
+	assetKey object.ObjectKey,
 	plan *processing.ProcessingPlan,
 	src io.ReadSeeker,
 ) (bool, []filemeta.PixelBox) {
@@ -85,16 +88,16 @@ func (s *Service) ensureDetections(
 	// processor.RGBPreparer; иначе — деградация к self-detection.
 	prep, ok := s.deps.Processor.(processor.RGBPreparer)
 	if !ok {
-		s.log.Warnf("generatev2: processor %T does not implement RGBPreparer; detection degraded to self-detection (src=%s)", s.deps.Processor, srcKey)
+		s.log.Warnf("generatev2: processor %T does not implement RGBPreparer; detection degraded to self-detection (asset=%s)", s.deps.Processor, assetKey)
 		return false, nil
 	}
 
-	v, err := s.deps.Coordinator.Do(ctx, metaFlightKey(srcKey), func() (any, error) {
-		return s.ensureDetectionsLocked(ctx, srcKey, plan, prep, src)
+	v, err := s.deps.Coordinator.Do(ctx, metaFlightKey(assetKey), func() (any, error) {
+		return s.ensureDetectionsLocked(ctx, assetKey, plan, prep, src)
 	})
 	if err != nil {
 		// Best-effort: сбой координации/детекции не должен ломать генерацию.
-		s.log.Warnf("generatev2: detection cache flight failed (src=%s): %v", srcKey, err)
+		s.log.Warnf("generatev2: detection cache flight failed (asset=%s): %v", assetKey, err)
 		return false, nil
 	}
 	det, ok := v.(detectionsResult)
@@ -104,25 +107,25 @@ func (s *Service) ensureDetections(
 	return det.ready, det.boxes
 }
 
-// ensureDetectionsLocked — тело детекции под keyed singleflight "meta:"+srcKey:
+// ensureDetectionsLocked — тело детекции под keyed singleflight "meta:"+assetKey:
 //  1. Load sidecar (промах/битый → свежие данные);
 //  2. детекция только отсутствующих данных (Faces == nil / Objects == nil),
 //     «проверено, пусто» (non-nil, len==0) не вызывает модель повторно;
-//  3. Save результатов под уже удерживаемой блокировкой "meta:"+srcKey
-//     (одна операция на parent; повторного Load не происходит);
+//  3. Save результатов под уже удерживаемой блокировкой "meta:"+assetKey
+//     (одна операция на ассет; повторный Load не происходит);
 //  4. итоговые боксы в координатах ОРИГИНАЛА.
 func (s *Service) ensureDetectionsLocked(
 	ctx context.Context,
-	srcKey object.ObjectKey,
+	assetKey object.ObjectKey,
 	plan *processing.ProcessingPlan,
 	prep processor.RGBPreparer,
 	src io.ReadSeeker,
 ) (any, error) {
-	m, err := s.deps.Metadata.Load(ctx, srcKey.String())
+	m, err := s.deps.Metadata.Load(ctx, assetKey.String())
 	if err != nil {
 		if errors.Is(err, filemeta.ErrSchemaTooNew) {
 			// Чужие данные более новой версии: не читаем и не перезаписываем.
-			s.log.Warnf("generatev2: metadata schema too new (src=%s); detection degraded to self-detection", srcKey)
+			s.log.Warnf("generatev2: metadata schema too new (asset=%s); detection degraded to self-detection", assetKey)
 			return detectionsResult{}, nil
 		}
 		if errors.Is(err, filemeta.ErrCorrupt) || errors.Is(err, filemeta.ErrNotFound) {
@@ -130,7 +133,7 @@ func (s *Service) ensureDetectionsLocked(
 			m = nil
 		} else {
 			// IO/прозрачная ошибка: best-effort → деградация.
-			return nil, fmt.Errorf("generatev2: load metadata (src=%s): %w", srcKey, err)
+			return nil, fmt.Errorf("generatev2: load metadata (asset=%s): %w", assetKey, err)
 		}
 	}
 	if m == nil {
@@ -145,15 +148,15 @@ func (s *Service) ensureDetectionsLocked(
 	if detectFaces || detectObjects {
 		frame, err := prep.PrepareRGB(ctx, src)
 		if err != nil {
-			return nil, fmt.Errorf("generatev2: prepare RGB (src=%s): %w", srcKey, err)
+			return nil, fmt.Errorf("generatev2: prepare RGB (asset=%s): %w", assetKey, err)
 		}
 		if frame == nil || len(frame.Pixels) == 0 || frame.Width <= 0 || frame.Height <= 0 {
-			return nil, fmt.Errorf("generatev2: prepare RGB returned empty frame (src=%s)", srcKey)
+			return nil, fmt.Errorf("generatev2: prepare RGB returned empty frame (asset=%s)", assetKey)
 		}
 		if detectFaces {
 			faces, err := s.deps.Detector.DetectFaces(ctx, frame.Pixels, frame.Width, frame.Height)
 			if err != nil {
-				return nil, fmt.Errorf("generatev2: detect faces (src=%s): %w", srcKey, err)
+				return nil, fmt.Errorf("generatev2: detect faces (asset=%s): %w", assetKey, err)
 			}
 			// non-nil (в т.ч. пустой) срез — «проверено, пусто»: кэшируется.
 			// append([]FaceInfo{}, ...) гарантирует non-nil даже при пустом
@@ -163,17 +166,17 @@ func (s *Service) ensureDetectionsLocked(
 		if detectObjects {
 			objects, err := s.deps.Detector.DetectObjects(ctx, frame.Pixels, frame.Width, frame.Height)
 			if err != nil {
-				return nil, fmt.Errorf("generatev2: detect objects (src=%s): %w", srcKey, err)
+				return nil, fmt.Errorf("generatev2: detect objects (asset=%s): %w", assetKey, err)
 			}
 			m.Objects = append([]filemeta.ObjectInfo{}, objects...)
 		}
-		// Сохраняем под уже удерживаемой keyed-блокировкой "meta:"+srcKey
+		// Сохраняем под уже удерживаемой keyed-блокировкой "meta:"+assetKey
 		// (Coordinator.Do выше). Save вместо Update (атомарный read-modify-write
 		// внутри Update сделал бы ВТОРОЙ Load того же sidecar-файла за один
 		// запрос и занял бы вложенную блокировку на тот же ключ). Атомарность
 		// записи обеспечивает temp+rename внутри MetadataStore.Save.
-		if err := s.deps.Metadata.Save(ctx, srcKey.String(), m); err != nil {
-			return nil, fmt.Errorf("generatev2: save detections (src=%s): %w", srcKey, err)
+		if err := s.deps.Metadata.Save(ctx, assetKey.String(), m); err != nil {
+			return nil, fmt.Errorf("generatev2: save detections (asset=%s): %w", assetKey, err)
 		}
 	}
 
@@ -200,9 +203,11 @@ func (s *Service) ensureDetectionsLocked(
 // вообще не входят сюда и не входят в Coordinator.Do. Здесь остаётся только
 // страховочный guard: nil-store или не-кандидат → возврат без записи.
 // При нулевых SourceWidth/SourceHeight шаг пропускается.
+//
+// Метаданные привязаны к АССЕТУ-результату, поэтому ключом служит assetKey.
 func (s *Service) updateLargestAIAsset(
 	ctx context.Context,
-	srcKey, assetKey object.ObjectKey,
+	assetKey object.ObjectKey,
 	outFormat string,
 	outW, outH, srcW, srcH int,
 ) {
@@ -212,8 +217,8 @@ func (s *Service) updateLargestAIAsset(
 	if !filemeta.ShouldTrackAsAIAsset(srcW, srcH, outW, outH) {
 		return
 	}
-	_, err := s.deps.Coordinator.Do(ctx, metaFlightKey(srcKey), func() (any, error) {
-		uerr := s.deps.Metadata.Update(ctx, srcKey.String(), func(m *filemeta.FileMetadata) (bool, error) {
+	_, err := s.deps.Coordinator.Do(ctx, metaFlightKey(assetKey), func() (any, error) {
+		uerr := s.deps.Metadata.Update(ctx, assetKey.String(), func(m *filemeta.FileMetadata) (bool, error) {
 			if m == nil {
 				m = filemeta.NewFileMetadata()
 			}
@@ -236,6 +241,53 @@ func (s *Service) updateLargestAIAsset(
 		return nil, nil
 	})
 	if err != nil {
-		s.log.Warnf("generatev2: update largest_ai_asset failed (src=%s, asset=%s): %v", srcKey, assetKey, err)
+		s.log.Warnf("generatev2: update largest_ai_asset failed (asset=%s): %v", assetKey, err)
 	}
+}
+
+// recordAssetCreationTime — ленивая асинхронная запись unix-времени создания
+// ассета (created_unix) в sidecar-метаданные ассета.
+//
+// Требования:
+//   - пишется ТОЛЬКО при создании ассета и ТОЛЬКО если файла метаданных ещё
+//     не было (проверка НАЛИЧИЯ файла, без чтения содержимого);
+//   - выполняется в фоне (не в основном потоке генерации) и не блокирует
+//     ответ клиенту;
+//   - файл НЕ читается на каждый запрос/генерацию: проверяется только
+//     наличие (Exists), и если файл уже есть — запись не выполняется.
+//
+// best-effort: ошибки логируются и не влияют на генерацию.
+func (s *Service) recordAssetCreationTime(ctx context.Context, assetKey object.ObjectKey) {
+	if s.deps.Metadata == nil {
+		return
+	}
+	// Асинхронно: не блокируем основной поток генерации. Используем
+	// context.Background, чтобы запись завершилась даже после отмены
+	// запроса (иначе время создания терялось бы при быстром ответе).
+	go func() {
+		bctx := context.Background()
+		exists, err := s.deps.Metadata.Exists(bctx, assetKey.String())
+		if err != nil {
+			s.log.Warnf("generatev2: check asset metadata existence failed (asset=%s): %v", assetKey, err)
+			return
+		}
+		if exists {
+			// Файл метаданных уже есть — время создания не перезаписываем.
+			return
+		}
+		err = s.deps.Metadata.Update(bctx, assetKey.String(), func(m *filemeta.FileMetadata) (bool, error) {
+			if m == nil {
+				m = filemeta.NewFileMetadata()
+			}
+			if m.CreatedUnix != 0 {
+				// Время уже записано — не перезаписываем.
+				return false, nil
+			}
+			m.CreatedUnix = time.Now().Unix()
+			return true, nil
+		})
+		if err != nil {
+			s.log.Warnf("generatev2: record asset creation time failed (asset=%s): %v", assetKey, err)
+		}
+	}()
 }

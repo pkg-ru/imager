@@ -3,15 +3,15 @@ package generatev2
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // metaTestLogger — тестовый логгер, реализущий полный Logger
@@ -210,10 +210,10 @@ func metaFullEnv(t *testing.T, proc processor.Processor, metaS *fakeMetadataStor
 	})
 }
 
-// TestGenerateConcurrentDetectionsOneCallPerParent — N конкурентных Generate
-// РАЗНЫХ ассетов ОДНОГО родителя: детекция выполняется ровно ОДИН раз
-// суммарно (keyed singleflight по "meta:srcKey", а НЕ по ассет-ключу).
-func TestGenerateConcurrentDetectionsOneCallPerParent(t *testing.T) {
+// TestGenerateConcurrentDetectionsOneCallPerAsset — N конкурентных Generate
+// ОДНОГО ассета: детекция выполняется ровно ОДИН раз суммарно (keyed
+// singleflight по "meta:"+assetKey). Метаданные привязаны к ассету-результату.
+func TestGenerateConcurrentDetectionsOneCallPerAsset(t *testing.T) {
 	metaS := newFakeMetadataStore()
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 100, srcH: 100, outW: 100, outH: 100}
@@ -225,17 +225,17 @@ func TestGenerateConcurrentDetectionsOneCallPerParent(t *testing.T) {
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			// Разные ассеты одного родителя: разные размеры/формат.
-			req := mustReq(t, "", "photo", "png", asset.TransformFaceCrop, fmt.Sprintf("%dx%d", 100+i, 100+i), 1, "webp")
+			// Один и тот же ассет: одинаковый размер/формат.
+			req := mustReq(t, "", "photo", "png", asset.TransformFaceCrop, "100x100", 1, "webp")
 			res, err := env.svc.Generate(context.Background(), req)
 			if err != nil {
 				errs <- err
 				return
 			}
 			_ = res.Close()
-		}(i)
+		}()
 	}
 	wg.Wait()
 	close(errs)
@@ -244,14 +244,14 @@ func TestGenerateConcurrentDetectionsOneCallPerParent(t *testing.T) {
 	}
 
 	if got := det.facesCalls.Load(); got != 1 {
-		t.Fatalf("DetectFaces calls = %d, want exactly 1 (dedup по родителю)", got)
+		t.Fatalf("DetectFaces calls = %d, want exactly 1 (dedup по ассету)", got)
 	}
 }
 
-// TestGenerateResizeNoMetadataTouch — обычный resize (план без детекции):
-// при включённых метаданных НЕ вызываются ни Load, ни Update и модель не
-// запускается (ленивость).
-func TestGenerateResizeNoMetadataTouch(t *testing.T) {
+// TestGenerateResizeNoDetection — обычный resize (план без детекции): модель
+// не запускается, largest_ai_asset не пишется (не ИИ-кандидат). При этом
+// лениво/асинхронно записывается created_unix (время создания ассета).
+func TestGenerateResizeNoDetection(t *testing.T) {
 	metaS := newFakeMetadataStore()
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 100, srcH: 100, outW: 100, outH: 100}
@@ -266,18 +266,22 @@ func TestGenerateResizeNoMetadataTouch(t *testing.T) {
 	}
 	_ = res.Close()
 
-	metaS.mu.Lock()
-	loads := metaS.loadCalls
-	updates := metaS.updateCalls
-	metaS.mu.Unlock()
-	if loads != 0 {
-		t.Fatalf("Metadata.Load calls = %d, want 0 (resize не трогает sidecar)", loads)
-	}
-	if updates != 0 {
-		t.Fatalf("Metadata.Update calls = %d, want 0 (resize не трогает sidecar)", updates)
-	}
+	// Детекция не вызывается (план без детекции).
 	if got := det.facesCalls.Load(); got != 0 {
 		t.Fatalf("DetectFaces calls = %d, want 0", got)
+	}
+
+	// created_unix записывается асинхронно (файл метаданных создаётся).
+	metaS.waitForUpdate(t, 1)
+	metaS.mu.Lock()
+	saved := metaS.data["photo-png/100x100.webp"]
+	metaS.mu.Unlock()
+	if saved == nil || saved.CreatedUnix == 0 {
+		t.Fatalf("created_unix не записан: %+v", saved)
+	}
+	// largest_ai_asset не должен быть установлен (не ИИ-кандидат).
+	if saved.LargestAIAsset != nil {
+		t.Fatalf("largest_ai_asset установлен для не-ИИ ассета: %+v", saved.LargestAIAsset)
 	}
 }
 
@@ -285,7 +289,7 @@ func TestGenerateResizeNoMetadataTouch(t *testing.T) {
 // ТОЛЬКО при реальном ИИ-ассете (выход больше родителя, те же пропорции).
 // Запрос c resize-форматом, но ИИ-размерами результата → sidecar пишется с
 // largest_ai_asset (Load для детекции не вызывается — план не требует
-// детекции).
+// детекции). Метаданные привязаны к ассету-результату (ключ = canonical URL).
 func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	metaS := newFakeMetadataStore()
 	det := newFakeDetector()
@@ -301,28 +305,29 @@ func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	}
 	_ = res.Close()
 
+	// created_unix записывается асинхронно; largest_ai_asset — синхронно.
+	metaS.waitForUpdate(t, 1)
 	metaS.mu.Lock()
-	updates := metaS.updateCalls
-	saved := metaS.data["photo.png"]
+	saved := metaS.data["photo-png/100x100.webp"]
 	metaS.mu.Unlock()
-	if updates == 0 {
-		t.Fatalf("Metadata.Update calls = 0, want ≥1 (largest_ai_asset должен записаться)")
-	}
 	if saved == nil || saved.LargestAIAsset == nil {
 		t.Fatalf("largest_ai_asset не сохранён: %+v", saved)
 	}
 	if saved.LargestAIAsset.Width != 2000 || saved.LargestAIAsset.Height != 2000 {
 		t.Fatalf("largest_ai_asset = %dx%d, want 2000x2000", saved.LargestAIAsset.Width, saved.LargestAIAsset.Height)
 	}
+	if saved.LargestAIAsset.Key != "photo-png/100x100.webp" {
+		t.Fatalf("largest_ai_asset.key = %q, want %q", saved.LargestAIAsset.Key, "photo-png/100x100.webp")
+	}
 	if got := det.facesCalls.Load(); got != 0 {
 		t.Fatalf("DetectFaces calls = %d, want 0 (план не требует детекции)", got)
 	}
 }
 
-// TestGenerateNonAIAssetDoesNotUpdateMetadata — resize с размерами НЕ больше
-// родителя (не ИИ-кандидат) → Metadata не вызывается ВООБЩЕ (0 Load, 0 Update):
-// largest_ai_asset лениво пропускается, sidecar не создаётся.
-func TestGenerateNonAIAssetDoesNotUpdateMetadata(t *testing.T) {
+// TestGenerateNonAIAssetNoLargestAIAsset — resize с размерами НЕ больше
+// родителя (не ИИ-кандидат) → largest_ai_asset НЕ пишется. При этом
+// created_unix (время создания) записывается лениво/асинхронно.
+func TestGenerateNonAIAssetNoLargestAIAsset(t *testing.T) {
 	metaS := newFakeMetadataStore()
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 1000, srcH: 1000, outW: 800, outH: 800}
@@ -336,11 +341,72 @@ func TestGenerateNonAIAssetDoesNotUpdateMetadata(t *testing.T) {
 	}
 	_ = res.Close()
 
+	// created_unix записывается асинхронно.
+	metaS.waitForUpdate(t, 1)
 	metaS.mu.Lock()
-	loads := metaS.loadCalls
-	updates := metaS.updateCalls
+	saved := metaS.data["photo-png/100x100.webp"]
 	metaS.mu.Unlock()
-	if loads != 0 || updates != 0 {
-		t.Fatalf("metadata touched for non-AI asset: loads=%d updates=%d, want 0/0", loads, updates)
+	if saved == nil {
+		t.Fatalf("metadata не создан для ассета")
 	}
+	if saved.LargestAIAsset != nil {
+		t.Fatalf("largest_ai_asset установлен для не-ИИ ассета: %+v", saved.LargestAIAsset)
+	}
+	if saved.CreatedUnix == 0 {
+		t.Fatalf("created_unix не записан: %+v", saved)
+	}
+}
+
+// TestRecordAssetCreationTimeWritesOnce — recordAssetCreationTime записывает
+// created_unix только если файла метаданных ещё нет (проверка наличия, без
+// чтения содержимого). Повторный вызов не перезаписывает время.
+func TestRecordAssetCreationTimeWritesOnce(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	// Первый вызов: файла нет → created_unix записывается.
+	s.recordAssetCreationTime(context.Background(), "asset.webp")
+	metaS.waitForUpdate(t, 1)
+	metaS.mu.Lock()
+	first := metaS.data["asset.webp"]
+	metaS.mu.Unlock()
+	if first == nil || first.CreatedUnix == 0 {
+		t.Fatalf("created_unix не записан при первом вызове: %+v", first)
+	}
+	firstUnix := first.CreatedUnix
+
+	// Второй вызов: файл уже есть → Exists=true, запись не выполняется.
+	metaS.mu.Lock()
+	before := metaS.updateCalls
+	metaS.mu.Unlock()
+	s.recordAssetCreationTime(context.Background(), "asset.webp")
+	// Ждём, пока асинхронная горутина завершится (если она что-то сделает).
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		metaS.mu.Lock()
+		after := metaS.updateCalls
+		metaS.mu.Unlock()
+		if after > before {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	metaS.mu.Lock()
+	second := metaS.data["asset.webp"]
+	metaS.mu.Unlock()
+	if second == nil || second.CreatedUnix != firstUnix {
+		t.Fatalf("created_unix перезаписан: got %d, want %d", second.CreatedUnix, firstUnix)
+	}
+}
+
+// TestRecordAssetCreationTimeDisabled — при выключенных метаданных запись
+// времени создания не выполняется (no-op).
+func TestRecordAssetCreationTimeDisabled(t *testing.T) {
+	s := &Service{deps: Deps{Metadata: nil}}
+	// Не должен паниковать и не должен ничего писать.
+	s.recordAssetCreationTime(context.Background(), "asset.webp")
 }

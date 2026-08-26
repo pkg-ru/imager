@@ -5,11 +5,13 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"testing"
+	"time"
 
+	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/ports/detector"
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/processor"
-	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // fakeMetadataStore — in-memory metadata.Store со счётчиками вызовов.
@@ -22,6 +24,26 @@ type fakeMetadataStore struct {
 	updateCalls int
 	loadErr     error
 	updateErr   error
+}
+
+// waitForUpdate блокирует до тех пор, пока число вызовов Update не станет
+// >= want (или не истечёт таймаут). Нужен для асинхронной записи времени
+// создания (recordAssetCreationTime выполняется в фоновой горутине).
+func (s *fakeMetadataStore) waitForUpdate(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		n := s.updateCalls
+		s.mu.Unlock()
+		if n >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d Update calls, got %d", want, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func newFakeMetadataStore() *fakeMetadataStore {
@@ -40,6 +62,13 @@ func (s *fakeMetadataStore) Load(_ context.Context, srcKey string) (*filemeta.Fi
 		return nil, filemeta.ErrNotFound
 	}
 	return m, nil
+}
+
+func (s *fakeMetadataStore) Exists(_ context.Context, srcKey string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.data[srcKey]
+	return ok, nil
 }
 
 func (s *fakeMetadataStore) Save(_ context.Context, srcKey string, m *filemeta.FileMetadata) error {
@@ -69,6 +98,13 @@ func (s *fakeMetadataStore) Update(_ context.Context, srcKey string, fn metadata
 		s.data[srcKey] = m
 		s.saveCalls++
 	}
+	return nil
+}
+
+func (s *fakeMetadataStore) Delete(_ context.Context, srcKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, srcKey)
 	return nil
 }
 

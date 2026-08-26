@@ -48,54 +48,15 @@ IMAGER_CONFIG_DIR=. ./imager
 
 ### Минимальный конфиг
 
-`config/setting.yaml` (сокращённый вариант; полный самодокументированный файл уже в репозитории):
+Конфигурация разделена на **три слоя** (каждый — пара «base + local»):
 
-```yaml
-version: "1"
+- `setting.yaml` + `setting-local.yaml` — фундамент: сервер, HTTP, стораджи, libvips-лимиты, observability, admin;
+- `generate.yaml` + `generate-local.yaml` — генерация ассетов: policy, пресеты, watermarks, processing, энкодеры, detection;
+- `failback.yaml` + `failback-local.yaml` — резервы: ImageMagick, not-found, source-fallback.
 
-server:
-  addr: ":8080"
+Обязателен только `setting.yaml`; остальные файлы опциональны. Внутри пары `local` глубоко переопределяет `base`, затем слои объединяются в порядке `setting → generate → failback`. Полное описание, распределение секций и примеры — [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-http:
-  cache-control: "public, max-age=2592000"
-  not-found:
-    pixel: true
-
-policy:
-  global:
-    authorization: "safe"
-    allowed-presets: ["thumb", "thumb@2"]
-    size-rules: ["0-2000x0-2000"]
-    limits:
-      source-bytes: 10485760
-      output-bytes: 10485760
-  presets:
-    - name: "thumb"
-      size: "200x200"
-      output-format: webp
-      quality: 85
-      dpr: 1
-    - name: "thumb@2"
-      size: "400x400"
-      output-format: webp
-      quality: 85
-      dpr: 2
-  path-policies:
-    - path: "/"
-
-source:
-  storage: fs
-  path: "./data/source"
-
-result:
-  storage: fs
-  path: "./data/result"
-
-processing:
-  default-quality: 85
-```
-
-Единственная переменная окружения — `IMAGER_CONFIG_DIR` (каталог с `setting.yaml`; опциональный `setting-local.yaml` глубоко переопределяет базовый).
+Единственная переменная окружения — `IMAGER_CONFIG_DIR` (каталог с файлами конфигурации).
 
 ### Примеры запросов
 
@@ -128,7 +89,7 @@ curl http://localhost:8080/healthz
 | Документ | Содержание |
 |----------|------------|
 | [docs/INSTALLATION.md](docs/INSTALLATION.md) | Сборка, зависимости, Docker |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Все параметры `config/setting.yaml` |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Все параметры конфигурации (три слоя: setting/generate/failback) |
 | [docs/API.md](docs/API.md) | Формат asset URL, эндпоинты, коды ошибок |
 | [docs/PROCESSING.md](docs/PROCESSING.md) | Операции обработки, ватермарки, ориентация, детекция |
 | [docs/STORAGE.md](docs/STORAGE.md) | Хранилища fs/S3/SFTP/FTP/FTPS/HTTP, метаданные, janitor |

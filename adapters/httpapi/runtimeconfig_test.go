@@ -215,7 +215,7 @@ metadata:
 }
 
 // TestParseRuntimeConfigMetadataDirDefault проверяет, что при отсутствии
-// metadata.dir поле остаётся пустым (дефолт <resultRoot>/.meta применяется
+// metadata.dir поле остаётся пустым (дефолт <resultRoot> применяется
 // на уровне DI — app.go).
 func TestParseRuntimeConfigMetadataDirDefault(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte("version: \"1\"\n" +

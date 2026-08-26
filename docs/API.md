@@ -95,7 +95,7 @@ curl -o out.webp http://localhost:8080/test-jpg/sc-800x600.webp
 # Face-crop 300x300 с DPR 3
 curl -o out.jpeg http://localhost:8080/test-jpg/fc-300x300@3.jpeg
 
-# Пресеты из config/setting.yaml
+# Пресеты из config/generate.yaml
 curl -o thumb.webp http://localhost:8080/test-jpg/thumb.webp      # 200x200 WebP
 curl -o thumb2.webp http://localhost:8080/test-jpg/thumb@2.webp   # 400x400 WebP
 

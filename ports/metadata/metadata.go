@@ -18,29 +18,40 @@ import (
 // (ленивое создание).
 type UpdateFn func(*filemeta.FileMetadata) (changed bool, err error)
 
-// Store — локальное sidecar-хранилище метаданных родительских файлов.
+// Store — локальное sidecar-хранилище метаданных, привязанных к
+// АССЕТУ-результату.
 //
 // Расположение и формат файла скрыты за интерфейсом: реализация знает про
-// `<resultRoot>/.meta/<srcKey>.json`, вызывающий код оперирует только ключом
-// родителя srcKey.
+// `<metaRoot>/<каталог ассета>/.meta.json`, вызывающий код оперирует только
+// ключом ассета assetKey.
 type Store interface {
-	// Load возвращает метаданные родителя по ключу srcKey.
+	// Load возвращает метаданные ассета по ключу assetKey.
 	//
 	// Семантика:
 	//   - файл отсутствует            → (nil, nil) — ленивое создание:
 	//     отсутствие sidecar является нормой и никогда не создаёт файл;
 	//   - schema_version > текущей    → filemeta.ErrSchemaTooNew;
 	//   - битый JSON / IO при чтении  → filemeta.ErrCorrupt.
-	Load(ctx context.Context, srcKey string) (*filemeta.FileMetadata, error)
+	Load(ctx context.Context, assetKey string) (*filemeta.FileMetadata, error)
+
+	// Exists сообщает, существует ли файл метаданных ассета (без чтения
+	// содержимого). Используется для ленивой записи времени создания:
+	// если файл уже есть — писать не нужно.
+	Exists(ctx context.Context, assetKey string) (bool, error)
 
 	// Save атомарно записывает метаданные (создаёт каталоги и файл при
 	// необходимости). CreatedAt/UpdatedAt проставляются реализацией, если
 	// нулевые; SchemaVersion нормализуется к текущей.
-	Save(ctx context.Context, srcKey string, m *filemeta.FileMetadata) error
+	Save(ctx context.Context, assetKey string, m *filemeta.FileMetadata) error
 
 	// Update выполняет атомарный read-modify-write под внутренним per-key
 	// lock (keyed singleflight). fn получает текущие метаданные (или свежий
 	// пустой объект с текущей версией схемы, если файла нет) и возвращает
 	// changed=false, если писать не нужно — тогда файл не создаётся.
-	Update(ctx context.Context, srcKey string, fn UpdateFn) error
+	Update(ctx context.Context, assetKey string, fn UpdateFn) error
+
+	// Delete удаляет файл метаданных ассета по ключу assetKey. Идемпотентно:
+	// если файла нет — возвращает nil. Используется при удалении всех ассетов
+	// родителя (sidecar больше не нужен).
+	Delete(ctx context.Context, assetKey string) error
 }

@@ -20,15 +20,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // Logger — единый интерфейс логирования из observability.
@@ -62,6 +65,11 @@ type Deps struct {
 	Presets *asset.PresetSet
 	// Policy — скомпилированная политика (для перечисления и авторизации).
 	Policy *policy.Policy
+	// Metadata — опциональное sidecar-хранилище метаданных ассетов
+	// (.meta.json). Используется при удалении: удаление sidecar при удалении
+	// всех ассетов родителя и очистка largest_ai_asset при удалении
+	// выбранных ассетов. nil = метаданные не используются.
+	Metadata metadata.Store
 	// Logger — опциональный логгер.
 	Logger Logger
 }
@@ -119,6 +127,7 @@ type Service struct {
 	results storage.ResultStore
 	presets *asset.PresetSet
 	policy  *policy.Policy
+	meta    metadata.Store
 	log     Logger
 	cfg     Config
 
@@ -166,6 +175,7 @@ func New(deps Deps, cfg Config) (*Service, error) {
 		results: deps.Results,
 		presets: deps.Presets,
 		policy:  deps.Policy,
+		meta:    deps.Metadata,
 		log:     log,
 		cfg:     cfg,
 		jobs:    make(chan *job, cfg.QueueSize),
@@ -411,7 +421,8 @@ func (s *Service) runGenerate(ctx context.Context, j *job) (*JobResult, error) {
 	return res, nil
 }
 
-// runDelete выполняет удаление ассетов задачи.
+// runDelete выполняет удаление ассетов задачи. При удалении ассета, который
+// является largest_ai_asset, очищает соответствующее поле в sidecar.
 func (s *Service) runDelete(ctx context.Context, j *job) (*JobResult, error) {
 	res := &JobResult{JobID: j.id, Status: "completed", Queued: len(j.assets)}
 	for _, url := range j.assets {
@@ -421,6 +432,7 @@ func (s *Service) runDelete(ctx context.Context, j *job) (*JobResult, error) {
 			continue
 		}
 		res.Deleted++
+		s.clearLargestAIAsset(ctx, url)
 	}
 	s.log.Infof("admin_job done id=%s kind=delete deleted=%d failed=%d", j.id, res.Deleted, len(res.Failed))
 	return res, nil
@@ -428,13 +440,20 @@ func (s *Service) runDelete(ctx context.Context, j *job) (*JobResult, error) {
 
 // DeleteBySource удаляет все ассеты исходника (кроме самого исходника).
 //
-// Стратегия удаления:
+// Стратегия удаления (в порядке приоритета):
 //   - если result-хранилище реализует storage.PrefixDeleter — используется
 //     пакетное DeleteByPrefix с префиксом "{path}/{name}-{format}/"
 //     (граничный '/' уже учтён в реализациях адаптеров);
 //   - иначе если реализует storage.Lister — fallback на List + Delete по
 //     одному;
-//   - иначе возвращается ErrNotImplemented (→ HTTP 501).
+//   - иначе — «слепое» удаление по ключам: ключи всех ассетов формируются
+//     из известных политик/правил и пресетов (enumerateAssets), и каждый
+//     ключ удаляется напрямую, БЕЗ перечисления содержимого хранилища.
+//     Это позволяет удалять ассеты в хранилищах, не поддерживающих ни
+//     List, ни DeleteByPrefix, не проходя по всем записям.
+//
+// После удаления ассетов удаляется sidecar-файл метаданных родителя
+// (.meta.json), если metadata.Store задан.
 //
 // Сам исходник (path/name.format) лежит вне префикса ассетов и не удаляется.
 func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error) {
@@ -444,39 +463,71 @@ func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error
 	}
 	prefix := assetPrefix(ref)
 
-	if pd, ok := s.results.(storage.PrefixDeleter); ok {
-		n, err := pd.DeleteByPrefix(ctx, object.ObjectKey(prefix))
-		if err != nil {
-			return 0, fmt.Errorf("adminsvc: delete-by-prefix: %w", err)
+	var deleted int
+	switch {
+	case s.results != nil:
+		if pd, ok := s.results.(storage.PrefixDeleter); ok {
+			n, err := pd.DeleteByPrefix(ctx, object.ObjectKey(prefix))
+			if err != nil {
+				return 0, fmt.Errorf("adminsvc: delete-by-prefix: %w", err)
+			}
+			deleted = int(n)
+			break
 		}
-		s.log.Infof("admin_job done id=%s kind=delete-by-source deleted=%d", newJobID(), n)
-		return int(n), nil
-	}
-
-	lister, ok := s.results.(storage.Lister)
-	if !ok {
+		if lister, ok := s.results.(storage.Lister); ok {
+			keys, err := lister.List(ctx, object.ObjectKey(prefix))
+			if err != nil {
+				return 0, fmt.Errorf("adminsvc: list: %w", err)
+			}
+			for _, k := range keys {
+				if err := s.results.Delete(ctx, k); err != nil {
+					return deleted, fmt.Errorf("adminsvc: delete %q: %w", k, err)
+				}
+				deleted++
+			}
+			break
+		}
+		// «Слепое» удаление по ключам, сформированным из политик/правил.
+		urls, err := enumerateAssets(ref, s.policy, s.presets)
+		if err != nil {
+			return 0, ErrInvalidRequest
+		}
+		for _, u := range urls {
+			if err := s.results.Delete(ctx, object.ObjectKey(u)); err != nil {
+				return deleted, fmt.Errorf("adminsvc: delete %q: %w", u, err)
+			}
+			deleted++
+		}
+	default:
 		return 0, ErrNotImplemented
 	}
-	keys, err := lister.List(ctx, object.ObjectKey(prefix))
-	if err != nil {
-		return 0, fmt.Errorf("adminsvc: list: %w", err)
-	}
-	deleted := 0
-	for _, k := range keys {
-		if err := s.results.Delete(ctx, k); err != nil {
-			return deleted, fmt.Errorf("adminsvc: delete %q: %w", k, err)
+
+	// Удаляем sidecar-метаданные родителя (.meta.json), если они управляются.
+	// Sidecar привязан к КАТАЛОГУ ассета (<metaRoot>/<каталог ассета>/.meta.json),
+	// поэтому ключ должен указывать на файл внутри каталога родителя
+	// "{path}/{name}-{format}/" — имя файла не влияет на расположение sidecar.
+	if s.meta != nil {
+		metaKey := prefix + "x"
+		if err := s.meta.Delete(ctx, metaKey); err != nil {
+			s.log.Warnf("adminsvc: delete metadata %q: %v", metaKey, err)
 		}
-		deleted++
 	}
+
 	s.log.Infof("admin_job done id=%s kind=delete-by-source deleted=%d", newJobID(), deleted)
 	return deleted, nil
 }
 
 // ErrNotImplemented — result-хранилище не поддерживает ни PrefixDeleter, ни
-// List (→ HTTP 501).
+// List (→ HTTP 501). Сохранён для обратной совместимости: в DeleteBySource
+// для таких хранилищ теперь используется «слепое» удаление по ключам,
+// поэтому эта ошибка фактически не возвращается.
 var ErrNotImplemented = errors.New("adminsvc: result store does not support listing or prefix deletion")
 
 // DeleteAssets удаляет перечисленные ассеты (канонические URL). Идемпотентно.
+//
+// Если среди удаляемых ассетов есть крупнейший ИИ-ассет (largest_ai_asset),
+// информация о нём очищается в sidecar-метаданных родителя (.meta.json):
+// сам файл .meta.json НЕ удаляется, а только поле largest_ai_asset.
 func (s *Service) DeleteAssets(ctx context.Context, assets []string) (int, error) {
 	deleted := 0
 	canon := asset.NewCanonicalizer()
@@ -493,8 +544,40 @@ func (s *Service) DeleteAssets(ctx context.Context, assets []string) (int, error
 			return deleted, fmt.Errorf("adminsvc: delete %q: %w", url, err)
 		}
 		deleted++
+		// Очищаем largest_ai_asset, если удаляется именно этот ассет.
+		s.clearLargestAIAsset(ctx, url)
 	}
 	return deleted, nil
+}
+
+// clearLargestAIAsset очищает largest_ai_asset в sidecar-метаданных родителя,
+// если удаляемый ассет (url) совпадает с зафиксированным largest_ai_asset.
+// Файл .meta.json при этом НЕ удаляется — только очищается поле.
+// best-effort: ошибки логируются и не влияют на результат удаления.
+func (s *Service) clearLargestAIAsset(ctx context.Context, url string) {
+	if s.meta == nil {
+		return
+	}
+	// Sidecar привязан к КАТАЛОГУ ассета: ключ = каталог + имя файла.
+	// Извлекаем каталог из URL (всё до последнего '/').
+	idx := strings.LastIndex(url, "/")
+	metaKey := url
+	if idx >= 0 {
+		metaKey = url[:idx] + "/x"
+	}
+	err := s.meta.Update(ctx, metaKey, func(m *filemeta.FileMetadata) (bool, error) {
+		if m == nil || m.LargestAIAsset == nil {
+			return false, nil
+		}
+		if m.LargestAIAsset.Key != url {
+			return false, nil
+		}
+		m.LargestAIAsset = nil
+		return true, nil
+	})
+	if err != nil {
+		s.log.Warnf("adminsvc: clear largest_ai_asset %q: %v", url, err)
+	}
 }
 
 // codeForErr маппит ошибку генерации в короткий код для FailedAsset.

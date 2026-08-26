@@ -18,7 +18,7 @@ func newTestMetaStore(t *testing.T) (*MetadataStore, string) {
 	t.Helper()
 	root := t.TempDir()
 	// Новая семантика: конструктор принимает КОРЕНЬ МЕТАДАННЫХ напрямую
-	// (metadata.dir явно, либо дефолт <resultRoot>/.meta на уровне DI).
+	// (metadata.dir явно, либо дефолт <resultRoot> на уровне DI).
 	metaRoot := filepath.Join(root, reservedSegment)
 	s, err := NewMetadataStore(metaRoot)
 	if err != nil {
@@ -29,7 +29,7 @@ func newTestMetaStore(t *testing.T) (*MetadataStore, string) {
 
 // TestNewMetadataStoreUsesExplicitRoot — NewMetadataStore принимает корень
 // метаданных НАПРЯМУЮ (никакого добавления .meta внутри): sidecar пишется
-// строго <metaRoot>/<srcKey>.json, каталог — именно заданный.
+// строго <metaRoot>/<каталог ассета>/.meta.json, каталог — именно заданный.
 func TestNewMetadataStoreUsesExplicitRoot(t *testing.T) {
 	ctx := context.Background()
 	// Произвольный НЕ-дефолтный локальный путь (metadata.dir из конфигурации):
@@ -44,10 +44,11 @@ func TestNewMetadataStoreUsesExplicitRoot(t *testing.T) {
 	}
 	m := filemeta.NewFileMetadata()
 	m.Faces = []filemeta.FaceInfo{}
+	// Ключ ассета "photos/cat.jpg" → каталог "photos" → файл .meta.json.
 	if err := s.Save(ctx, "photos/cat.jpg", m); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	full := filepath.Join(metaRoot, "photos", "cat.jpg.json")
+	full := filepath.Join(metaRoot, "photos", metaFileName)
 	if _, err := os.Stat(full); err != nil {
 		t.Fatalf("sidecar not created at explicit metaRoot (%q): %v", full, err)
 	}
@@ -76,17 +77,51 @@ func TestMetadataLoadLazyCreation(t *testing.T) {
 	}
 }
 
-// TestMetadataSaveCreatesDirsAndFile — Save создаёт вложенные каталоги и файл.
+// TestMetadataExists — Exists проверяет НАЛИЧИЕ файла без чтения содержимого
+// и не создаёт файл/каталог.
+func TestMetadataExists(t *testing.T) {
+	ctx := context.Background()
+	s, resultRoot := newTestMetaStore(t)
+
+	// Файла нет → false, каталог не создаётся.
+	ok, err := s.Exists(ctx, "photos/cat.jpg")
+	if err != nil {
+		t.Fatalf("Exists missing: %v", err)
+	}
+	if ok {
+		t.Fatalf("Exists = true for missing file, want false")
+	}
+	if _, err := os.Stat(filepath.Join(resultRoot, reservedSegment)); !os.IsNotExist(err) {
+		t.Fatalf(".meta directory must not be created by Exists: %v", err)
+	}
+
+	// После Save → true.
+	m := filemeta.NewFileMetadata()
+	if err := s.Save(ctx, "photos/cat.jpg", m); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	ok, err = s.Exists(ctx, "photos/cat.jpg")
+	if err != nil {
+		t.Fatalf("Exists after save: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Exists = false after Save, want true")
+	}
+}
+
+// TestMetadataSaveCreatesDirsAndFile — Save создаёт вложенные каталоги и файл
+// .meta.json РЯДОМ с ассетом (в каталоге ассета).
 func TestMetadataSaveCreatesDirsAndFile(t *testing.T) {
 	ctx := context.Background()
 	s, resultRoot := newTestMetaStore(t)
 
 	m := filemeta.NewFileMetadata()
 	m.Faces = []filemeta.FaceInfo{}
+	// Ключ ассета "photos/cat.jpg" → каталог "photos" → файл .meta.json.
 	if err := s.Save(ctx, "photos/cat.jpg", m); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	full := filepath.Join(resultRoot, reservedSegment, "photos", "cat.jpg.json")
+	full := filepath.Join(resultRoot, reservedSegment, "photos", metaFileName)
 	data, err := os.ReadFile(full)
 	if err != nil {
 		t.Fatalf("sidecar file not created: %v", err)
@@ -323,7 +358,8 @@ func TestSchemaTooNewNotOverwritten(t *testing.T) {
 	ctx := context.Background()
 	s, resultRoot := newTestMetaStore(t)
 
-	full := filepath.Join(resultRoot, reservedSegment, "future.png.json")
+	// Ключ "future.png" без каталога → файл <metaRoot>/.meta.json.
+	full := filepath.Join(resultRoot, reservedSegment, metaFileName)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +395,7 @@ func TestCorruptJSONRejected(t *testing.T) {
 	ctx := context.Background()
 	s, resultRoot := newTestMetaStore(t)
 
-	full := filepath.Join(resultRoot, reservedSegment, "broken.jpg.json")
+	full := filepath.Join(resultRoot, reservedSegment, metaFileName)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +413,7 @@ func TestOversizedFileRejected(t *testing.T) {
 	ctx := context.Background()
 	s, resultRoot := newTestMetaStore(t)
 
-	full := filepath.Join(resultRoot, reservedSegment, "big.jpg.json")
+	full := filepath.Join(resultRoot, reservedSegment, metaFileName)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +455,7 @@ func TestInvalidDomainRejectedOnSave(t *testing.T) {
 }
 
 // TestJanitorKeepsSidecarsAndCleansMetaTemps — janitor не удаляет
-// .meta/**/*.json, но убирает осиротевшие .tmp-meta-* внутри .meta.
+// .meta/**/.meta.json, но удаляет оставшиеся .tmp-meta-* внутри .meta.
 func TestJanitorKeepsSidecarsAndCleansMetaTemps(t *testing.T) {
 	resultRoot := t.TempDir()
 
@@ -427,7 +463,7 @@ func TestJanitorKeepsSidecarsAndCleansMetaTemps(t *testing.T) {
 	if err := os.MkdirAll(sidecarDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	sidecar := filepath.Join(sidecarDir, "cat.jpg.json")
+	sidecar := filepath.Join(sidecarDir, metaFileName)
 	if err := os.WriteFile(sidecar, []byte(`{"schema_version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -498,5 +534,123 @@ func TestWarmCacheSkipsMetaDirectory(t *testing.T) {
 	// Sidecar-ключ недоступен и через публичные операции.
 	if _, err := store.Open(ctx, objectKeyFromString(".meta/deep/parent.png.json")); err == nil {
 		t.Fatal("Open on .meta key must fail")
+	}
+}
+
+// TestMetadataPathFromAssetKey — sidecar лежит РЯДОМ с ассетом в его каталоге:
+// <metaRoot>/<каталог ассета>/.meta.json. Ключ ассета (с именем файла) не
+// влияет на имя sidecar — всегда .meta.json.
+func TestMetadataPathFromAssetKey(t *testing.T) {
+	ctx := context.Background()
+	s, resultRoot := newTestMetaStore(t)
+
+	// Ассет "user/basket/product-1-jpg/thumb.webp" → каталог
+	// "user/basket/product-1-jpg" → файл .meta.json.
+	assetKey := "user/basket/product-1-jpg/thumb.webp"
+	m := filemeta.NewFileMetadata()
+	m.Faces = []filemeta.FaceInfo{}
+	if err := s.Save(ctx, assetKey, m); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	full := filepath.Join(resultRoot, reservedSegment, "user", "basket", "product-1-jpg", metaFileName)
+	if _, err := os.Stat(full); err != nil {
+		t.Fatalf("sidecar not next to asset (%q): %v", full, err)
+	}
+	// Старый формат <каталог>/<имя ассета>.json не должен существовать.
+	old := filepath.Join(resultRoot, reservedSegment, "user", "basket", "product-1-jpg", "thumb.webp.json")
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("legacy sidecar path %q must not exist", old)
+	}
+
+	// Load по тому же ключу ассета находит данные.
+	got, err := s.Load(ctx, assetKey)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got == nil || got.Faces == nil || len(got.Faces) != 0 {
+		t.Fatalf("Load after Save mismatch: %+v", got)
+	}
+}
+
+// TestCreatedUnixRoundTrip — created_unix сохраняется и читается через
+// Save/Load, а Update не перезаписывает уже записанное время.
+func TestCreatedUnixRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newTestMetaStore(t)
+
+	// Первый Update на отсутствующем файле записывает created_unix.
+	err := s.Update(ctx, "asset.webp", func(m *filemeta.FileMetadata) (bool, error) {
+		if m.CreatedUnix != 0 {
+			t.Fatalf("fresh metadata created_unix = %d, want 0", m.CreatedUnix)
+		}
+		m.CreatedUnix = 1234567890
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := s.Load(ctx, "asset.webp")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.CreatedUnix != 1234567890 {
+		t.Fatalf("created_unix = %d, want 1234567890", got.CreatedUnix)
+	}
+
+	// Повторный Update с changed=false не трогает created_unix.
+	err = s.Update(ctx, "asset.webp", func(m *filemeta.FileMetadata) (bool, error) {
+		if m.CreatedUnix != 1234567890 {
+			t.Fatalf("created_unix changed to %d, want 1234567890", m.CreatedUnix)
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("Update no-change: %v", err)
+	}
+	got2, err := s.Load(ctx, "asset.webp")
+	if err != nil {
+		t.Fatalf("Load after no-change: %v", err)
+	}
+	if got2.CreatedUnix != 1234567890 {
+		t.Fatalf("created_unix after no-change = %d, want 1234567890", got2.CreatedUnix)
+	}
+}
+
+// TestMetadataDelete — Delete удаляет sidecar-файл и идемпотентен.
+func TestMetadataDelete(t *testing.T) {
+	ctx := context.Background()
+	s, resultRoot := newTestMetaStore(t)
+
+	// Сохраняем sidecar для ассета в каталоге.
+	assetKey := "photos/cat.jpg"
+	m := filemeta.NewFileMetadata()
+	m.Faces = []filemeta.FaceInfo{}
+	if err := s.Save(ctx, assetKey, m); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	full := filepath.Join(resultRoot, reservedSegment, "photos", metaFileName)
+	if _, err := os.Stat(full); err != nil {
+		t.Fatalf("sidecar not created (%q): %v", full, err)
+	}
+
+	// Delete удаляет файл.
+	if err := s.Delete(ctx, assetKey); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(full); !os.IsNotExist(err) {
+		t.Fatalf("sidecar should be removed (%q)", full)
+	}
+	// Load после Delete → (nil, nil).
+	got, err := s.Load(ctx, assetKey)
+	if err != nil {
+		t.Fatalf("Load after Delete: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Load after Delete = %+v, want nil", got)
+	}
+
+	// Повторный Delete идемпотентен.
+	if err := s.Delete(ctx, assetKey); err != nil {
+		t.Fatalf("Delete idempotent: %v", err)
 	}
 }

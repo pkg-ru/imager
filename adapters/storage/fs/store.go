@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // SourceStore — filesystem-реализация storage.SourceStore. Читает исходные
@@ -471,14 +471,14 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 // родительского каталога по аналогии с Delete. Идемпотентно: если каталога
 // нет — возвращает (0, nil).
 //
-// Sidecar-метаданные (.meta/<srcKey>.json) при удалении каталога ассетов НЕ
-// чистятся: metadata.Store не предоставляет Delete, поэтому удаление
-// метаданных исходника не выполняется. Это безопасно — каталог .meta лежит
-// вне удаляемого каталога ассетов (префикс не может указывать на
-// зарезервированный сегмент .meta, см. cleanRel), поэтому удаление не
-// затрагивает метаданные чужих исходников.
-// TODO: при появлении Delete в metadata.Store — удалять sidecar исходника
-// вместе с каталогом ассетов.
+// Sidecar-метаданные (<metaRoot>/<каталог ассета>/.meta.json) при удалении
+// каталога ассетов НЕ чистятся здесь: metadata.Store не связан с этим
+// хранилищем (sidecar может лежать в отдельном metaRoot). Удаление sidecar
+// выполняется на уровне adminsvc.DeleteBySource через metadata.Store.Delete.
+// При явном metadata.dir (вне result-каталога) sidecar лежат вне удаляемого
+// каталога ассетов, а префикс не может указывать на зарезервированный
+// сегмент .meta (см. cleanRel), поэтому удаление не затрагивает метаданные
+// чужих ассетов.
 func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
 	pre := string(prefix)
 	pre = strings.Trim(pre, "/")

@@ -69,7 +69,7 @@ type RuntimeConfig struct {
 	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
 	// source/result (fs/S3/SFTP/FTP/HTTP). Метаданные ВСЕГДА хранятся
 	// локально по этому пути. Пусто = дефолт `<эффективный локальный
-	// result-каталог>/.meta`.
+	// result-каталог>` (без подкаталога .meta).
 	MetadataDir string
 	// OutputLimit — application-level лимит размера выхода (0 = нет).
 	OutputLimit int64
@@ -534,8 +534,8 @@ type TopPathsYAML struct {
 //
 // Дир расположения НАСТРАИВАЕТСЯ отдельным ключом metadata.dir — явный
 // локальный путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ source/result.
-// Пустой dir = дефолт `<эффективный локальный result-каталог>/.meta`
-// (обратно совместимо).
+// Пустой dir = дефолт `<эффективный локальный result-каталог>` (без
+// подкаталога .meta).
 type MetadataYAML struct {
 	// Enabled — включить sidecar-кэш моделей и largest_ai_asset.
 	// Тип: bool. Дефолт: true. false = поведение идентично текущему.
@@ -543,7 +543,7 @@ type MetadataYAML struct {
 	// Dir — КОРЕНЬ sidecar-хранилища метаданных (НОВАЯ СЕМАНТИКА v2.1):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы. Метаданные всегда хранятся
 	// локально по этому пути, независимо от типов source/result.
-	// Тип: string. Дефолт: <эффективный локальный result-каталог>/.meta.
+	// Тип: string. Дефолт: <эффективный локальный result-каталог>.
 	Dir dynamic.String `yaml:"dir"`
 }
 
@@ -803,8 +803,8 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	// Metadata: sidecar-кэш моделей и largest_ai_asset.
 	// Дефолт enabled = true. metadata.dir — ЯВНЫЙ локальный корень
 	// sidecar-хранилища (НЕЗАВИСИМ от хранилищ source/result); пусто =
-	// дефолт `<эффективный локальный result-каталог>/.meta` (обратно
-	// совместимо) — применяется на уровне DI (app.go).
+	// дефолт `<эффективный локальный result-каталог>` (без подкаталога
+	// .meta) — применяется на уровне DI (app.go).
 	metadataEnabled := true
 	if raw.Metadata.Enabled.Set {
 		metadataEnabled = raw.Metadata.Enabled.Value.Unwrap()

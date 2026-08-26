@@ -98,6 +98,9 @@ type FileMetadata struct {
 	Objects []ObjectInfo `json:"objects,omitempty"`
 	// LargestAIAsset — крупнейший ИИ-ассет; nil = ещё не зафиксирован.
 	LargestAIAsset *AIAssetInfo `json:"largest_ai_asset,omitempty"`
+	// CreatedUnix — unix-время создания первого ассета (сек). 0 = ещё не
+	// записано. Записывается лениво/асинхронно при первом создании ассета.
+	CreatedUnix int64 `json:"created_unix,omitempty"`
 	// CreatedAt — момент первой записи файла (UTC).
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt — момент последней успешной записи (UTC).
@@ -177,6 +180,7 @@ type fileMetadataWire struct {
 	Faces          json.RawMessage `json:"faces,omitempty"`
 	Objects        json.RawMessage `json:"objects,omitempty"`
 	LargestAIAsset *AIAssetInfo    `json:"largest_ai_asset,omitempty"`
+	CreatedUnix    int64           `json:"created_unix,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 }
@@ -190,6 +194,7 @@ func (m *FileMetadata) MarshalJSON() ([]byte, error) {
 	w := fileMetadataWire{
 		SchemaVersion:  m.SchemaVersion,
 		LargestAIAsset: m.LargestAIAsset,
+		CreatedUnix:    m.CreatedUnix,
 		CreatedAt:      m.CreatedAt,
 		UpdatedAt:      m.UpdatedAt,
 	}

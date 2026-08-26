@@ -28,8 +28,11 @@ import (
 )
 
 // ConfigDirEnv — единственная env-переменная: путь к каталогу с настройками.
-// Внутри каталога читаются setting.yaml (обязательный) и setting-local.yaml
-// (опциональный, глубоко переопределяет базовый).
+// Внутри каталога читаются три слоя конфигурации:
+//
+//	setting.yaml + setting-local.yaml   — фундамент (обязателен setting.yaml);
+//	generate.yaml + generate-local.yaml — генерация ассетов (опционально);
+//	failback.yaml + failback-local.yaml — fallback-механизмы (опционально).
 const ConfigDirEnv = "IMAGER_CONFIG_DIR"
 
 // DefaultConfigDir — каталог конфигурации по умолчанию, если IMAGER_CONFIG_DIR
@@ -98,9 +101,11 @@ type Server struct {
 // NewServer собирает и запускает полный HTTP-сервер из YAML-конфига в
 // каталоге cfgDir (сценарий "как cmd/imager").
 //
-// Читает setting.yaml (обязательный) + setting-local.yaml (опциональный),
-// собирает pipeline (хранилища, процессоры, детектор, admin, janitor) и
-// создаёт runtime. Сервер ещё не слушает — для запуска вызовите Run(ctx).
+// Читает три слоя: setting (setting.yaml + setting-local.yaml, обязателен
+// только setting.yaml), generate (generate.yaml + generate-local.yaml) и
+// failback (failback.yaml + failback-local.yaml); собирает pipeline
+// (хранилища, процессоры, детектор, admin, janitor) и создаёт runtime.
+// Сервер ещё не слушает — для запуска вызовите Run(ctx).
 //
 // Опции: WithLogger, WithMetrics, WithPixelGenerator, WithJanitorInterval,
 // WithJanitorMaxAge.

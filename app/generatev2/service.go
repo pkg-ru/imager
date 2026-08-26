@@ -8,18 +8,18 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/ports/buffer"
-	"github.com/pkg-ru/imager/ports/coordinator"
-	"github.com/pkg-ru/imager/ports/detector"
-	"github.com/pkg-ru/imager/ports/metadata"
-	"github.com/pkg-ru/imager/ports/processor"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/domain/processing"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/buffer"
+	"github.com/pkg-ru/imager/ports/coordinator"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // Logger — единый интерфейс логирования из observability.
@@ -299,11 +299,12 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 
 	// Кэш ИИ-моделей: для планов с детекцией (fc/oc/fct/oct) боксы
 	// загружаются из sidecar или добываются детектором ОДИН раз на
-	// родителя (keyed singleflight по "meta:"+srcKey). best-effort:
+	// ассет (keyed singleflight по "meta:"+assetKey). best-effort:
 	// при любом сбое возвращается (false, nil) — процессор работает
-	// в режиме self-detection.
+	// в режиме self-detection. Метаданные привязаны к ассету-результату,
+	// поэтому ключом служит key (канонический URL ассета).
 	in := processor.Input{Source: src, Plan: plan, SourceKey: srcKey}
-	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, srcKey, plan, src)
+	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, key, plan, src)
 
 	// Обработка в Processor + параллельная публикация в remote.
 	buf, err := s.processAndPublish(ctx, key, in)
@@ -603,19 +604,24 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	// ни singleflight). Пропуск проверяется здесь, ДО Coordinator.Do, чтобы
 	// не создавать на каждый publish. Размеры берём из Result процессора
 	// (0 = неизвестно → ShouldTrackAsAIAsset вернёт false).
+	// Метаданные привязаны к АССЕТУ-результату, поэтому ключом служит key.
 	if procRes != nil && filemeta.ShouldTrackAsAIAsset(
 		procRes.SourceWidth, procRes.SourceHeight,
 		procRes.Width, procRes.Height,
 	) {
 		s.updateLargestAIAsset(
 			ctx,
-			in.SourceKey,
 			key,
 			in.Plan.OutputFormat.String(),
 			procRes.Width, procRes.Height,
 			procRes.SourceWidth, procRes.SourceHeight,
 		)
 	}
+
+	// created_unix: ленивая асинхронная запись unix-времени создания первого
+	// ассета. Выполняется в фоне (не блокирует ответ), best-effort.
+	s.recordAssetCreationTime(ctx, key)
+
 	return buf, nil
 }
 

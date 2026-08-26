@@ -10,39 +10,61 @@
 |------------|--------------|----------|
 | `IMAGER_CONFIG_DIR` | `.` | Каталог с файлами конфигурации |
 
-Внутри каталога читаются:
+Конфигурация разделена на **три слоя**, каждый из которых состоит из пары файлов «base + local»:
 
-- `setting.yaml` — **обязательный** базовый конфиг; отсутствие или невалидность останавливает старт;
-- `setting-local.yaml` — **опциональный** локальный конфиг, глубоко переопределяющий базовый:
-  - вложенные map мержатся рекурсивно (ключи, не указанные в local, сохраняются);
-  - скаляры заменяются значением из local;
-  - списки заменяются **целиком** (дополнить список из local нельзя).
+| Слой | Файлы | Назначение | Частота изменений |
+|------|-------|-----------|-------------------|
+| **setting** (фундамент) | `setting.yaml` + `setting-local.yaml` | Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, подключения к стораджам, observability/logging, безопасность, admin | Редко |
+| **generate** (генерация) | `generate.yaml` + `generate-local.yaml` | Настройки генерации ассетов: пресеты, policy, форматы/энкодеры, ресайз, watermark, orientation, trim, color, detection | Часто |
+| **failback** (резервы) | `failback.yaml` + `failback-local.yaml` | Резервные/необязательные fallback-механизмы: ImageMagick, not-found, source-fallback | Почти никогда |
 
-Декодирование строгое (`yaml.UnmarshalStrict`): любой ключ вне схемы — ошибка старта. Неверное значение `version` (актуальна `"1"`) — ошибка старта.
+### Порядок загрузки и переопределения
 
-Секреты (пароли, ключи S3/SFTP) рекомендуется размещать в `setting-local.yaml`, который не коммитится (см. `.gitignore`). Для S3 также доступны env `IMAGER_S3_ACCESS_KEY` / `IMAGER_S3_SECRET_KEY`.
+1. **Внутри пары** выполняется deep merge `base ← local`:
+   - вложенные map мержатся рекурсивно (ключи, не указанные в local, сохраняются);
+   - скаляры заменяются значением из local;
+   - списки заменяются **целиком** (дополнить список из local нельзя).
+2. **Между слоями** три слитые map объединяются в фиксированном порядке `setting → generate → failback` (более специализированный слой выигрывает при конфликте скаляров). Если один и тот же **top-level ключ** встречается в нескольких базовых файлах — выполняется deep merge в этом порядке, а в лог пишется **warning** с перечнем конфликтующих файлов.
+3. Результат строго декодируется в единую схему (`yaml.UnmarshalStrict`): любой ключ вне схемы в любом из шести файлов — ошибка старта.
 
-## Схема верхнего уровня
+**Обязательность файлов:**
 
-```yaml
-version: "1"
-server:          # HTTP/TCP сервер
-http:            # HTTP-адаптер: CORS, кэш-заголовки, not-found/source fallback
-admin:           # административные эндпоинты (выключены по умолчанию)
-policy:          # deny-by-default политика авторизации и лимитов
-watermarks:      # именованные декларации ватермарок
-processing:      # умолчания обработки
-source:          # хранилище исходников
-result:          # хранилище результатов
-libvips:         # основной движок обработки
-detection:       # детектор лиц/объектов (ONNX)
-imagemagick:     # опциональный fallback-движок
-metadata:        # sidecar-кэш метаданных ИИ-детекции
-application:     # прикладные лимиты
-observability:   # логирование и метрики
-```
+- `setting.yaml` — **обязателен**; отсутствие или невалидность останавливает старт.
+- `setting-local.yaml`, `generate.yaml`, `generate-local.yaml`, `failback.yaml`, `failback-local.yaml` — **опциональны**; их отсутствие — нормальная ситуация (значения берутся из умолчаний схемы или из `setting.yaml`).
 
-Полный самодокументированный пример — [`config/setting.yaml`](../config/setting.yaml); локальные переопределения — [`config/setting-local.yaml`](../config/setting-local.yaml).
+**Ключ `version`** (актуальна `"1"`): обязателен только в `setting.yaml`. В `generate.yaml` / `failback.yaml` опционален; если присутствует — должен равняться `"1"`, иначе ошибка старта (защита от рассинхронизации версий слоёв).
+
+Секреты (пароли, ключи S3/SFTP, `admin.token`) рекомендуется размещать в `*-local.yaml` (не коммитятся, см. `.gitignore`). Для S3 также доступны env `IMAGER_S3_ACCESS_KEY` / `IMAGER_S3_SECRET_KEY`.
+
+## Распределение секций по слоям
+
+| Секция | Слой | Файл |
+|--------|------|------|
+| `version` | setting | `setting.yaml` |
+| `server` | setting | `setting.yaml` |
+| `http.allowed-origins`, `allow-credentials`, `cache-control`, `referrer-policy`, `csp`, `max-url-len`, `generate-timeout`, `max-concurrent-requests` | setting | `setting.yaml` |
+| `http.not-found`, `not-found-cache-control`, `source-fallback` | failback | `failback.yaml` |
+| `source`, `result` | setting | `setting.yaml` |
+| `libvips.limits`, `libvips.operation-cache`, `libvips.metrics-interval` | setting | `setting.yaml` |
+| `libvips.encoders`, `shrink-on-load`, `color`, `watermark-cache`, `detection` | generate | `generate.yaml` |
+| `metadata` | setting | `setting.yaml` |
+| `application.buffer-max-bytes` | setting | `setting.yaml` |
+| `application.output-limit` | generate | `generate.yaml` |
+| `observability` | setting | `setting.yaml` |
+| `admin` | setting | `setting.yaml` |
+| `policy` (global, presets, path-policies) | generate | `generate.yaml` |
+| `watermarks` | generate | `generate.yaml` |
+| `processing` | generate | `generate.yaml` |
+| `detection` | generate | `generate.yaml` |
+| `imagemagick` | failback | `failback.yaml` |
+
+> Секция `http` — единственная, чьи подсекции расходятся по слоям: транспортные/security-ключи живут в `setting.yaml`, а fallback-подсекции (`not-found`, `not-found-cache-control`, `source-fallback`) — в `failback.yaml`. Благодаря deep merge подсекции одного top-level ключа из разных файлов корректно объединяются.
+
+Полные самодокументированные примеры — [`config/setting.yaml`](../config/setting.yaml), [`config/generate.yaml`](../config/generate.yaml), [`config/failback.yaml`](../config/failback.yaml); локальные переопределения — [`config/setting-local.yaml`](../config/setting-local.yaml), [`config/generate-local.yaml`](../config/generate-local.yaml), [`config/failback-local.yaml`](../config/failback-local.yaml).
+
+## Обратная совместимость
+
+Старый монолитный `setting.yaml`, содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать без изменений: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `setting.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог. Миграция сводится к механическому переносу секций между файлами согласно таблице выше.
 
 ---
 
@@ -290,14 +312,14 @@ watermarks:
 Per-format параметры сжатия кодировщиков (`libvips.encoders.*`). Значение `0` = встроенное умолчание движка. Диапазоны валидируются при старте: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
 
 | Ключ (`libvips.encoders.*`) | Тип | По умолчанию | Описание |
-|------------------------------|-----|--------------|----------|
+|:---------------------------|------|--------------|----------|
 | `webp-reduction-effort` | int `[0,6]` | `4` | Reduction effort WebP: больше = лучше сжатие, медленнее |
 | `avif-speed` | int `[0,9]` | default govips (`5`) | Speed/effort AVIF: больше = быстрее, хуже сжатие |
 | `png-compression-level` | int `[0,9]` | `6` | Уровень сжатия PNG (применяется и к APNG) |
 | `jxl-effort` | int `[0,9]` | default govips (`7`) | Effort JPEG XL: больше = лучше сжатие, медленнее |
 | `jpeg-progressive` | bool | `false` | Прогрессивный (interlaced) JPEG; `false` = baseline |
 | `png-interlace` | bool | `false` | Чересстрочный (interlaced/Adam7) PNG; `false` = обычный |
-| `png-palette` | bool | `false` | PNG-квантование (палитровый экспорт) для статичных PNG. Выключено по умолчанию: применяется только при явном включении (градиенты дешёво не определяется — решение конфигом); при ошибке — fallback на обычный PNG, запрос не падает. К APNG не применяется |
+| `png-palette` | bool | `false` | PNG-квантование (палитровый экспорт) для статичных PNG. Выключено по умолчанию: применяется только при явном включении; при ошибке — fallback на обычный PNG, запрос не падает. К APNG не применяется |
 | `png-palette-colors` | int `[2,256]` | `256` | Максимум цветов палитры при `png-palette=true` (`0` = 256) |
 | `png-palette-bit-depth` | int `[1,8]` | `8` | Битность палитры при `png-palette=true`; позволяет сохранить палитровую битность исходника (`0` = 8) |
 | `gif-bit-depth` | int `[1,8]` | default govips (`8`) | Битность палитры GIF (`0` = умолчание govips) |
@@ -309,7 +331,7 @@ DPI-нормализация: при экспорте `xres`/`yres` сбрасы
 Shrink-on-load (`libvips.shrink-on-load.*`) — предварительное уменьшение при декодировании JPEG/WebP/GIF/HEIF/AVIF. Коэффициент вычисляется из целевого размера плана с запасом ×2 (после shrink размер гарантированно ≥ цели; точный resize выполняется далее как обычно). Решение консервативно: shrink НЕ применяется при trim/smart-crop/face-crop/object-crop, ручной ориентации или ненейтральном EXIF-повороте, `size=x`, неизвестных размерах исходника и для анимированных GIF.
 
 | Ключ (`libvips.shrink-on-load.*`) | Тип | По умолчанию | Описание |
-|------------------------------------|-----|--------------|----------|
+|:------------------------------------|------|--------------|----------|
 | `enabled` | bool | `true` | Включить shrink-on-load при декодировании |
 
 ICC color management (`libvips.color.mode`) — политика обработки embedded-ICC-профиля исходника. Проблема, которую решает: без color management цвета CMYK/ProPhoto/Display-P3 исходников искажаются (профиль просто удаляется). Режимы:
@@ -319,15 +341,15 @@ ICC color management (`libvips.color.mode`) — политика обработ�
 - `keep`: embedded-профиль сохраняется в выходном изображении (профиль не удаляется при экспорте).
 
 | Ключ (`libvips.color.*`) | Тип | По умолчанию | Описание |
-|---------------------------|-----|--------------|----------|
+|:---------------------------|-----|--------------|----------|
 | `mode` | string | `"strip"` | Режим: `strip` \| `transform` \| `keep` (fail-fast: неизвестное значение — ошибка старта) |
 
 Passthrough fast-path: в режиме `transform` исходники с sRGB-совместимым профилем могут возвращаться без перекодирования (конверсия была бы no-op); в режиме `keep` passthrough допустим для любого профиля (профиль сохраняется в выходе). EXIF/XMP/IPTC и прочие метаданные по-прежнему блокируют passthrough.
 
-Operation cache libvips (`libvips.operation-cache.enabled`) — управление кэшем результатов операций libvips (`vips_cache`). Кэш полезен для повторяющихся операций на одних и тех же изображениях, но для stateless-обработчика он **бесполезен, ест память и несёт риск на musl/Alpine** — рекомендуемое значение для продакшена: `false`. При отключении в Startup передаются нулевые лимиты кэша (`vips_cache_set_max_mem(0)` / `vips_cache_set_max(0)` / `vips_cache_set_max_files(0)`): в govips значение `0` означает **полное отключение** кэша (не "без лимита"; значение `< 0` = default govips).
+Operation cache libvips (`libvips.operation-cache.enabled`) — управление кэшем результатов операций libvips (`vips_cache`). Кэш полезен для повторяющихся операций на одних и тех же изображениях, но для stateless-обработчика он **бесполезен, ест память и несёт риск на musl/Alpine** — рекомендуемое значение для продакшена: `false`. При отключении в Startup передаются нулевые лимиты кэша (`vips_cache_set_max_mem(0)` / `vips_cache_set_max(0)` / `vips_cache_set_max_files(0)`): в govips значение `0` означает **полное отключение** кэша (не «без лимита»; значение `< 0` = default govips).
 
 | Ключ (`libvips.operation-cache.*`) | Тип | По умолчанию | Описание |
-|-------------------------------------|-----|--------------|----------|
+|:-------------------------------------|-----|--------------|----------|
 | `enabled` | bool | `true` | Включить operation cache; `false` = кэш отключён (нулевые лимиты при Startup) |
 
 ```yaml
@@ -369,16 +391,16 @@ libvips:
 Кэш файлов ватермарок (`libvips.watermark-cache.*`) — in-memory кэш исходных БАЙТОВ файлов ватермарок, keyed по пути файла (не по конфигурации наложения): один файл обслуживает любое число настроек позиции/масштаба/repeat. Декодирование выполняется libvips на каждый запрос (ускоряется его operation cache), чтение с диска устраняется. Инвалидация записи — по mtime/размеру файла (лёгкий `stat` на каждый запрос) плюс TTL; вытеснение — LRU по числу записей и суммарному бюджету байтов; параллельная загрузка одного файла дедуплицируется (singleflight). При промахе кэша выполняется прозрачное чтение с диска — запрос не ломается. Файл больше `max-bytes` не кэшируется.
 
 | Ключ (`libvips.watermark-cache.*`) | Тип | По умолчанию | Описание |
-|------------------------------------|-----|--------------|----------|
+|:------------------------------------|-----|--------------|----------|
 | `enabled` | bool | `true` | Включить кэш; `false` = каждое использование читает диск |
 | `max-files` | int | `32` | Максимум записей (файлов) в кэше |
 | `max-bytes` | int | 64 MiB | Суммарный бюджет памяти кэша в байтах |
 | `ttl` | duration | `"5m"` | Страховочное время жизни записи |
 
-Detection-семофор (`libvips.detection.*`) — отдельный bounded-семафор для тяжёлых CPU-bound ONNX-инференсов (face-crop/object-crop). Схема handoff (Фаза 4): на время инференса libvips-слот освобождается и берётся detection-слот, после инференса слоты меняются обратно. Это защищает лёгкие операции (decode/resize/encode) от голодания при потоке fc/oc-запросов, сохраняя ограничение суммарной конкурентности (защита от OOM). Порядок захвата строго детерминирован (detection-слот берётся только при удержании libvips-слота), вложенного удержания обоих слотов во время долгих операций нет — дедлок невозможен. При переполнении очереди ожидания или истечении `max-wait` — быстрый отказ перегрузки.
+Detection-семафор (`libvips.detection.*`) — отдельный bounded-семафор для тяжёлых CPU-bound ONNX-инференсов (face-crop/object-crop). Схема handoff (Фаза 4): на время инференса libvips-слот освобождается и берётся detection-слот, после инференса слоты меняются обратно. Это защищает лёгкие операции (decode/resize/encode) от голодания при потоке fc/oc-запросов, сохраняя ограничение суммарной конкурентности (защита от OOM). Порядок захвата строго детерминирован (detection-слот берётся только при удержании libvips-слота), вложенного удержания обоих слотов во время долгих операций нет — дедлок невозможен. При переполнении очереди ожидания или истечении `max-wait` — быстрый отказ перегрузки.
 
 | Ключ (`libvips.detection.*`) | Тип | По умолчанию | Описание |
-|-------------------------------|-----|--------------|----------|
+|:-------------------------------|-----|--------------|----------|
 | `concurrency` | int | `max(1, GOMAXPROCS/2)` | Максимум одновременных ONNX-инференсов |
 | `max-wait` | duration | `"5s"` | Бюджет ожидания detection-слота; истечение → быстрый отказ |
 
@@ -389,12 +411,12 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 - `imager_vips_open_files` — открытые файлы libvips;
 - `imager_vips_mem_highwater_bytes` — пик tracked memory;
 - `imager_vips_operations_total` — суммарное число операций govips;
-- `imager_vips_watermark_cache_hits_total` / `imager_vips_watermark_cache_misses_total` / `imager_vips_watermark_cache_entries` / `imager_vips_watermark_cache_bytes` — метрики кэша ватермарок Фазы 3.
+- `imager_vips_watermark_cache_hits_total` / `imager_vips_watermark_cache_misses_total` / `imager_vips_watermark_cache_entries` / `imager_vips_watermark_cache_bytes` — метрики кэша ватермарок.
 
-Сбор отказоустойчивен: паника/ошибка провайдера не влияет на обработку запросов (значения просто не обновляются до следующего тика); goroutine-сборщик останавливается при graceful shutdown.
+Сбор отказоустойчив: паника/ошибка провайдера не влияет на обработку запросов (значения просто не обновляются до следующего тика); goroutine-сборщик останавливается при graceful shutdown.
 
 | Ключ (`libvips.*`) | Тип | По умолчанию | Описание |
-|--------------------|-----|--------------|----------|
+|:--------------------|:-----|--------------|----------|
 | `metrics-interval` | duration | `"15s"` | Интервал сбора vips-метрик (минимум `"1s"`; `0` = дефолт) |
 
 Примечания по производительности libvips-адаптера:
@@ -466,9 +488,11 @@ Sidecar-кэш результатов ИИ-детекции (лица/объек
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
 | `enabled` | bool | `true` | Включить sidecar-кэш |
-| `dir` | string | `<result-каталог>/.meta` | Явный локальный путь метаданных; рекомендуется задавать при remote-result |
+| `dir` | string | `<result-каталог>` | Явный локальный путь метаданных; рекомендуется задавать при remote-result |
 
 Метаданные всегда хранятся локально, независимо от типов source/result.
+
+> **Пакетные удаления и S3.** Если для результата используется S3-хранилище, `metadata.dir` лучше указывать **локально** (на локальном диске), а не в S3. Тогда пакетное удаление ассетов в S3 не затрагивает sidecar-метаданные — они остаются на локальном диске и не удаляются вместе с объектами S3.
 
 ## application
 
@@ -556,15 +580,23 @@ admin:
   wait-timeout: "300s"
 ```
 
-## Пример production-переопределения (setting-local.yaml)
+## Примеры конфигурации по слоям
+
+Каждая фича целиком живёт в своём файле-слое. Ниже — минимальный рабочий набор из трёх файлов.
+
+### `setting.yaml` (фундамент)
 
 ```yaml
+version: "1"
+
 server:
-  addr: ":9090"
+  addr: ":8080"
 
 http:
   allowed-origins:
     - "https://cdn.example.com"
+  cache-control: "public, max-age=2592000"
+  max-concurrent-requests: 32
 
 source:
   storage: s3
@@ -583,6 +615,119 @@ result:
 metadata:
   dir: "./data/meta"
 
+libvips:
+  limits:
+    concurrency: 4
+    threads: 4
+    timeout: "30s"
+    output-bytes: 10485760
+  operation-cache:
+    enabled: false
+  metrics-interval: "15s"
+
+application:
+  buffer-max-bytes: 524288000
+
 observability:
   log-level: "warn"
 ```
+
+### `generate.yaml` (генерация ассетов)
+
+```yaml
+policy:
+  global:
+    authorization: "safe"
+    allowed-presets: ["thumb", "thumb@2"]
+    size-rules: ["0-2000x0-2000"]
+    limits:
+      source-bytes: 10485760
+      output-bytes: 10485760
+  presets:
+    - name: "thumb"
+      size: "200x200"
+      output-format: webp
+      quality: 85
+      dpr: 1
+    - name: "thumb@2"
+      size: "400x400"
+      output-format: webp
+      quality: 85
+      dpr: 2
+  path-policies:
+    - path: "/"
+
+processing:
+  default-quality: 85
+
+libvips:
+  encoders:
+    webp-reduction-effort: 4
+    avif-speed: 6
+    png-compression-level: 6
+  shrink-on-load:
+    enabled: true
+  color:
+    mode: strip
+  watermark-cache:
+    enabled: true
+    max-files: 32
+    max-bytes: 67108864
+    ttl: "5m"
+  detection:
+    concurrency: 0
+    max-wait: "5s"
+
+detection:
+  face-model: ""
+  object-model: ""
+
+application:
+  output-limit: 10485760
+```
+
+### `failback.yaml` (резервные механизмы)
+
+```yaml
+imagemagick:
+  binary: "magick"
+  policy:
+    enabled: true
+    disable-network: true
+  limits:
+    timeout: "30s"
+    output-bytes: 10485760
+    concurrency: 2
+
+http:
+  not-found-cache-control: "no-store"
+  not-found:
+    pixel: true
+  source-fallback:
+    enabled: false
+    status: 404
+    cache-control: "no-store"
+```
+
+### Локальные переопределения
+
+Секреты и локальные отклонения от базовых файлов размещайте в `*-local.yaml` (не коммитятся, см. `.gitignore`). Например, `setting-local.yaml`:
+
+```yaml
+server:
+  addr: ":9090"
+
+source:
+  storage: s3
+  bucket: "my-images-source"
+  prefix: "source/"
+  endpoint: "https://storage.yandexcloud.net"
+  region: "ru-central1"
+  access-key: "AKIA..."        # или env IMAGER_S3_ACCESS_KEY
+  secret-key: "..."            # или env IMAGER_S3_SECRET_KEY
+
+metadata:
+  dir: "./data/meta"
+
+observability:
+  log-level: "warn"

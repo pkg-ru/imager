@@ -1,24 +1,27 @@
 ########################################
-# Полный самодокументированный конфигурационный файл сервиса Imager.
+# Imager — слой SETTING (фундамент).
 #
-# Единственный env-переменная: IMAGER_CONFIG_DIR — каталог с конфигурацией
-# (например /etc/imager, см. docker-compose.yaml). В нём должны лежать
-# setting.yaml (этот файл) и, опционально, setting-local.yaml.
+# Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, стораджи,
+# observability/logging, безопасность, admin. Меняется редко.
+#
+# Каталог конфигурации задаётся env IMAGER_CONFIG_DIR. В нём могут лежать:
+#   setting.yaml + setting-local.yaml   — этот слой (обязателен setting.yaml)
+#   generate.yaml + generate-local.yaml — слой генерации ассетов (опционально)
+#   failback.yaml + failback-local.yaml — слой fallback-механизмов (опционально)
 #
 # Механизм загрузки (adapters/httpapi/configloader.go):
-#   1. Читается обязательный базовый файл setting.yaml.
-#   2. Если рядом есть setting-local.yaml — его настройки ГЛУБОКО мержатся
-#      поверх базового: вложенные map объединяются рекурсивно, скаляры
-#      заменяются, СПИСКИ заменяются ЦЕЛИКОМ (не дополняются).
-#   3. Результат строго декодируется (yaml.UnmarshalStrict): ЛЮБОЙ ключ,
-#      отсутствующий в схеме ниже, считается ошибкой и валит старт.
+#   1. Для каждой пары: base <- local глубоким merge (map'ы рекурсивно,
+#      скаляры заменяются, СПИСКИ заменяются ЦЕЛИКОМ).
+#   2. Слои объединяются: setting -> generate -> failback.
+#   3. Результат строго декодируется (yaml.UnmarshalStrict): любой ключ вне
+#      схемы — ошибка старта.
 #
 # Важно: добавляйте только ключи из документации ниже. «Примеры» других
 # хранилищ и опций в этом файле закомментированы, чтобы не менять активное
 # поведение — раскомментируйте по необходимости.
 #
-# Актуальная версия схемы конфигурации — "1". Другое значение — ошибка
-# старта (config: unsupported version).
+# Версия схемы — "1". Другое значение — ошибка старта
+# (config: unsupported version). Ключ version задаётся ТОЛЬКО здесь.
 ########################################
 
 version: "1"
@@ -77,11 +80,9 @@ server:
   max-body-bytes: 4096
 
 ########################################
-# http — HTTP-адаптер (обработка asset-URL, безопасность, fallback).
-#
-# Настраивает: CORS, кэширующие заголовки, security-заголовки, лимит длины
-# URL, таймаут генерации ассета и поведение при не найденном ассете
-# (not-found fallback).
+# http — HTTP-адаптер: CORS, кэширующие/security-заголовки, лимит длины URL,
+# таймаут генерации ассета, admission control.
+# not-found / source-fallback / not-found-cache-control переехали в failback.yaml.
 ########################################
 http:
   # allowed-origins — CORS allowlist (deny-by-default).
@@ -95,7 +96,6 @@ http:
   # allowed-origins:
   #   - "https://cdn.example.com"
   #   - "https://images.example.net"
-  #
 
   # allow-credentials — разрешать ли Access-Control-Allow-Credentials.
   # Тип: bool. Дефолт: false.
@@ -109,14 +109,7 @@ http:
   # Пустое значение = заголовок не выставляется вовсе.
   # В production переопределён на 1 месяц (2592000 сек) — месячная палитра
   # для CDN/браузеров.
-  cache-control: "public, max-age=2592000"   # месяц
-
-  # not-found-cache-control — Cache-Control для fallback-ответов (404 и т.п.).
-  # Тип: string. Дефолт в коде: "no-store".
-  # Пустое значение = заголовок не выставляется.
-  # Значение описывает кэширование страниц ошибок/пикселя, поэтому по
-  # умолчанию no-store. Явно задаём дефолт — поведение не меняется.
-  not-found-cache-control: "no-store"
+  cache-control: "public, max-age=2592000" # месяц
 
   # referrer-policy — значение заголовка Referrer-Policy.
   # Тип: string. Дефолт в коде: "no-referrer".
@@ -126,7 +119,7 @@ http:
   # csp — значение Content-Security-Policy (выставляется для fallback-страниц).
   # Тип: string. Дефолт: пусто (заголовок не выставляется).
   # Например: "default-src 'none'; img-src 'self'".
-  # Актуально, если http.not-found.page используется для HTML-страницы ошибки.
+  # Актуально, если failback http.not-found.page используется для HTML-страницы.
   # csp: "default-src 'none'"
 
   # max-url-len — максимальная длина asset URL.
@@ -137,7 +130,7 @@ http:
   # generate-timeout — таймаут генерации ассета (context deadline для
   # вызова Generate).
   # Тип: duration-строка. Дефолт в коде: "30s".
-  # Превышение → HTTP 504 Gateway Timeout (плюс отмена ImageMagick).
+  # Превышение → HTTP 504 Gateway Timeout (плюс отмена процессора).
   generate-timeout: "30s"
 
   # max-concurrent-requests — максимальное число ОДНОВРЕМЕННО обрабатываемых
@@ -148,389 +141,6 @@ http:
   # health/metrics остаются доступными при перегрузке.
   # 0 = без ограничения.
   max-concurrent-requests: 4
-
-  # not-found — поведение при отсутствии запрашиваемого ассета (мимо кэша
-  # и мимо source). Поля взаимоисключающие по приоритету:
-  #   pixel > redirect > image > page.
-  not-found:
-    # pixel — отдавать прозрачный 1x1 пиксель в ЗАПРОШЕННОМ формате (через
-    # PixelGenerator, метаданные соответствуют формату URL).
-    # Тип: bool. Дефолт: false.
-    # Если true и формат не поддерживается — выполняется следующий fallback.
-    pixel: true
-
-    # image — путь к СТАТИЧЕСКОМУ файлу-картинке, отдаваемому с HTTP 404.
-    # Тип: string (путь к файлу). Дефолт: пусто.
-    # Пример: "not-found.png"
-    # image: "not-found.png"
-
-    # page — путь к СТАТИЧЕСКОМУ HTML-файлу, отдаваемому с HTTP 404.
-    # Тип: string (путь к файлу). Дефолт: пусто.
-    # Раскомментируйте и укажите путь до HTML.
-    # page: "example/not-found.html"
-
-    # redirect — URL для 301-редиректа при not-found.
-    # Тип: string (URL). Дефолт: пусто.
-    # redirect: "https://example.com/404"
-
-  # source-fallback — fallback на ИСХОДНЫЙ файл при ошибке ассета
-  # (несуществующий пресет, неканонический URL, запрещённая политика).
-  # Если включено и исходный файл существует, вместо пикселя/ошибки отдаётся
-  # исходный файл с его оригинальными Content-Type/именем/форматом.
-  # Выключено по умолчанию (текущее поведение).
-  source-fallback:
-    # enabled — включать ли source fallback.
-    # Тип: bool. Дефолт: false.
-    enabled: false
-
-    # status — HTTP-статус ответа при source fallback.
-    # Тип: int. Дефолт: 404. Допустимо: 200 или 404.
-    status: 404
-
-    # cache-control — Cache-Control для source fallback-ответа.
-    # Тип: string. Дефолт: "no-store".
-    cache-control: "no-store"
-
-########################################
-# policy — deny-by-default политика авторизации и лимитов.
-#
-# Всё запрещено по умолчанию; разрешается только то, что явно покрыто
-# правилами ниже. Политика применяется к КАНОНИЧЕСКИМ asset URL вида
-#   /v1/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output}
-# и к ПРЕСЕТ URL вида
-#   /v1/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output}
-#
-# Два уровня:
-#   global  — глобальные правила и лимиты;
-#   path-policies — более специфичные ограничения по префиксу пути
-#   (только ужесточают глобальные, не расширяют).
-########################################
-policy:
-  # global — глобальная политика.
-  global:
-    # authorization — режим авторизации.
-    # "safe":   разрешены ТОЛЬКО явно покрытые случаи: preset — по имени из
-    #           allowed-presets; канонический URL — размер, покрытый хотя бы
-    #           одним size-rules. Рекомендуется для production.
-    # "unsafe": любые произвольные параметры разрешены (включая
-    #           произвольные размеры/transform/dpr). НЕ отключает лимиты.
-    authorization: "safe"
-
-    # allowed-presets — whitelist имён пресетов, доступных в URL.
-    # Тип: list[string]. Дефолт: пусто.
-    # Имена указываются ПОЛНОСТЬЮ (включая @dpr-суффикс): чтобы разрешить
-    # пресет "thumb@2", указываем именно "thumb@2". В режиме "safe" пресет
-    # вне списка → 404.
-    # ВАЖНО: allowed-presets игнорируются, если authorization = "unsafe".
-    allowed-presets: ["thumb", "thumb@2"]
-
-    # size-rules — правила допустимых РАЗМЕРОВ для канонических запросов.
-    # Тип: list[string], формат "minW-maxWxminH-maxH"; каждое измерение может
-    # быть диапазоном ("0-2000") или отсутствовать (пусто = «любая»).
-    # Правило "0-2000x0-2000" = ширина и высота от 0 до 2000 px.
-    # Single value "500x" = точная ширина 500 при любой высоте.
-    # В режиме safe запрос отклоняется, если ни одно правило не Матчится.
-    # Пустой список в режиме safe = ВСЕ канонические запросы отклоняются.
-    size-rules: ["0-2000x0-2000"]
-
-    # special-note: для animated-GIF/WebP канонических запросов нет особых
-    # правил — лимиты по кадрам/длительности применяются через limits ниже.
-
-    # limits — лимиты обрабатываемого запроса (применяются к ЛЮБОМУ режиму);
-    # 0 = соответствующий лимит не ограничен (unlimited).
-    limits:
-      # source-bytes — максимум размера ИСХОДНОГО файла (байт).
-      source-bytes: 10485760                    # 10 MiB
-      # width — максимум ширины запрошенного изображения (px).
-      # width: 2000
-      # height — максимум высоты запрошенного изображения (px).
-      # height: 2000
-      # pixels — максимум пикселей запрошенного изображения (wxh).
-      # pixels: 4000000                          # 4 MP
-      # dpr — максимум значения dpr в запросе (1/2/3).
-      # dpr: 3
-      # frames — максимум кадров анимации (для GIF/WebP).
-      # frames: 150
-      # duration — максимум длительности анимации (максимальные секунды, мс).
-      # duration: 60000                          # 60 000 мс = 60 c
-      # concurrency — максимум одновременных операций обработки от одного
-      # клиента (int).
-      # concurrency: 10
-      # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
-      output-bytes: 10485760                    # 10 MiB
-      # Примечание: параметры width/height/pixels/frames/dpr/duration/
-      # concurrency не заданы в этом файле — 0 => без ограничения.
-      # Задание только source-bytes и output-bytes.
-
-  # presets — именованные конфигурации обработки (ссылка из URL на пресет).
-  # Каждый пресет:
-  #   name (обязательный, ≤64 символов, без дефисов "-" в имени; допустимы
-  #         буквы, цифры, "_", ".", "@" для суффикса @dpr);
-  #   crop (строка; по умолчанию "" = кроп не используется):
-  #     ""        → resize (только изменение размера)
-  #     "center"  → crop   (центрированная обрезка)
-  #     "smart"   → smart-crop   (умная обрезка)
-  #     "face"    → face-crop    (обрезка по лицу)
-  #     "object"  → object-crop  (обрезка по объекту);
-  #   trim (bool; по умолчанию false) — независимый фильтр обрезки
-  #   однотонных полей. crop и trim — НЕЗАВИСИМЫЕ фильтры: сначала trim,
-  #   затем кроп/ресайз. Комбинация кодируется в transform код URL
-  #   (trim последним в коде):
-  #     crop=""       trim=false → resize
-  #     crop="center" trim=false → crop
-  #     crop="smart"  trim=false → smart-crop
-  #     crop="face"   trim=false → face-crop
-  #     crop="object" trim=false → object-crop
-  #     crop=""       trim=true  → trim
-  #     crop="center" trim=true  → ct
-  #     crop="smart"  trim=true  → sct
-  #     crop="face"   trim=true  → fct
-  #     crop="object" trim=true  → oct
-  #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
-  #   output-format — jpeg | png | webp | gif | avif | heif | apng | jxl (JPEG XL);
-  #   quality — 0-100 (0 = default-quality из `processing`);
-  #   dpr — 0/1/2/3 (0 = не задан; при не заданном dpr берётся из @dpr-суффикса
-  #         имени — разрешение пресета "thumb@2" форсирует dpr=2);
-  #   frames — макс. число кадров анимации (0 = без ограничения);
-  #   duration — макс. длительность анимации в мс (0 = без ограничения);
-  #   loop — *bool: nil (не задано) = default-loop из processing;
-  #          true = бесконечный loop, false = однопроходная анимация;
-  #   watermark — имя ватермарки из секции watermarks (пусто = не задана;
-  #         приоритет выше path-policy и processing.default-watermark);
-  #   auto-orient — *bool: nil (не задано) = наследовать глобальный дефолт
-  #         processing.default-auto-orient; true/false — явно включить/выключить
-  #         автоматический поворот по EXIF Orientation;
-  #   rotate — фиксированный поворот по часовой стрелке:
-  #         "" (не задано) = наследовать processing.default-rotate;
-  #         "none" = ЯВНО отключить поворот (перекрыть глобальный);
-  #         "90" | "180" | "270" — угол поворота;
-  #   flip — отражение:
-  #         "" (не задано) = наследовать processing.default-flip;
-  #         "none" = ЯВНО отключить отражение (перекрыть глобальный);
-  #         "horizontal" — зеркало слева-направо;
-  #         "vertical" — отражение сверху-вниз.
-  #   Ориентация применяется ДО resize/crop/trim (порядок: auto-orient →
-  #   rotate → flip).
-  # Пресеты перечисляются ровно те, что доступны в URL (см. allowed-presets).
-  # Имена пресетов должны быть УНИКАЛЬНЫМИ.
-  presets:
-    # пресет "thumb" — маленький resize-центра.
-    - name: "thumb"
-      size: "200x200"
-      output-format: webp
-      quality: 85
-      dpr: 1
-
-    # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
-    # @2 в имени фиксирует dpr=2 при разрешении.
-    - name: "thumb@2"
-      size: "400x400"
-      output-format: webp
-      quality: 85
-      dpr: 2
-
-    # пресет "banner" — анимационный WebP-баннер 1200x400.
-    - name: "banner"
-      size: "1200x400"
-      output-format: webp
-      quality: 80
-      dpr: 1
-      frames: 0       # 0 = без ограничения кадров
-      duration: 0     # 0 = без ограничения длительности
-      loop: true      # зацикленная анимация (bool; nil = по default-loop)
-
-    # Примеры режимов crop (раскомментируйте при необходимости):
-    # - name: "avatar"          # центрированный кроп
-    #   crop: center
-    #   size: "100x100"
-    #   output-format: webp
-    #
-    # - name: "hero"            # умный кроп (smart-crop)
-    #   crop: smart
-    #   size: "800x600"
-    #   output-format: webp
-    #
-    # - name: "portrait"        # кроп по лицу + trim
-    #   crop: face
-    #   trim: true
-    #   size: "300x300"
-    #   output-format: jpeg
-    #
-    # - name: "product"         # кроп по объекту + trim
-    #   crop: object
-    #   trim: true
-    #   size: "500x500"
-    #   output-format: webp
-
-  # path-policies — политики по префиксам пути канонических URL.
-  # Применяются ТОЛЬКО к каноническим URL (не к пресетам) и лишь
-  # ужесточают глобальную политику (не расширяют права).
-  # Выбор: LONGEST prefix match (самый длинный совпадающий префикс побеждает).
-  #   "basket/products" нормализуется в "/basket/products";
-  #   "/" — fallback: применяется ко всем путям без более специфичного совпадения.
-  # Поля (все опциональны):
-  #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
-  #   crop  — правило допустимых crop-режимов:
-  #       строка: имя режима — разрешён ТОЛЬКО этот режим:
-  #               "center" → c/ct, "smart" → sc/sct,
-  #               "face" → fc/fct, "object" → oc/oct;
-  #               "none" = любой crop-режим запрещён;
-  #       список: crop: [smart, face] — разрешены ТОЛЬКО перечисленные режимы.
-  #       Режим автоматически покрывает свой trim-вариант (ct/sct/fct/oct),
-  #       поэтому отдельно указывать их не нужно. Неизвестное значение —
-  #       ошибка старта. nil (не задано) = неважно.
-  #   trim  — *bool: nil (не задано) = неважно; true = trim обязан быть в URL
-  #           (t/ct/sct/fct/oct); false = trim запрещён;
-  #   watermark — имя ватермарки из секции watermarks: применяется к
-  #           каноническим запросам префикса пути (приоритет ниже пресета,
-  #           выше processing.default-watermark).
-  path-policies:
-    # "/" — fallback для всех путей. Здесь dpr/crop/trim не заданы
-    # (нил/отсутствуют) — политика НЕ накладывает ограничений на эти
-    # параметры для путей без более специфичного совпадения:
-    - path: "/"
-    - path: "/thumbs"        # для префикса /thumbs
-      dpr: "0-1"
-      crop: center           # разрешён только центрированный кроп (c/ct)
-    - path: "/banners"
-      dpr: "0-2"
-    - path: "/originals"
-      dpr: "0-1"
-      crop: none             # любой crop-режим запрещён
-      trim: false
-    - path: "/admin"
-      dpr: "0-1"
-
-    # Примеры правил с crop-режимами (раскомментируйте при необходимости):
-    # - path: "/avatars"
-    #   dpr: "0-1"
-    #   crop: center          # разрешён только центрированный кроп (c/ct)
-    # - path: "/news"
-    #   crop: smart           # разрешён только умный кроп (sc/sct)
-    # - path: "/portraits"
-    #   crop: face            # разрешён только кроп по лицу (fc/fct)
-    #   trim: true            # и trim обязателен (fct)
-    # - path: "/catalog"
-    #   crop: [smart, face]   # разрешены только эти два режима
-    # - path: "/gallery"
-    #   crop: none            # любой crop-режим запрещён
-
-########################################
-# watermarks — именованные декларации ватермарок.
-#
-# Ватермарка описывается ОДИН раз здесь и применяется по имени в пресетах
-# (policy.presets[].watermark), path-policies
-# (policy.path-policies[].watermark) или по умолчанию
-# (processing.default-watermark).
-#
-# Приоритет применения: пресет -> path-policy (longest prefix match) ->
-# processing.default-watermark. Нигде не задана -> не накладывается.
-#
-# Поля:
-#   name     (обязательный) — уникальное имя для ссылок;
-#   path     (обязательный) — путь к файлу изображения ватермарки на диске.
-#              Файл должен существовать на старте (иначе — fail-fast).
-#   position — позиция размещения (CSS background-position):
-#              top | bottom | left | right | center. Дефолт: center.
-#   repeat   — заполнение копиями (CSS background-repeat):
-#              no-repeat | repeat | repeat-x | repeat-y | round | space.
-#              Дефолт: no-repeat.
-#   size     — размер копии относительно холста (CSS background-size):
-#              contain | cover | "{width}px {height}px" (например "200px 50px").
-#              Дефолт: contain.
-#
-# Ограничения движков:
-#   - libvips (основной) реализует position/repeat/size полностью;
-#   - ImageMagick (fallback): точный размер только в px-форме; contain/cover
-#     рендерятся в натуральном размере файла; все repeat-режимы кроме
-#     no-repeat — как сплошная плитка;
-#   - анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips дают
-#     ошибку обработки (комозит применился бы только к первому кадру).
-#
-# Секция опциональна: без неё ни одна ватермарка не применяется.
-########################################
-watermarks: []
-# Пример:
-# watermarks:
-#   - name: water-test
-#     path: "/etc/imager/watermarks/test.png"
-#     position: center        # top | bottom | left | right | center
-#     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space
-#     size: contain           # contain | cover | "200px 50px"
-
-########################################
-# processing — общие параметры обработки изображений.
-########################################
-processing:
-  # default-quality — качество сжатия ПО УМОЛЧАНИЮ (используется, когда в
-  # пресете или запросе quality не задано или = 0).
-  # Тип: int 0-100. Вне диапазона [0,100] — ошибка валидации на старте.
-  # Применяется к lossy-форматам (jpeg/webp). На PNG влияет не quality,
-  # а png-compression-level (см. imagemagick.limits).
-  default-quality: 85
-
-  # default-loop — зацикливание анимаций ПО УМОЛЧАНИЮ.
-  # Тип: *bool (true/false). Не задан (nil) => по умолчанию true (зациклено).
-  # Применяется к GIF/WebP/APNG/HEIF анимациям, если в пресете не задан loop.
-  # Пример: развернуть как значение, чтобы изменить поведение:
-  # default-loop: false
-
-  # default-watermark — ватермарка ПО УМОЛЧАНИЮ (имя из секции watermarks).
-  # Тип: string. Дефолт: пусто (= не применяется). Применяется к запросам,
-  # где ватермарка не задана ни в пресете, ни в path-policy. Неизвестное
-  # имя — ошибка старта.
-  # Пример:
-  # default-watermark: water-test
-
-  # default-auto-orient — автоматический поворот по EXIF Orientation
-  # ПО УМОЛЧАНИЮ.
-  # Тип: *bool. Дефолт: true.
-  # true = при загрузке изображение автоматически поворачивается согласно
-  # тегу EXIF Orientation (фото с телефонов/камер отображаются правильно).
-  # false = EXIF Orientation игнорируется (изображение обрабатывается как
-  # сохранено). Пресеты могут перекрыть значение полем auto-orient.
-  # Пример:
-  # default-auto-orient: true
-
-  # default-rotate — фиксированный поворот ПО УМОЛЧАНИЮ (по часовой стрелке).
-  # Тип: string. Дефолт: "" (без поворота).
-  # Допустимые значения: "" (не задано), "none" (без поворота), "90", "180",
-  # "270". Применяется ПОСЛЕ auto-orient и ДО resize/crop/trim. Пресеты могут
-  # перекрыть значение полем rotate.
-  # Пример:
-  # default-rotate: "90"
-
-  # default-flip — отражение ПО УМОЛЧАНИЮ.
-  # Тип: string. Дефолт: "" (без отражения).
-  # Допустимые значения: "" (не задано), "none" (без отражения),
-  # "horizontal" (зеркало слева-направо), "vertical" (отражение сверху-вниз).
-  # Применяется ПОСЛЕ rotate и ДО resize/crop/trim. Пресеты могут перекрыть
-  # значение полем flip.
-  # Пример:
-  # default-flip: horizontal
-
-  # default-trim-mode — режим определения цвета однотонного поля для
-  # независимого фильтра trim (обрезка однотонных полей).
-  # Тип: string. Дефолт: "auto".
-  #   "auto"  — автоматическое определение цвета фона (по краевому пикселю);
-  #   "color" — фиксированный цвет фона (default-trim-color).
-  # Применяется к trim-запросам (t/ct/sct/fct/oct), если в пресете trim не
-  # задан. Настройки trim — глобальные (не per-preset).
-  # Пример:
-  # default-trim-mode: auto
-
-  # default-trim-color — фиксированный цвет фона для trim в hex-форме
-  # "#RRGGBB" (только при default-trim-mode: color).
-  # Тип: string. Дефолт: "" (не задан).
-  # Пример:
-  # default-trim-color: "#ffffff"
-
-  # default-trim-tolerance — допуск сравнения пикселей с фоновым цветом
-  # для trim в диапазоне [0,1]: 0 — точное совпадение, 1 — любые пиксели
-  # считаются фоном.
-  # Тип: float. Дефолт: 0.
-  # Пример:
-  # default-trim-tolerance: 0
 
 ########################################
 # source / result — хранилища исходников и результатов.
@@ -575,7 +185,7 @@ processing:
 ########################################
 source:
   storage: fs
-  path: "/data/source"   # каталог исходных файлов на диске (для fs)
+  path: "/data/source" # каталог исходных файлов на диске (для fs)
 
   # ---------- Примеры альтернативных source (закомментировано; включите
   # необходимое, заменив storage и раскомментировав подходящий блок) --------
@@ -631,7 +241,7 @@ source:
 
 result:
   storage: fs
-  path: "/data/result"  # каталог результатов на диске (для fs)
+  path: "/data/result" # каталог результатов на диске (для fs)
 
   # Для result ДОСТУПНЫ те же remote-хранилища, кроме http (запрещено).
   # Пути к исходным и результатам могут отличаться (разные хранилища для
@@ -647,8 +257,13 @@ result:
 # libvips — основной движок обработки изображений. Компилируется в бинарь
 # (cgo, govips) и работает in-process, без subprocess. Сборка с поддержкой
 # libvips: go build -tags libvips (требуются libvips-dev и компилятор C).
-# Если бинарь собран БЕЗ тэка libvips — процессор недоступен, и сервис
+# Если бинарь собран БЕЗ тега libvips — процессор недоступен, и сервис
 # использует ImageMagick как primary.
+#
+# В слое SETTING — только РЕСУРСНАЯ инфраструктура движка (одна на процесс):
+#   limits, operation-cache, metrics-interval.
+# Параметры ГЕНЕРАЦИИ (encoders / shrink-on-load / watermark-cache /
+# detection-семафор / color) — в generate.yaml.
 #
 # Лимиты применяются двумя слоями:
 #   1) глобальная конфигурация libvips (threads, max-cache-mem/files/size) —
@@ -667,7 +282,7 @@ libvips:
     # output-bytes — application-level лимит размера ВЫХОДНЫХ данных (байт).
     # Реализуется boundedWriter'ом; при превышении запись прекращается
     # (LimitError). Защита от гигантских результатов.
-    output-bytes: 10485760                       # 10 MiB
+    output-bytes: 10485760 # 10 MiB
 
     # concurrency — максимальное число ОДНОВРЕМЕННО выполняемых операций
     # обработки libvips (bounded очередь слотов; 0 = код применяет 16).
@@ -675,13 +290,13 @@ libvips:
     concurrency: 2
 
     # threads — число потоков libvips (vips_concurrency_set). 0 = default
-    # govips (1). Для нагруженного процесca рекомендуется число логических
+    # govips (1). Для нагруженного процесса рекомендуется число логических
     # ядер (иначе libvips сам распараллелит по ядрам поверх concurrency).
     threads: 4
 
     # max-cache-mem — максимум памяти кэша libvips (байт). 0 = default
     # govips (50 MiB). Уменьшение снижает пиковое потребление памяти.
-    max-cache-mem: 52428800                      # 50 MiB
+    max-cache-mem: 52428800 # 50 MiB
 
     # max-cache-files — максимум открытых файлов кэша libvips. 0 = default.
     max-cache-files: 0
@@ -689,9 +304,25 @@ libvips:
     # max-cache-size — максимум операций в кэше libvips. 0 = default (100).
     max-cache-size: 100
 
+  # operation-cache — operation cache libvips (Фаза 5b). libvips кэширует
+  # результаты операций (vips_cache): кэш полезен для повторяющихся операций
+  # на одних и тех же изображениях, но для stateless-обработчика он бесполезен,
+  # ест память и несёт риск на musl/Alpine. Рекомендация для продакшена: false.
+  # При отключении в Startup передаются НУЛЕВЫЕ лимиты кэша
+  # (vips_cache_set_max_mem(0) / vips_cache_set_max(0) / set_max_files(0)) —
+  # в govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша (не "без лимита").
+  # Дефолт: true (обратная совместимость).
+  operation-cache:
+    enabled: true
+
+  # metrics-interval — интервал периодического сбора vips-метрик
+  # (observability): tracked memory/allocs, open files, число операций,
+  # метрики кэша ватермарок. Экспортируются через /metrics как gauge-и
+  # imager_vips_*. Минимум: "1s".
+  # Тип: duration-строка. Дефолт в коде: "15s".
+  metrics-interval: "15s"
+
   # encoders — per-format параметры сжатия кодировщиков libvips.
-  # Значение 0 = встроенное умолчание движка. Диапазоны валидируются при
-  # старте: невалидное значение — ошибка конфигурации (fail-fast).
   encoders:
     # webp-reduction-effort — reduction effort WebP [0..6]: больше = лучше
     # сжатие, медленнее. Дефолт: 4.
@@ -807,23 +438,77 @@ libvips:
   color:
     mode: strip
 
-  # operation-cache — operation cache libvips (Фаза 5b). libvips кэширует
-  # результаты операций (vips_cache): кэш полезен для повторяющихся операций
-  # на одних и тех же изображениях, но для stateless-обработчика он бесполезен,
-  # ест память и несёт риск на musl/Alpine. Рекомендация для продакшена: false.
-  # При отключении в Startup передаются НУЛЕВЫЕ лимиты кэша
-  # (vips_cache_set_max_mem(0) / vips_cache_set_max(0) / set_max_files(0)) —
-  # в govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша (не "без лимита").
-  # Дефолт: true (обратная совместимость).
-  operation-cache:
-    enabled: true
+########################################
+# processing — общие параметры обработки изображений.
+########################################
+processing:
+  # default-quality — качество сжатия ПО УМОЛЧАНИЮ (используется, когда в
+  # пресете или запросе quality не задано или = 0).
+  # Тип: int 0-100. Вне диапазона [0,100] — ошибка валидации на старте.
+  # Применяется к lossy-форматам (jpeg/webp). На PNG влияет не quality,
+  # а png-compression-level (см. imagemagick.limits / libvips.encoders).
+  default-quality: 85
 
-  # metrics-interval — интервал периодического сбора vips-метрик
-  # (observability): tracked memory/allocs, open files, число операций,
-  # метрики кэша ватермарок. Экспортируются через /metrics как gauge-и
-  # imager_vips_*. Минимум: "1s".
-  # Тип: duration-строка. Дефолт в коде: "15s".
-  metrics-interval: "15s"
+  # default-loop — зацикливание анимаций ПО УМОЛЧАНИЮ.
+  # Тип: *bool (true/false). Не задан (nil) => по умолчанию true (зациклено).
+  # Применяется к GIF/WebP/APNG/HEIF анимациям, если в пресете не задан loop.
+  # Пример: развернуть как значение, чтобы изменить поведение:
+  # default-loop: false
+
+  # default-watermark — ватермарка ПО УМОЛЧАНИЮ (имя из секции watermarks).
+  # Тип: string. Дефолт: пусто (= не применяется). Применяется к запросам,
+  # где ватермарка не задана ни в пресете, ни в path-policy. Неизвестное
+  # имя — ошибка старта.
+  # Пример:
+  # default-watermark: water-test
+
+  # default-auto-orient — автоматический поворот по EXIF Orientation
+  # ПО УМОЛЧАНИЮ.
+  # Тип: *bool. Дефолт: true.
+  # true = при загрузке изображение автоматически поворачивается согласно
+  # тегу EXIF Orientation (фото с телефонов/камер отображаются правильно).
+  # false = EXIF Orientation игнорируется (изображение обрабатывается как
+  # сохранено). Пресеты могут перекрыть значение полем auto-orient.
+  # Пример:
+  # default-auto-orient: true
+
+  # default-rotate — фиксированный поворот ПО УМОЛЧАНИЮ (по часовой стрелке).
+  # Тип: string. Дефолт: "" (без поворота).
+  # Допустимые значения: "" (не задано), "none" (без поворота), "90", "180",
+  # "270". Применяется ПОСЛЕ auto-orient и ДО resize/crop/trim. Пресеты могут
+  # перекрыть значение полем rotate.
+  # Пример:
+  # default-rotate: "90"
+
+  # default-flip — отражение ПО УМОЛЧАНИЮ.
+  # Тип: string. Дефолт: "" (без отражения).
+  # Допустимые значения: "" (не задано), "none" (без отражения),
+  # "horizontal" (зеркало слева-направо), "vertical" (отражение сверху-вниз).
+  # Применяется ПОСЛЕ rotate и ДО resize/crop/trim. Пресеты могут перекрыть
+  # значение полем flip.
+  # Пример:
+  # default-flip: horizontal
+
+  # default-trim-mode — режим определения цвета однотонного поля для
+  # независимого фильтра trim (обрезка однотонных полей).
+  # Тип: string. Дефолт: "auto".
+  #   "auto"  — автоматическое определение цвета фона (по краевому пикселю);
+  #   "color" — фиксированный цвет фона (default-trim-color).
+  # Применяется к trim-запросам (t/ct/sct/fct/oct), если в пресете trim не
+  # задан. Настройки trim — глобальные (не per-preset).
+  default-trim-mode: "auto"
+
+  # default-trim-color — фиксированный цвет фона для trim в hex-форме
+  # "#RRGGBB" (только при default-trim-mode: color).
+  # Тип: string. Дефолт: "" (не задан).
+  # Пример:
+  # default-trim-color: "#ffffff"
+
+  # default-trim-tolerance — допуск сравнения пикселей с фоновым цветом
+  # для trim в диапазоне [0,1]: 0 — точное совпадение, 1 — любые пиксели
+  # считаются фоном.
+  # Тип: float. Дефолт: 0.
+  default-trim-tolerance: 0
 
 ########################################
 # detection — детектор лиц/объектов для операций face-crop ("fc") и
@@ -832,8 +517,8 @@ libvips:
 # Детекция выполняется onnx-моделями (ONNX Runtime) внутри процесса libvips:
 #   - face-model:  YuNet; находит лица;
 #   - object-model: SSD/YOLO-подобная; находит объекты.
-# Бинарь должен быть собран с тэком "-tags onnx" и иметь C-библиотеку
-# ONNX Runtime (libonnxruntime). Без этого тэка детектор НЕ работает:
+# Бинарь должен быть собран с тегом "-tags onnx" и иметь C-библиотеку
+# ONNX Runtime (libonnxruntime). Без этого тега детектор НЕ работает:
 # запросы с fc/oc вернут понятную ошибку.
 #
 # Включение/выключение задаётся ПУТЁМ К МОДЕЛИ: пустой путь = операция
@@ -870,114 +555,21 @@ detection:
   margin: 0.1
 
 ########################################
-# imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback).
-#
-# ImageMagick НЕ обязателен: libvips — основной движок и покрывает все
-# форматы, включая APNG (≥ 8.13). ImageMagick используется ТОЛЬКО как
-# fallback для сборок без тега "libvips". В обычном сценарии (libvips
-# работает) ImageMagick не создаётся и не запускается вовсе.
-#
-# Процессор запускает бинарник ImageMagick как subprocess для каждой
-# операции. Лимиты применяются ТРЕМЯ слоями:
-#   1) -limit аргументы командной строки (limits ниже);
-#   2) сгенерированный policy.xml (policy ниже) через MAGICK_CONFIGURE_PATH;
-#   3) application-level ограничения: bounded writer (output-bytes) и
-#      context deadline (timeout) — не полагаются только на policy.
+# application.output-limit — лимит размера сгенерированного выхода.
 ########################################
-imagemagick:
-  # binary — имя или путь к исполняемому файлу ImageMagick.
-  # Тип: string. Дефолт в коде: "magick" (ImageMagick 7); для версии 6
-  # укажите "convert". Должен быть в PATH или абсолютным путём.
-  binary: "magick"
+application:
+  # output-limit — максимальный размер ВЫХОДНОГО файла, который будет
+  # сохранён (0 = без лимита).
+  # Тип: int64 (байт). Дефолт: 0 (= нет). При превышении — генерация
+  # прерывается; результат не сохраняется.
+  # Рекомендуется задавать явно, например 10485760 (10 MiB).
+  output-limit: 10485760 # 10 MiB
 
-  # policy — настройки генерации deny-by-default policy.xml.
-  # При enabled=true генерируется политика:
-  #   - запрет все coders/delegates по умолчанию, разрешает лишь безопасный
-  #     whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/
-  #     PNM/TIFF/BMP/ICO);
-  #   - явный запрет network- и scripting-coders (URL/HTTPS/HTTP/FTP/MSL/MVG/
-  #     LABEL/TEXT/PLASMA/WPG/PS/PDF/SVG и др.) и delegates (curl, wget, ssh,
-  #     rsvg, inkscape...);
-  #   - resource limits (0 = не задавать соответствующую директиву).
-  policy:
-    # enabled — включать генерацию policy.xml.
-    # Тип: *bool. Дефолт: true. false = полагаться на системную policy.
-    enabled: true
-
-    # dir — каталог, куда пишется policy.xml.
-    # Тип: string. Пусто = временный каталог (os.MkdirTemp), удаляемый
-    # при закрытии Processor. Файл пишется атомарно (tmp + rename, права 0600,
-    # защита каталога 0700). При указании каталога он НЕ удаляется.
-    dir: ""            # пусто = временный каталог
-
-    # resource-политики (0 = не задавать; значения дублируют лимиты ниже,
-    # но применяются ImageMagick на уровне policy ДО -limit):
-    max-memory-bytes: 1073741824                 # 1 GiB
-    max-map-bytes: 2147483648                    # 2 GiB
-    max-disk-bytes: 1073741824                   # 1 GiB
-    max-threads: 4
-    max-time-seconds: 30
-    max-width: 32768
-    max-height: 32768
-    max-pixels: 268435456                        # 256 MP (защита от decompression bomb)
-    max-frames: 100
-
-    # disable-network — отключать network-capable delegates (URL, HTTPS,
-    # FTP, MSL, MVG, /...) в policy.xml.
-    # Тип: *bool. Дефолт: true. НЕ отключайте в production (риск SSRF).
-    disable-network: true
-
-    # disabled-coders — ДОПОЛНИТЕЛЬНЫЕ coders для явного запрета
-    # (помимо встроенного опасного списка).
-    # Тип: list[string]. Дефолт: пусто.
-    # Пример: disabled-coders: ["PALM", "SUN", "SGI"]
-    disabled-coders: []
-
-    # disabled-delegates — дополнительные delegates для явного запрета.
-    # Тип: list[string]. Дефолт: пусто.
-    # disabled-delegates: []
-
-  # limits — resource limits для subprocess ImageMagick.
-  # Значение 0 поля = без ограничения. Лимиты: через -limit для 6/7.
-  limits:
-    # timeout — application-level context deadline на один subprocess.
-    # Тип: duration-строка (например "30s"). Превышение → убийство процесса
-    # Через context и LimitError. НЕ полагается только на policy.xml.
-    timeout: "30s"
-
-    # output-bytes — application-level лимит размера ВЫХОДНОГО файла (bytes).
-    # Реализуется boundedWriter'ом на stdout subprocess; при превышении —
-    # подпроцесс отменяется (отмена ctx). Защита от гигантских результатов.
-    output-bytes: 10485760                       # 10 MiB
-
-    # resource limits (bytes) через -limit memory/map/disk (0 = не задавать):
-    memory-bytes: 1073741824                     # 1 GiB
-    map-bytes: 2147483648                        # 2 GiB
-    disk-bytes: 1073741824                       # 1 GiB
-    # threads — число потоков (0 = авто).
-    threads: 4
-    # time-seconds — лимит времени выполнения (сек).
-    time-seconds: 30
-    # width / height / pixels — защита от decompression bomb:
-    width: 32768
-    height: 32768
-    pixels: 268435456                            # 256 MP (area = w*h)
-    # frames — лимит кадров анимации (лимит list-length в policy).
-    frames: 100
-
-    # concurrency — максимальное число ОДНОВРЕМЕННО работающих ImageMagick
-    # subprocess (реальная защита CPU/RAM от перегрузки при параллельных
-    # запросах). 0 = в коде применяется 16 (по умолчанию). Рекомендуется
-    # задавать явное разумное значение (например 2-4) под ваши ресурсы.
-    concurrency: 2
-
-    # webp-method — метод сжатия WebP (0-6). 0 = умолчание ImageMagick;
-    # 4 = баланс скорость/размер. 6 = максимальное сжатие (медленнее).
-    webp-method: 4
-
-    # png-compression-level — уровень сжатия PNG (0-9, обычно 6).
-    # 0 = умолчание ImageMagick; больше = меньше размер, медленнее.
-    png-compression-level: 6
+  # buffer-max-bytes — общий бюджет памяти для спиллабл-буфера (source и
+  # result вместе). При исчерпании — спул на диск (временный файл) даже
+  # для in-memory данных. 0 = без лимита (не рекомендуется).
+  # Тип: int64 (байты). Дефолт в коде: 524288000 (500 MiB).
+  buffer-max-bytes: 524288000 # 500 MiB
 
 ########################################
 # metadata — sidecar-кэш результатов ИИ-моделей и largest_ai_asset.
@@ -990,8 +582,8 @@ imagemagick:
 # явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от того, какие
 # хранилища используются для source/result (fs/S3/SFTP/FTP/HTTP).
 # Метаданные ВСЕГДА хранятся локально по этому пути.
-# Пустой dir = значение по умолчанию: <локальный result-каталог>/.meta
-# (например ./data/result/.meta; обратно совместимо).
+# Пустой dir = значение по умолчанию: <локальный result-каталог>
+# (например ./data/result; без подкаталога .meta).
 ########################################
 metadata:
   # enabled — включить sidecar-кэш моделей и largest_ai_asset.
@@ -1001,32 +593,19 @@ metadata:
 
   # dir — корень sidecar-хранилища метаданных (metadata.dir).
   # Тип: string (локальный путь файловой системы). Дефолт:
-  # <локальный result-каталог>/.meta (например ./data/result/.meta).
+  # <локальный result-каталог> (например ./data/result; без подкаталога .meta).
   # Если задан — используется СТРОГО он (никакой деривации от result).
   # Рекомендуется задавать, когда result хранится в remote (S3/SFTP/FTP),
   # чтобы метаданные лежали в известном локальном каталоге для бэкапа/очистки.
+  # ВАЖНО для пакетных удалений: если для результата используется S3-хранилище,
+  # metadata.dir лучше указывать ЛОКАЛЬНО (на локальном диске), а не в S3.
+  # Тогда пакетное удаление ассетов в S3 не затрагивает sidecar-метаданные
+  # (они остаются на локальном диске и не удаляются вместе с объектами S3).
   # Пример:
   # dir: "./data/meta"
 
 ########################################
-# application — прикладные (application-level) лимиты всего сервиса.
-########################################
-application:
-  # output-limit — максимальный размер ВЫХОДНОГО файла, который будет
-  # сохранён (0 = без лимита).
-  # Тип: int64 (байт). Дефолт: 0 (= нет). При превышении — генерация
-  # прерывается; результат не сохраняется.
-  # Рекомендуется задавать явно, например 10485760 (10 MiB).
-  output-limit: 10485760
-
-  # buffer-max-bytes — общий бюджет памяти для спиллабл-буфера (source и
-  # result вместе). При исчерпании — спул на диск (временный файл) даже
-  # для in-memory данных. 0 = без лимита (не рекомендуется).
-  # Тип: int64 (байты). Дефолт в коде: 524288000 (500 MiB).
-  buffer-max-bytes: 524288000                   # 500 MiB
-
-########################################
-# observability — логирование (и метрики).
+# observability — логирование и метрики.
 ########################################
 observability:
   # log-level — уровень логирования.

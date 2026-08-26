@@ -7,3 +7,4 @@
 .idea
 libintl-8.def
 /data
+/config/*-local.yaml

@@ -8,7 +8,7 @@
 docker compose up -d --build
 ```
 
-Конфигурация монтируется из `./config` в `/etc/imager` read-only; внутри — `setting.yaml` (обязательный) и опциональный `setting-local.yaml`. Порт `8080`.
+Конфигурация монтируется из `./config` в `/etc/imager` read-only; внутри — три слоя: `setting.yaml` (обязательный) + `setting-local.yaml`, `generate.yaml` + `generate-local.yaml`, `failback.yaml` + `failback-local.yaml` (остальные опциональны). Порт `8080`.
 
 ### Docker вручную
 
@@ -116,8 +116,11 @@ Health/metrics остаются доступными при перегрузке
 
 ## Рекомендуемый production-профиль
 
+Конфигурация разделена на три слоя (см. [CONFIGURATION.md](CONFIGURATION.md)). Ниже — профиль по файлам-слоям.
+
+`setting-local.yaml` (фундамент; секреты не коммитятся):
+
 ```yaml
-# setting-local.yaml
 server:
   addr: ":8080"
   write-timeout: "120s"        # крупные медиа-ответы медленным клиентам
@@ -127,15 +130,6 @@ http:
   allowed-origins:
     - "https://cdn.example.com"
   max-concurrent-requests: 32
-
-policy:
-  global:
-    authorization: "safe"
-    allowed-presets: ["thumb", "thumb@2"]
-    size-rules: ["0-2000x0-2000"]
-    limits:
-      source-bytes: 10485760
-      output-bytes: 10485760
 
 source:
   storage: s3
@@ -160,16 +154,31 @@ libvips:
     output-bytes: 10485760
 
 application:
-  output-limit: 10485760
   buffer-max-bytes: 524288000
 
 observability:
   log-level: "warn"
 ```
 
+`generate-local.yaml` (генерация ассетов):
+
+```yaml
+policy:
+  global:
+    authorization: "safe"
+    allowed-presets: ["thumb", "thumb@2"]
+    size-rules: ["0-2000x0-2000"]
+    limits:
+      source-bytes: 10485760
+      output-bytes: 10485760
+
+application:
+  output-limit: 10485760
+```
+
 Чек-лист перед запуском:
 
-- [ ] `setting-local.yaml` с секретами не коммитится; секреты не в `setting.yaml`;
+- [ ] `*-local.yaml` с секретами не коммитятся; секреты не в базовых `*.yaml`;
 - [ ] `authorization: "safe"` и настроены `allowed-presets`/`size-rules`;
 - [ ] заданы лимиты `source-bytes`/`output-bytes` и `application.output-limit`;
 - [ ] `max-concurrent-requests` соответствует ресурсам контейнера;

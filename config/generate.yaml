@@ -1,0 +1,279 @@
+########################################
+# Imager — слой GENERATE (генерация ассетов).
+#
+# Всё, что настраивается при работе над картинками: пресеты, policy,
+# форматы/энкодеры, ресайз, watermark, ориентация, trim, цвет, detection.
+# Меняется часто.
+#
+# Файл ОПЦИОНАЛЕН: если отсутствует — используются умолчания схемы.
+# Переопределение: generate-local.yaml глубоко мержится поверх этого файла.
+# Ключ version здесь опционален; если задан — только "1".
+########################################
+# version: "1"
+
+########################################
+# policy — deny-by-default политика авторизации и лимитов.
+#
+# Всё запрещено по умолчанию; разрешается только то, что явно покрыто
+# правилами ниже. Политика применяется к КАНОНИЧЕСКИМ asset URL вида
+#   /v1/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output}
+# и к ПРЕСЕТ URL вида
+#   /v1/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output}
+#
+# Два уровня:
+#   global  — глобальные правила и лимиты;
+#   path-policies — более специфичные ограничения по префиксу пути
+#   (только ужесточают глобальные, не расширяют).
+########################################
+policy:
+  # global — глобальная политика.
+  global:
+    # authorization — режим авторизации.
+    # "safe":   разрешены ТОЛЬКО явно покрытые случаи: preset — по имени из
+    #           allowed-presets; канонический URL — размер, покрытый хотя бы
+    #           одним size-rules. Рекомендуется для production.
+    # "unsafe": любые произвольные параметры разрешены (включая
+    #           произвольные размеры/transform/dpr). НЕ отключает лимиты.
+    authorization: "safe"
+
+    # allowed-presets — whitelist имён пресетов, доступных в URL.
+    # Тип: list[string]. Дефолт: пусто.
+    # Имена указываются ПОЛНОСТЬЮ (включая @dpr-суффикс): чтобы разрешить
+    # пресет "thumb@2", указываем именно "thumb@2". В режиме "safe" пресет
+    # вне списка → 404.
+    # ВАЖНО: allowed-presets игнорируются, если authorization = "unsafe".
+    allowed-presets: ["thumb", "thumb@2"]
+
+    # size-rules — правила допустимых РАЗМЕРОВ для канонических запросов.
+    # Тип: list[string], формат "minW-maxWxminH-maxH"; каждое измерение может
+    # быть диапазоном ("0-2000") или отсутствовать (пусто = «любая»).
+    # Правило "0-2000x0-2000" = ширина и высота от 0 до 2000 px.
+    # Single value "500x" = точная ширина 500 при любой высоте.
+    # В режиме safe запрос отклоняется, если ни одно правило не матчится.
+    # Пустой список в режиме safe = ВСЕ канонические запросы отклоняются.
+    size-rules: ["0-2000x0-2000"]
+
+    # special-note: для animated-GIF/WebP канонических запросов нет особых
+    # правил — лимиты по кадрам/длительности применяются через limits ниже.
+
+    # limits — лимиты обрабатываемого запроса (применяются к ЛЮБОМУ режиму);
+    # 0 = соответствующий лимит не ограничен (unlimited).
+    limits:
+      # source-bytes — максимум размера ИСХОДНОГО файла (байт).
+      source-bytes: 10485760                    # 10 MiB
+      # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
+      output-bytes: 10485760                    # 10 MiB
+      # width — максимум ширины запрошенного изображения (px).
+      # width: 2000
+      # height — максимум высоты запрошенного изображения (px).
+      # height: 2000
+      # pixels — максимум пикселей запрошенного изображения (wxh).
+      # pixels: 4000000                          # 4 MP
+      # dpr — максимум значения dpr в запросе (1/2/3).
+      # dpr: 3
+      # frames — максимум кадров анимации (для GIF/WebP).
+      # frames: 150
+      # duration — максимум длительности анимации (мс).
+      # duration: 60000                          # 60 000 мс = 60 c
+      # concurrency — максимум одновременных операций обработки от одного
+      # клиента (int).
+      # concurrency: 10
+      # Примечание: параметры width/height/pixels/frames/dpr/duration/
+      # concurrency не заданы в этом файле — 0 => без ограничения.
+
+  # presets — именованные конфигурации обработки (ссылка из URL на пресет).
+  # Каждый пресет:
+  #   name (обязательный, ≤64 символов, без дефисов "-" в имени; допустимы
+  #         буквы, цифры, "_", ".", "@" для суффикса @dpr);
+  #   crop (строка; по умолчанию "" = кроп не используется):
+  #     ""        → resize (только изменение размера)
+  #     "center"  → crop   (центрированная обрезка)
+  #     "smart"   → smart-crop   (умная обрезка)
+  #     "face"    → face-crop    (обрезка по лицу)
+  #     "object"  → object-crop  (обрезка по объекту);
+  #   trim (bool; по умолчанию false) — независимый фильтр обрезки
+  #   однотонных полей. crop и trim — НЕЗАВИСИМЫЕ фильтры: сначала trim,
+  #   затем кроп/ресайз. Комбинация кодируется в transform код URL
+  #   (trim последним в коде):
+  #     crop=""       trim=false → resize
+  #     crop="center" trim=false → crop
+  #     crop="smart"  trim=false → smart-crop
+  #     crop="face"   trim=false → face-crop
+  #     crop="object" trim=false → object-crop
+  #     crop=""       trim=true  → trim
+  #     crop="center" trim=true  → ct
+  #     crop="smart"  trim=true  → sct
+  #     crop="face"   trim=true  → fct
+  #     crop="object" trim=true  → oct
+  #   size — "ШxВ" (одно из измерений может быть "x", напр. "x400"; "x" = оригинал);
+  #   output-format — jpeg | png | webp | gif | avif | heif | apng | jxl (JPEG XL);
+  #   quality — 0-100 (0 = default-quality из `processing`);
+  #   dpr — 0/1/2/3 (0 = не задан; при не заданном dpr берётся из @dpr-суффикса
+  #         имени — разрешение пресета "thumb@2" форсирует dpr=2);
+  #   frames — макс. число кадров анимации (0 = без ограничения);
+  #   duration — макс. длительность анимации в мс (0 = без ограничения);
+  #   loop — *bool: nil (не задано) = default-loop из processing;
+  #          true = бесконечный loop, false = однопроходная анимация;
+  #   watermark — имя ватермарки из секции watermarks (пусто = не задана;
+  #         приоритет выше path-policy и processing.default-watermark);
+  #   auto-orient — *bool: nil (не задано) = наследовать глобальный дефолт
+  #         processing.default-auto-orient; true/false — явно включить/выключить
+  #         автоматический поворот по EXIF Orientation;
+  #   rotate — фиксированный поворот по часовой стрелке:
+  #         "" (не задано) = наследовать processing.default-rotate;
+  #         "none" = ЯВНО отключить поворот (перекрыть глобальный);
+  #         "90" | "180" | "270" — угол поворота;
+  #   flip — отражение:
+  #         "" (не задано) = наследовать processing.default-flip;
+  #         "none" = ЯВНО отключить отражение (перекрыть глобальный);
+  #         "horizontal" — зеркало слева-направо;
+  #         "vertical" — отражение сверху-вниз.
+  #   Ориентация применяется ДО resize/crop/trim (порядок: auto-orient →
+  #   rotate → flip).
+  # Пресеты перечисляются ровно те, что доступны в URL (см. allowed-presets).
+  # Имена пресетов должны быть УНИКАЛЬНЫМИ.
+  presets:
+    # пресет "thumb" — маленький resize-центра.
+    - name: "thumb"
+      size: "200x200"
+      output-format: webp
+      quality: 85
+      dpr: 1
+
+    # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
+    # @2 в имени фиксирует dpr=2 при разрешении.
+    - name: "thumb@2"
+      size: "400x400"
+      output-format: webp
+      quality: 85
+      dpr: 2
+
+    # пресет "banner" — анимационный WebP-баннер 1200x400.
+    - name: "banner"
+      size: "1200x400"
+      output-format: webp
+      quality: 80
+      dpr: 1
+      frames: 0       # 0 = без ограничения кадров
+      duration: 0     # 0 = без ограничения длительности
+      loop: true      # зацикленная анимация (bool; nil = по default-loop)
+
+    # Примеры режимов crop (раскомментируйте при необходимости):
+    # - name: "avatar"          # центрированный кроп
+    #   crop: center
+    #   size: "100x100"
+    #   output-format: webp
+    #
+    # - name: "hero"            # умный кроп (smart-crop)
+    #   crop: smart
+    #   size: "800x600"
+    #   output-format: webp
+    #
+    # - name: "portrait"        # кроп по лицу + trim
+    #   crop: face
+    #   trim: true
+    #   size: "300x300"
+    #   output-format: jpeg
+    #
+    # - name: "product"         # кроп по объекту + trim
+    #   crop: object
+    #   trim: true
+    #   size: "500x500"
+    #   output-format: webp
+
+  # path-policies — политики по префиксам пути канонических URL.
+  # Применяются ТОЛЬКО к каноническим URL (не к пресетам) и лишь
+  # ужесточают глобальную политику (не расширяют права).
+  # Выбор: LONGEST prefix match (самый длинный совпадающий префикс побеждает).
+  #   "basket/products" нормализуется в "/basket/products";
+  #   "/" — fallback: применяется ко всем путям без более специфичного совпадения.
+  # Поля (все опциональны):
+  #   dpr   — строка-диапазон допустимых DPR ("0-1", "2-3"; пусто = без ограничения);
+  #   crop  — правило допустимых crop-режимов:
+  #       строка: имя режима — разрешён ТОЛЬКО этот режим:
+  #               "center" → c/ct, "smart" → sc/sct,
+  #               "face" → fc/fct, "object" → oc/oct;
+  #               "none" = любой crop-режим запрещён;
+  #       список: crop: [smart, face] — разрешены ТОЛЬКО перечисленные режимы.
+  #       Режим автоматически покрывает свой trim-вариант (ct/sct/fct/oct),
+  #       поэтому отдельно указывать их не нужно. Неизвестное значение —
+  #       ошибка старта. nil (не задано) = неважно.
+  #   trim  — *bool: nil (не задано) = неважно; true = trim обязан быть в URL
+  #           (t/ct/sct/fct/oct); false = trim запрещён;
+  #   watermark — имя ватермарки из секции watermarks: применяется к
+  #           каноническим запросам префикса пути (приоритет ниже пресета,
+  #           выше processing.default-watermark).
+  path-policies:
+    # "/" — fallback для всех путей. Здесь dpr/crop/trim не заданы
+    # (nil/отсутствуют) — политика НЕ накладывает ограничений на эти
+    # параметры для путей без более специфичного совпадения:
+    - path: "/"
+    # для префикса /thumbs разрешён только центрированный кроп (c/ct)
+    - path: "/thumbs"
+      dpr: "0-1"
+      crop: center
+    - path: "/banners"
+      dpr: "0-2"
+    - path: "/originals"
+      dpr: "0-1"
+      crop: none             # любой crop-режим запрещён
+      trim: false
+    - path: "/admin"
+      dpr: "0-1"
+
+    # Примеры правил с crop-режимами (раскомментируйте при необходимости):
+    # - path: "/avatars"
+    #   dpr: "0-1"
+    #   crop: center          # разрешён только центрированный кроп (c/ct)
+    # - path: "/news"
+    #   crop: smart           # разрешён только умный кроп (sc/sct)
+    # - path: "/portraits"
+    #   crop: face            # разрешён только кроп по лицу (fc/fct)
+    #   trim: true            # и trim обязателен (fct)
+    # - path: "/catalog"
+    #   crop: [smart, face]   # разрешены только эти два режима
+    # - path: "/gallery"
+    #   crop: none            # любой crop-режим запрещён
+
+########################################
+# watermarks — именованные декларации ватермарок.
+#
+# Ватермарка описывается ОДИН раз здесь и применяется по имени в пресетах
+# (policy.presets[].watermark), path-policies
+# (policy.path-policies[].watermark) или по умолчанию
+# (processing.default-watermark).
+#
+# Приоритет применения: пресет -> path-policy (longest prefix match) ->
+# processing.default-watermark. Нигде не задана -> не накладывается.
+#
+# Поля:
+#   name     (обязательный) — уникальное имя для ссылок;
+#   path     (обязательный) — путь к файлу изображения ватермарки на диске.
+#              Файл должен существовать на старте (иначе — fail-fast).
+#   position — позиция размещения (CSS background-position):
+#              top | bottom | left | right | center. Дефолт: center.
+#   repeat   — заполнение копиями (CSS background-repeat):
+#              no-repeat | repeat | repeat-x | repeat-y | round | space.
+#              Дефолт: no-repeat.
+#   size     — размер копии относительно холста (CSS background-size):
+#              contain | cover | "{width}px {height}px" (например "200px 50px").
+#              Дефолт: contain.
+#
+# Ограничения движков:
+#   - libvips (основной) реализует position/repeat/size полностью;
+#   - ImageMagick (fallback): точный размер только в px-форме; contain/cover
+#     рендерятся в натуральном размере файла; все repeat-режимы кроме
+#     no-repeat — как сплошная плитка;
+#   - анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips дают
+#     ошибку обработки (композит применился бы только к первому кадру).
+#
+# Секция опциональна: без неё ни одна ватермарка не применяется.
+########################################
+watermarks: []
+# Пример:
+# watermarks:
+#   - name: water-test
+#     path: "/etc/imager/watermarks/test.png"
+#     position: center        # top | bottom | left | right | center
+#     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space
+#     size: contain           # contain | cover | "200px 50px"

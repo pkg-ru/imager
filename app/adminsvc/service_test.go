@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // wantErr проверяет, что err является указанной ошибкой (в том числе
@@ -269,22 +271,99 @@ func testConfig() Config {
 	return Config{Workers: 2, QueueSize: 4, WaitTimeout: 5 * time.Second}
 }
 
-// newTestService собирает Service с fakes.
+// newTestService создаёт Service с fakes.
 func newTestService(t *testing.T, gen Generator, sources *memSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy) *Service {
 	t.Helper()
+	return newTestServiceMeta(t, gen, sources, results, presets, pol, nil)
+}
+
+// newTestServiceMeta создаёт Service с fakes и опциональным metadata.Store.
+func newTestServiceMeta(t *testing.T, gen Generator, sources *memSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy, meta metadata.Store) *Service {
+	t.Helper()
 	svc, err := New(Deps{
-		Gen:     gen,
-		Sources: sources,
-		Results: results,
-		Presets: presets,
-		Policy:  pol,
-		Logger:  fakeLogger{},
+		Gen:      gen,
+		Sources:  sources,
+		Results:  results,
+		Presets:  presets,
+		Policy:   pol,
+		Metadata: meta,
+		Logger:   fakeLogger{},
 	}, testConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return svc
 }
+
+// memMetadataStore — in-memory metadata.Store для тестов удаления.
+type memMetadataStore struct {
+	mu   sync.Mutex
+	data map[string]*filemeta.FileMetadata
+}
+
+func newMemMetadataStore() *memMetadataStore {
+	return &memMetadataStore{data: map[string]*filemeta.FileMetadata{}}
+}
+
+func (s *memMetadataStore) Load(_ context.Context, key string) (*filemeta.FileMetadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.data[key]
+	if !ok {
+		return nil, filemeta.ErrNotFound
+	}
+	return m.Clone(), nil
+}
+
+func (s *memMetadataStore) Exists(_ context.Context, key string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.data[key]
+	return ok, nil
+}
+
+func (s *memMetadataStore) Save(_ context.Context, key string, m *filemeta.FileMetadata) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = m.Clone()
+	return nil
+}
+
+func (s *memMetadataStore) Update(_ context.Context, key string, fn metadata.UpdateFn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.data[key]
+	if !ok {
+		m = filemeta.NewFileMetadata()
+	}
+	changed, err := fn(m)
+	if err != nil {
+		return err
+	}
+	if changed {
+		s.data[key] = m
+	}
+	return nil
+}
+
+func (s *memMetadataStore) Delete(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, key)
+	return nil
+}
+
+func (s *memMetadataStore) get(key string) *filemeta.FileMetadata {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.data[key]
+	if !ok {
+		return nil
+	}
+	return m.Clone()
+}
+
+var _ metadata.Store = (*memMetadataStore)(nil)
 
 // mustPreset создаёт пресет для тестов.
 func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Preset {
@@ -516,7 +595,10 @@ func TestDeleteAssets(t *testing.T) {
 	}
 }
 
-// TestDeleteBySourceNotLister — result-хранилище без List → 501.
+// TestDeleteBySourceNotLister — result-хранилище без List и без PrefixDeleter
+// больше НЕ возвращает 501: используется «слепое» удаление по ключам,
+// сформированным из политик/правил. С пустой политикой перечисление даёт
+// пустой список — удаление завершается без ошибки.
 func TestDeleteBySourceNotLister(t *testing.T) {
 	gen := newFakeGenerator()
 	src := newMemSourceStore()
@@ -524,8 +606,13 @@ func TestDeleteBySourceNotLister(t *testing.T) {
 	res := &nonListerResultStore{}
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
-	_, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
-	wantErr(t, err, ErrNotImplemented)
+	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
+	if err != nil {
+		t.Fatalf("DeleteBySource: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0 (empty policy enumerates no assets)", deleted)
+	}
 }
 
 // nonListerResultStore — ResultStore без поддержки List.
@@ -740,4 +827,148 @@ func TestConcurrentEnqueueStop(t *testing.T) {
 	svc.Stop()
 	close(stop)
 	wg.Wait()
+}
+
+// blindResultStore — ResultStore БЕЗ List и БЕЗ PrefixDeleter, но с
+// реальным хранением данных. Используется для проверки «слепого» удаления
+// по ключам, сформированным из политик/правил.
+type blindResultStore struct {
+	mu   sync.Mutex
+	data map[string][]byte
+}
+
+func newBlindResultStore() *blindResultStore {
+	return &blindResultStore{data: map[string][]byte{}}
+}
+
+func (r *blindResultStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.data[key.String()]
+	if !ok {
+		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
+	}
+	return object.ObjectMetadata{Key: key, Size: int64(len(d))}, nil
+}
+func (r *blindResultStore) Open(_ context.Context, _ object.ObjectKey) (object.Artifact, error) {
+	return nil, &object.NotFoundError{}
+}
+func (r *blindResultStore) ReadStream(_ context.Context, _ object.ObjectKey) (object.Stream, error) {
+	return nil, &object.NotFoundError{}
+}
+func (r *blindResultStore) Publish(_ context.Context, key object.ObjectKey, src io.Reader, _ object.PublishOptions) error {
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[key.String()] = data
+	return nil
+}
+func (r *blindResultStore) Delete(_ context.Context, key object.ObjectKey) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.data, key.String())
+	return nil
+}
+func (r *blindResultStore) Stats(_ context.Context) (object.StoreStats, error) {
+	return object.StoreStats{}, nil
+}
+
+var _ storage.ResultStore = (*blindResultStore)(nil)
+
+// TestDeleteBySourceBlindKeys — «слепое» удаление по ключам, сформированным
+// из политик/правил, для хранилища без List и без PrefixDeleter.
+func TestDeleteBySourceBlindKeys(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newBlindResultStore()
+	// Публикуем ассеты, которые должны быть сформированы политикой/пресетами.
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	// Посторонний ассет — не должен удаляться (вне сформированных ключей).
+	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
+
+	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
+	if err != nil {
+		t.Fatalf("DeleteBySource: %v", err)
+	}
+	if deleted == 0 {
+		t.Error("expected at least one asset deleted via blind keys")
+	}
+	// Посторонний ассет остался.
+	if _, err := res.Lookup(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp")); err != nil {
+		t.Errorf("unrelated asset should remain: %v", err)
+	}
+}
+
+// TestDeleteBySourceRemovesMeta — DeleteBySource удаляет sidecar-метаданные
+// родителя (.meta.json).
+func TestDeleteBySourceRemovesMeta(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newMemResultStore()
+	meta := newMemMetadataStore()
+	// Sidecar родителя: ключ = каталог ассета + имя файла.
+	meta.Save(context.Background(), "thumbs/photo-jpg/x", filemeta.NewFileMetadata())
+	svc := newTestServiceMeta(t, gen, src, res, mustPresetSet(t), &policy.Policy{}, meta)
+
+	if _, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg"); err != nil {
+		t.Fatalf("DeleteBySource: %v", err)
+	}
+	if m := meta.get("thumbs/photo-jpg/x"); m != nil {
+		t.Error("metadata sidecar should be removed after DeleteBySource")
+	}
+}
+
+// TestDeleteAssetsClearsLargestAIAsset — DeleteAssets очищает largest_ai_asset,
+// если удаляется именно этот ассет, но НЕ удаляет сам .meta.json.
+func TestDeleteAssetsClearsLargestAIAsset(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newMemResultStore()
+	meta := newMemMetadataStore()
+	// Sidecar с зафиксированным largest_ai_asset.
+	url := "thumbs/photo-jpg/thumb.webp"
+	m := filemeta.NewFileMetadata()
+	m.LargestAIAsset = &filemeta.AIAssetInfo{Width: 2000, Height: 2000, Format: "webp", Key: url}
+	meta.Save(context.Background(), "thumbs/photo-jpg/x", m)
+	svc := newTestServiceMeta(t, gen, src, res, mustPresetSet(t), &policy.Policy{}, meta)
+
+	if _, err := svc.DeleteAssets(context.Background(), []string{url}); err != nil {
+		t.Fatalf("DeleteAssets: %v", err)
+	}
+	// .meta.json остался, но largest_ai_asset очищен.
+	got := meta.get("thumbs/photo-jpg/x")
+	if got == nil {
+		t.Fatal("metadata sidecar should remain after DeleteAssets")
+	}
+	if got.LargestAIAsset != nil {
+		t.Errorf("largest_ai_asset should be cleared, got %+v", got.LargestAIAsset)
+	}
+}
+
+// TestDeleteAssetsKeepsLargestAIAssetOther — DeleteAssets НЕ трогает
+// largest_ai_asset, если удаляется другой ассет.
+func TestDeleteAssetsKeepsLargestAIAssetOther(t *testing.T) {
+	gen := newFakeGenerator()
+	src := newMemSourceStore()
+	res := newMemResultStore()
+	meta := newMemMetadataStore()
+	url := "thumbs/photo-jpg/thumb.webp"
+	m := filemeta.NewFileMetadata()
+	m.LargestAIAsset = &filemeta.AIAssetInfo{Width: 2000, Height: 2000, Format: "webp", Key: url}
+	meta.Save(context.Background(), "thumbs/photo-jpg/x", m)
+	svc := newTestServiceMeta(t, gen, src, res, mustPresetSet(t), &policy.Policy{}, meta)
+
+	// Удаляем другой ассет.
+	if _, err := svc.DeleteAssets(context.Background(), []string{"thumbs/photo-jpg/other.webp"}); err != nil {
+		t.Fatalf("DeleteAssets: %v", err)
+	}
+	got := meta.get("thumbs/photo-jpg/x")
+	if got == nil || got.LargestAIAsset == nil {
+		t.Fatal("largest_ai_asset should remain when deleting a different asset")
+	}
 }
