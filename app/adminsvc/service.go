@@ -30,6 +30,8 @@ import (
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/admin"
+	"github.com/pkg-ru/imager/ports/generation"
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/storage"
 )
@@ -39,9 +41,7 @@ type Logger = observability.Logger
 
 // Generator — узкий порт генерации ассета, совместимый с
 // generatev2.Service.Generate.
-type Generator interface {
-	Generate(ctx context.Context, req *asset.Request) (*generatev2.Result, error)
-}
+type Generator = generation.Generator
 
 // Config — конфигурация admin-сервиса (workers/queue/wait-timeout).
 type Config struct {
@@ -102,23 +102,11 @@ type job struct {
 	err    error
 }
 
-// FailedAsset — описание неудавшегося ассета.
-type FailedAsset struct {
-	URL     string `json:"url"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
+// FailedAsset — описание неудавшегося ассета (порт ports/admin).
+type FailedAsset = admin.FailedAsset
 
-// JobResult — результат выполнения задачи.
-type JobResult struct {
-	JobID     string        `json:"job_id"`
-	Status    string        `json:"status"` // "accepted" | "completed"
-	Queued    int           `json:"queued"`
-	Generated int           `json:"generated,omitempty"`
-	Skipped   int           `json:"skipped,omitempty"`
-	Failed    []FailedAsset `json:"failed,omitempty"`
-	Deleted   int           `json:"deleted,omitempty"`
-}
+// JobResult — результат выполнения задачи (порт ports/admin).
+type JobResult = admin.JobResult
 
 // Service — точка входа административных операций.
 type Service struct {
@@ -285,11 +273,12 @@ func (s *Service) enqueue(j *job) error {
 	}
 }
 
-// ErrQueueFull — очередь задач переполнена (→ HTTP 503).
-var ErrQueueFull = errors.New("adminsvc: queue is full")
-
-// ErrStopped — сервис остановлен (Stop вызван), новые задачи не принимаются.
-var ErrStopped = errors.New("adminsvc: service is stopped")
+// Sentinel-ошибки определены в порту ports/admin; здесь — алиасы для
+// обратной совместимости (→ HTTP-статусы маппит транспорт).
+var (
+	ErrQueueFull = admin.ErrQueueFull
+	ErrStopped   = admin.ErrStopped
+)
 
 // EnqueueGenerate ставит задачу генерации ассетов.
 //
@@ -379,15 +368,15 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 	}
 }
 
-// ErrInvalidRequest — заданы оба/ни одного из source/assets, либо невалидный
-// asset URL (→ HTTP 400).
-var ErrInvalidRequest = errors.New("adminsvc: invalid request: exactly one of source or assets is required")
-
-// ErrSourceNotFound — исходник не существует (→ HTTP 404).
-var ErrSourceNotFound = errors.New("adminsvc: source not found")
-
-// ErrWaitTimeout — превышен таймаут режима wait=true.
-var ErrWaitTimeout = errors.New("adminsvc: wait timeout")
+var (
+	// ErrInvalidRequest — заданы оба/ни одного из source/assets, либо
+	// невалидный asset URL (→ HTTP 400).
+	ErrInvalidRequest = admin.ErrInvalidRequest
+	// ErrSourceNotFound — исходник не существует (→ HTTP 404).
+	ErrSourceNotFound = admin.ErrSourceNotFound
+	// ErrWaitTimeout — превышен таймаут режима wait=true.
+	ErrWaitTimeout = admin.ErrWaitTimeout
+)
 
 // runGenerate выполняет генерацию всех ассетов задачи.
 func (s *Service) runGenerate(ctx context.Context, j *job) (*JobResult, error) {
@@ -518,10 +507,10 @@ func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error
 }
 
 // ErrNotImplemented — result-хранилище не поддерживает ни PrefixDeleter, ни
-// List (→ HTTP 501). Сохранён для обратной совместимости: в DeleteBySource
+// List (→ HTTP 501). Алиас порта ports/admin; в DeleteBySource
 // для таких хранилищ теперь используется «слепое» удаление по ключам,
 // поэтому эта ошибка фактически не возвращается.
-var ErrNotImplemented = errors.New("adminsvc: result store does not support listing or prefix deletion")
+var ErrNotImplemented = admin.ErrNotImplemented
 
 // DeleteAssets удаляет перечисленные ассеты (канонические URL). Идемпотентно.
 //

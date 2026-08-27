@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/ports/bounded"
 	"github.com/pkg-ru/imager/ports/processor"
 )
 
@@ -228,7 +229,7 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	env = envWithPolicyDir(p.baseEnv, policyDir)
 
 	// Streaming stdout в out через bounded writer.
-	bw := shared.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
+	bw := bounded.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
 
 	// stderr с ограничением размера.
 	stderr := &limitedBuffer{max: p.stderrN}

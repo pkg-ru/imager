@@ -25,6 +25,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/storage/fs"
 	"github.com/pkg-ru/imager/adapters/videoframe/ffmpeg"
 	"github.com/pkg-ru/imager/bootstrap"
+	"github.com/pkg-ru/imager/composition"
 	"github.com/pkg-ru/imager/observability"
 )
 
@@ -122,7 +123,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	}
 
 	// 1) Единый typed runtime config из YAML (fail-fast).
-	rc, err := httpapi.LoadConfigDir(cfgDir)
+	rc, err := composition.LoadConfigDir(cfgDir)
 	if err != nil {
 		return nil, fmt.Errorf("imager: load config: %w", err)
 	}
@@ -155,7 +156,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	// Видео-экстрактор кадра (ffmpeg/ffprobe из PATH). Если бинарники
 	// недоступны, извлечение кадра вернёт понятную ошибку на запросе.
 	videoExt := ffmpeg.NewDefault()
-	app, err := httpapi.Build(context.Background(), httpapi.AppOptions{
+	app, err := composition.Build(context.Background(), composition.AppOptions{
 		Config:          rc.Pipeline,
 		HTTP:            rc.HTTP,
 		SourceDir:       rc.SourceDir,

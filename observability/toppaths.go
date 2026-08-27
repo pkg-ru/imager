@@ -100,8 +100,3 @@ func (t *TopPaths) Total() uint64 {
 	}
 	return t.total.Load()
 }
-
-// Snapshot возвращает топ-N путей (аналог Top) для публикации в expvar.
-func (t *TopPaths) Snapshot(n int) []BadPathStat {
-	return t.Top(n)
-}

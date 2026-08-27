@@ -27,7 +27,7 @@ func TestDoDedupSameKey(t *testing.T) {
 	var wg sync.WaitGroup
 	vals := make([]any, n)
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -36,7 +36,7 @@ func TestDoDedupSameKey(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if errs[i] != nil {
 			t.Fatalf("Do[%d]: %v", i, errs[i])
 		}
@@ -244,36 +244,55 @@ func TestDoPanicDoesNotBlockKey(t *testing.T) {
 
 // TestDoPanicWaitersGetError проверяет C4: ожидающие вызовы получают ошибку
 // паники, а не зависают навсегда.
+//
+// Детерминированность: между стартом горутины-ожидателя и её входом в Do нет
+// синхронизации, поэтому ожидатель может войти в Do уже ПОСЛЕ того, как
+// владелец завершился и удалил ключ из map. В этом случае ожидатель корректно
+// выполняет собственный fn и получает nil — это валидное поведение, но не то,
+// что проверяет данный тест. Поэтому сценарий повторяется до первой попытки,
+// в которой ожидатель гарантированно застал владельца inflight и получил
+// ошибку паники.
 func TestDoPanicWaitersGetError(t *testing.T) {
-	g := New(Options{})
-	key := object.ObjectKey("k")
+	const attempts = 100
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	go func() {
-		_, _ = g.Do(context.Background(), key, func() (any, error) {
-			close(started)
-			<-release
-			panic("boom")
-		})
-	}()
-	<-started
+	for i := 0; i < attempts; i++ {
+		g := New(Options{})
+		key := object.ObjectKey("k")
 
-	// Ожидающий вызов должен получить ошибку после паники.
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := g.Do(context.Background(), key, func() (any, error) { return "x", nil })
-		errCh <- err
-	}()
-	close(release)
-	select {
-	case err := <-errCh:
-		if err == nil {
-			t.Fatal("expected error from panic")
+		started := make(chan struct{})
+		release := make(chan struct{})
+		ownerDone := make(chan struct{})
+		go func() {
+			defer close(ownerDone)
+			_, _ = g.Do(context.Background(), key, func() (any, error) {
+				close(started)
+				<-release
+				panic("boom")
+			})
+		}()
+		<-started
+
+		// Ожидающий вызов должен получить ошибку после паники.
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := g.Do(context.Background(), key, func() (any, error) { return "x", nil })
+			errCh <- err
+		}()
+		close(release)
+
+		var err error
+		select {
+		case err = <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("waiter did not return after panic")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("waiter did not return after panic")
+		<-ownerDone
+
+		if err != nil && strings.Contains(err.Error(), "panic") {
+			return // ожидатель получил ошибку паники — контракт выполнен
+		}
 	}
+	t.Fatalf("waiter never observed panic error in %d attempts", attempts)
 }
 
 // TestDoWaitTimeout проверяет, что ожидание завершения владельца ограничено

@@ -121,31 +121,6 @@ func TestParsePreset(t *testing.T) {
 	}
 }
 
-func TestParsePresetWithDPR(t *testing.T) {
-	// URL "thumb@2.webp" парсится как имя пресета "thumb@2" (с @dpr-суффиксом
-	// имени), dpr URL = 1 (default). Имя целиком разрешается в Resolve.
-	req, err := Parse("/photos/photo-1-jpg/thumb@2.webp")
-	if err != nil {
-		t.Fatalf("Parse() error: %v", err)
-	}
-	if !req.IsPreset() {
-		t.Fatal("expected preset request")
-	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Errorf("PresetName = %q, want thumb@2", req.PresetName())
-	}
-	if req.DPR().Int() != DefaultDPR {
-		t.Errorf("DPR = %d, want %d (default, dpr in preset name)", req.DPR().Int(), DefaultDPR)
-	}
-	got, err := req.Build()
-	if err != nil {
-		t.Fatalf("Build() error: %v", err)
-	}
-	if want := "photos/photo-1-jpg/thumb@2.webp"; got != want {
-		t.Errorf("Build() = %q, want %q", got, want)
-	}
-}
-
 // TestParsePresetNameWithDPRSuffix проверяет, что @dpr-суффикс имени пресета
 // распознаётся целиком как часть имени, а dpr URL = 1 (default).
 func TestParsePresetNameWithDPRSuffix(t *testing.T) {
@@ -483,7 +458,7 @@ func TestParseDimensionOverflow(t *testing.T) {
 	}
 }
 
-func TestParseDPRRange(t *testing.T) {
+func TestParseDPRSuffix(t *testing.T) {
 	// Отсутствие суффикса означает DPR=1.
 	req, err := Parse("/photos/photo-1-jpg/c-120x80.webp")
 	if err != nil {

@@ -1,4 +1,16 @@
-package httpapi
+// Package composition — composition root приложения imager.
+//
+// Здесь сосредоточена вся сборка/DI: загрузка YAML-конфигурации (три слоя),
+// typed runtime-config, фабрики storage-адаптеров (FS/S3/SFTP/FTP/FTPS/HTTP),
+// создание app-сервисов (generatev2, adminsvc), координатора (singleflight),
+// пул буферов и sidecar-метаданных. Транспортный адаптер (adapters/httpapi)
+// получает готовые зависимости через конструкторы и зависит только от
+// ports/domain — он ничего не собирает сам.
+//
+// Пакет может импортировать все слои (adapters, app, config, coordination,
+// observability); никто не импортирует его, кроме публичного фасада
+// package imager и bootstrap.
+package composition
 
 import (
 	"context"
@@ -11,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"github.com/pkg-ru/imager/adapters/storage/fs"
 	"github.com/pkg-ru/imager/adapters/storage/ftp"
 	httpadapter "github.com/pkg-ru/imager/adapters/storage/http"
@@ -78,25 +91,11 @@ type RemoteStorageConfig struct {
 	SpoolMaxBytes int64
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	Pool *remote.BufferPool
-	// DialTimeout — таймаут соединения для FTP/SFTP/FTPS, HTTP и S3.
-	DialTimeout time.Duration
-	// ReadTimeout — таймаут операции для SFTP/FTP/FTPS, HTTP и S3
-	// (0 = дефолт).
-	ReadTimeout time.Duration
-	// MaxAttempts — максимальное число попыток операции для
-	// SFTP/FTP/FTPS, HTTP и S3 (0 = дефолт).
-	MaxAttempts int
-	// MaxIdleConns — максимальное число idle-соединений в пуле
-	// (SFTP/FTP/FTPS, HTTP, S3; 0 = не держать соединение).
-	MaxIdleConns int
-	// MaxConns — максимальное число одновременных соединений в пуле
-	// (SFTP/FTP/FTPS; 0 = 2).
-	MaxConns int
-	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
-	// (HTTP, S3).
-	MaxIdleConnsPerHost int
-	// IdleConnTimeout — таймаут idle-соединений (SFTP/FTP/FTPS, HTTP, S3).
-	IdleConnTimeout time.Duration
+	// Conn — общие параметры соединения для FTP/SFTP/FTPS, HTTP и S3:
+	// DialTimeout, ReadTimeout, MaxAttempts, MaxIdleConns, MaxConns,
+	// MaxIdleConnsPerHost, IdleConnTimeout. Дефолты задаёт remote.Default*
+	// (единый источник; ранее дублировались здесь и в http-адаптере).
+	Conn remote.ConnOptions
 	// MetadataTTL — TTL кэша метаданных (S3; 0 = кэш отключён).
 	MetadataTTL time.Duration
 }
@@ -131,47 +130,32 @@ func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Sou
 			SpoolDir:           cfg.SpoolDir,
 			SpoolMaxBytes:      cfg.SpoolMaxBytes,
 			Pool:               cfg.Pool,
-			DialTimeout:        cfg.DialTimeout,
-			ReadTimeout:        cfg.ReadTimeout,
-			MaxAttempts:        cfg.MaxAttempts,
-			MaxIdleConns:       cfg.MaxIdleConns,
-			MaxConns:           cfg.MaxConns,
-			IdleConnTimeout:    cfg.IdleConnTimeout,
+			ConnOptions:        cfg.Conn,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
 	case StorageFTP, StorageFTPS:
 		return ftp.NewSourceStore(ftp.Options{
-			Addr:            cfg.Addr,
-			User:            cfg.User,
-			Password:        cfg.Password,
-			TLS:             cfg.Kind == StorageFTPS,
-			TLSVerify:       cfg.TLSVerify,
-			Root:            cfg.Root,
-			SpoolDir:        cfg.SpoolDir,
-			SpoolMaxBytes:   cfg.SpoolMaxBytes,
-			Pool:            cfg.Pool,
-			DialTimeout:     cfg.DialTimeout,
-			ReadTimeout:     cfg.ReadTimeout,
-			MaxAttempts:     cfg.MaxAttempts,
-			MaxIdleConns:    cfg.MaxIdleConns,
-			MaxConns:        cfg.MaxConns,
-			IdleConnTimeout: cfg.IdleConnTimeout,
+			Addr:          cfg.Addr,
+			User:          cfg.User,
+			Password:      cfg.Password,
+			TLS:           cfg.Kind == StorageFTPS,
+			TLSVerify:     cfg.TLSVerify,
+			Root:          cfg.Root,
+			SpoolDir:      cfg.SpoolDir,
+			SpoolMaxBytes: cfg.SpoolMaxBytes,
+			Pool:          cfg.Pool,
+			ConnOptions:   cfg.Conn,
 		})
 	case StorageHTTP:
 		return httpadapter.NewSourceStore(httpadapter.Options{
-			BaseURL:             cfg.BaseURL,
-			SpoolDir:            cfg.SpoolDir,
-			SpoolMaxBytes:       cfg.SpoolMaxBytes,
-			Pool:                cfg.Pool,
-			DialTimeout:         cfg.DialTimeout,
-			ReadTimeout:         cfg.ReadTimeout,
-			MaxAttempts:         cfg.MaxAttempts,
-			MaxIdleConns:        cfg.MaxIdleConns,
-			MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
-			IdleConnTimeout:     cfg.IdleConnTimeout,
+			BaseURL:       cfg.BaseURL,
+			SpoolDir:      cfg.SpoolDir,
+			SpoolMaxBytes: cfg.SpoolMaxBytes,
+			Pool:          cfg.Pool,
+			ConnOptions:   cfg.Conn,
 		})
 	default:
-		return nil, fmt.Errorf("httpapi: unsupported source storage kind %q", cfg.Kind)
+		return nil, fmt.Errorf("composition: unsupported source storage kind %q", cfg.Kind)
 	}
 }
 
@@ -206,57 +190,34 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolDir:           cfg.SpoolDir,
 			SpoolMaxBytes:      cfg.SpoolMaxBytes,
 			Pool:               cfg.Pool,
-			DialTimeout:        cfg.DialTimeout,
-			ReadTimeout:        cfg.ReadTimeout,
-			MaxAttempts:        cfg.MaxAttempts,
-			MaxIdleConns:       cfg.MaxIdleConns,
-			MaxConns:           cfg.MaxConns,
-			IdleConnTimeout:    cfg.IdleConnTimeout,
+			ConnOptions:        cfg.Conn,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
 		})
 	case StorageFTP, StorageFTPS:
 		return ftp.NewResultStore(ftp.Options{
-			Addr:            cfg.Addr,
-			User:            cfg.User,
-			Password:        cfg.Password,
-			TLS:             cfg.Kind == StorageFTPS,
-			TLSVerify:       cfg.TLSVerify,
-			Root:            cfg.Root,
-			SpoolDir:        cfg.SpoolDir,
-			SpoolMaxBytes:   cfg.SpoolMaxBytes,
-			Pool:            cfg.Pool,
-			DialTimeout:     cfg.DialTimeout,
-			ReadTimeout:     cfg.ReadTimeout,
-			MaxAttempts:     cfg.MaxAttempts,
-			MaxIdleConns:    cfg.MaxIdleConns,
-			MaxConns:        cfg.MaxConns,
-			IdleConnTimeout: cfg.IdleConnTimeout,
+			Addr:          cfg.Addr,
+			User:          cfg.User,
+			Password:      cfg.Password,
+			TLS:           cfg.Kind == StorageFTPS,
+			TLSVerify:     cfg.TLSVerify,
+			Root:          cfg.Root,
+			SpoolDir:      cfg.SpoolDir,
+			SpoolMaxBytes: cfg.SpoolMaxBytes,
+			Pool:          cfg.Pool,
+			ConnOptions:   cfg.Conn,
 		})
 	case StorageHTTP:
-		return nil, fmt.Errorf("httpapi: http storage is source-only and cannot be used as result")
+		return nil, fmt.Errorf("composition: http storage is source-only and cannot be used as result")
 	default:
-		return nil, fmt.Errorf("httpapi: unsupported result storage kind %q", cfg.Kind)
+		return nil, fmt.Errorf("composition: unsupported result storage kind %q", cfg.Kind)
 	}
 }
-
-// s3Defaults — разумные умолчания для S3-клиента.
-const (
-	s3DefaultDialTimeout      = 30 * time.Second
-	s3DefaultReadTimeout      = 60 * time.Second
-	s3DefaultMaxAttempts      = 3
-	s3DefaultMaxIdleConns     = 100
-	s3DefaultMaxIdleConnsHost = 10
-	s3DefaultIdleConnTimeout  = 90 * time.Second
-	s3DefaultKeepAlive        = 30 * time.Second
-	s3DefaultTLSHandshake     = 10 * time.Second
-	s3DefaultExpectContinue   = 1 * time.Second
-	s3DefaultMaxConnsPerHost  = 2048
-)
 
 // buildS3Client создаёт S3-клиент с явной retry-политикой, таймаутами и
 // пулом соединений. Без этих настроек SDK использует дефолты, которые не
 // гарантируют bounded connect/read таймауты и достаточный пул для
-// параллельных ReadStream/Open.
+// параллельных ReadStream/Open. Дефолты берутся из remote.Default*
+// (единый источник с HTTP-адаптером; прежде константы дублировались здесь).
 func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client, error) {
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if cfg.Region != "" {
@@ -268,72 +229,49 @@ func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client,
 		))
 	}
 
-	dialTimeout := cfg.DialTimeout
-	if dialTimeout <= 0 {
-		dialTimeout = s3DefaultDialTimeout
-	}
-	readTimeout := cfg.ReadTimeout
-	if readTimeout <= 0 {
-		readTimeout = s3DefaultReadTimeout
-	}
-	maxAttempts := cfg.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = s3DefaultMaxAttempts
-	}
-	maxIdleConns := cfg.MaxIdleConns
-	if maxIdleConns <= 0 {
-		maxIdleConns = s3DefaultMaxIdleConns
-	}
-	maxIdleConnsPerHost := cfg.MaxIdleConnsPerHost
-	if maxIdleConnsPerHost <= 0 {
-		maxIdleConnsPerHost = s3DefaultMaxIdleConnsHost
-	}
-	idleConnTimeout := cfg.IdleConnTimeout
-	if idleConnTimeout <= 0 {
-		idleConnTimeout = s3DefaultIdleConnTimeout
-	}
+	conn := cfg.Conn
 
 	// Явный HTTP-клиент с пулом соединений, keep-alive и bounded
 	// connect/read таймаутами.
 	dialer := &net.Dialer{
-		Timeout:   dialTimeout,
-		KeepAlive: s3DefaultKeepAlive,
+		Timeout:   conn.DialTimeoutOrDefault(),
+		KeepAlive: remote.DefaultKeepAlive,
 		DualStack: true,
 	}
 	transport := &stdhttp.Transport{
 		Proxy:                 stdhttp.ProxyFromEnvironment,
 		DialContext:           dialer.DialContext,
-		MaxIdleConns:          maxIdleConns,
-		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-		MaxConnsPerHost:       s3DefaultMaxConnsPerHost,
-		IdleConnTimeout:       idleConnTimeout,
-		TLSHandshakeTimeout:   s3DefaultTLSHandshake,
-		ExpectContinueTimeout: s3DefaultExpectContinue,
+		MaxIdleConns:          conn.MaxIdleConnsOrDefault(),
+		MaxIdleConnsPerHost:   conn.MaxIdleConnsPerHostOrDefault(),
+		MaxConnsPerHost:       remote.DefaultMaxConnsPerHost,
+		IdleConnTimeout:       conn.IdleConnTimeoutOrDefault(),
+		TLSHandshakeTimeout:   remote.DefaultTLSHandshake,
+		ExpectContinueTimeout: remote.DefaultExpectContinue,
 		ForceAttemptHTTP2:     true,
 	}
 	httpClient := &stdhttp.Client{
 		Transport: transport,
-		Timeout:   readTimeout,
+		Timeout:   conn.ReadTimeoutOrDefault(),
 	}
 
 	// Retry-политика: standard mode с явным MaxAttempts и bounded backoff.
 	retryer := func() aws.Retryer {
 		return retry.NewStandard(func(o *retry.StandardOptions) {
-			o.MaxAttempts = maxAttempts
+			o.MaxAttempts = conn.MaxAttemptsOrDefault()
 			o.MaxBackoff = 20 * time.Second
 		})
 	}
 
 	opts = append(opts,
 		awsconfig.WithRetryMode(aws.RetryModeStandard),
-		awsconfig.WithRetryMaxAttempts(maxAttempts),
+		awsconfig.WithRetryMaxAttempts(conn.MaxAttemptsOrDefault()),
 		awsconfig.WithHTTPClient(httpClient),
 		awsconfig.WithRetryer(retryer),
 	)
 
 	awscfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: s3 config: %w", err)
+		return nil, fmt.Errorf("composition: s3 config: %w", err)
 	}
 	if cfg.Endpoint != "" {
 		return awss3.NewFromConfig(awscfg, func(o *awss3.Options) {
@@ -374,11 +312,11 @@ func ensureFSStores(ctx context.Context, sourceDir, resultDir string, srcCfg, re
 			dir = sourceDir
 		}
 		if dir == "" {
-			return nil, nil, fmt.Errorf("httpapi: source dir is empty")
+			return nil, nil, fmt.Errorf("composition: source dir is empty")
 		}
 		s, err := fs.NewSourceStore(dir)
 		if err != nil {
-			return nil, nil, fmt.Errorf("httpapi: source store: %w", err)
+			return nil, nil, fmt.Errorf("composition: source store: %w", err)
 		}
 		sources = s
 	}
@@ -388,11 +326,11 @@ func ensureFSStores(ctx context.Context, sourceDir, resultDir string, srcCfg, re
 			dir = resultDir
 		}
 		if dir == "" {
-			return nil, nil, fmt.Errorf("httpapi: result dir is empty")
+			return nil, nil, fmt.Errorf("composition: result dir is empty")
 		}
 		r, err := fs.NewResultStore(dir)
 		if err != nil {
-			return nil, nil, fmt.Errorf("httpapi: result store: %w", err)
+			return nil, nil, fmt.Errorf("composition: result store: %w", err)
 		}
 		results = r
 	}

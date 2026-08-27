@@ -11,17 +11,9 @@ import (
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/internal/testutil"
 	"github.com/pkg-ru/imager/ports/processor"
 )
-
-// metaTestLogger — тестовый логгер, реализущий полный Logger
-// интерфейс (в отличие от fakeLogger в fakes_test.go — только Debugf).
-type metaTestLogger struct{}
-
-func (metaTestLogger) Debugf(string, ...any) {}
-func (metaTestLogger) Infof(string, ...any)  {}
-func (metaTestLogger) Warnf(string, ...any)  {}
-func (metaTestLogger) Errorf(string, ...any) {}
 
 // newMetaService строит Service для интеграционных тестов метаданных.
 // Используется прямое обращение к полям (мимо validate()).
@@ -33,7 +25,7 @@ func newMetaService(metaS *fakeMetadataStore, det *fakeDetector) *Service {
 			Metadata:    metaS,
 			Detector:    det,
 		},
-		log: metaTestLogger{},
+		log: testutil.NopLogger{},
 	}
 }
 
@@ -218,7 +210,7 @@ func TestGenerateConcurrentDetectionsOneCallPerAsset(t *testing.T) {
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 100, srcH: 100, outW: 100, outH: 100}
 	env := metaFullEnv(t, proc, metaS, det)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	const n = 16
 	var wg sync.WaitGroup
@@ -256,7 +248,7 @@ func TestGenerateResizeNoDetection(t *testing.T) {
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 100, srcH: 100, outW: 100, outH: 100}
 	env := metaFullEnv(t, proc, metaS, det)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	// Пустой transform = resize (buildPlan → OpResize).
 	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
@@ -296,7 +288,7 @@ func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	// ИИ-кандидат: 2000x2000 из родителя 1000x1000 (площадь >, пропорции =).
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 1000, srcH: 1000, outW: 2000, outH: 2000}
 	env := metaFullEnv(t, proc, metaS, det)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
 	res, err := env.svc.Generate(context.Background(), req)
@@ -343,7 +335,7 @@ func TestGenerateNonAIAssetNoLargestAIAsset(t *testing.T) {
 	det := newFakeDetector()
 	proc := &fakeMetaProcessorSized{fakeMetaProcessor: fakeMetaProcessor{}, srcW: 1000, srcH: 1000, outW: 800, outH: 800}
 	env := metaFullEnv(t, proc, metaS, det)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
 	res, err := env.svc.Generate(context.Background(), req)

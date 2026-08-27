@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeRunner — тестовый runner, не требующий установленного ImageMagick.

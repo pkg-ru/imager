@@ -1,9 +1,11 @@
-package httpapi
+package composition
 
 import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pkg-ru/imager/adapters/httpapi"
 )
 
 // TestParseRuntimeConfigDetection проверяет декодирование секции detection
@@ -526,14 +528,14 @@ policy:
 	if rc.Admin.Enabled {
 		t.Error("Admin.Enabled = true, want false (disabled by default)")
 	}
-	if rc.Admin.Workers != DefaultAdminWorkers {
-		t.Errorf("Admin.Workers = %d, want default %d", rc.Admin.Workers, DefaultAdminWorkers)
+	if rc.Admin.Workers != httpapi.DefaultAdminWorkers {
+		t.Errorf("Admin.Workers = %d, want default %d", rc.Admin.Workers, httpapi.DefaultAdminWorkers)
 	}
-	if rc.Admin.QueueSize != DefaultAdminQueueSize {
-		t.Errorf("Admin.QueueSize = %d, want default %d", rc.Admin.QueueSize, DefaultAdminQueueSize)
+	if rc.Admin.QueueSize != httpapi.DefaultAdminQueueSize {
+		t.Errorf("Admin.QueueSize = %d, want default %d", rc.Admin.QueueSize, httpapi.DefaultAdminQueueSize)
 	}
-	if rc.Admin.WaitTimeout != DefaultAdminWaitTimeout {
-		t.Errorf("Admin.WaitTimeout = %v, want default %v", rc.Admin.WaitTimeout, DefaultAdminWaitTimeout)
+	if rc.Admin.WaitTimeout != httpapi.DefaultAdminWaitTimeout {
+		t.Errorf("Admin.WaitTimeout = %v, want default %v", rc.Admin.WaitTimeout, httpapi.DefaultAdminWaitTimeout)
 	}
 }
 

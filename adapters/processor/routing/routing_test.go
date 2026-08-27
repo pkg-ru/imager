@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // recProcessor — записывающий процессор: помечает имя движка и копирует

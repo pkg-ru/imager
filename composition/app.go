@@ -1,10 +1,11 @@
-package httpapi
+package composition
 
 import (
 	"context"
 	"fmt"
 	"net/http"
 
+	"github.com/pkg-ru/imager/adapters/httpapi"
 	"github.com/pkg-ru/imager/adapters/storage/fs"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/app/adminsvc"
@@ -23,7 +24,7 @@ type AppOptions struct {
 	// Config — typed конфигурация конвейера (policy/processing).
 	Config *config.Config
 	// HTTP — конфигурация HTTP-адаптера.
-	HTTP Config
+	HTTP httpapi.Config
 
 	// SourceDir — каталог исходников (используется при FS fallback).
 	SourceDir string
@@ -68,7 +69,7 @@ type AppOptions struct {
 
 // App — собранный pipeline.
 type App struct {
-	Handler *Handler
+	Handler *httpapi.Handler
 	Service *generatev2.Service
 	Sources storage.SourceStore
 	Results storage.ResultStore
@@ -86,11 +87,11 @@ type App struct {
 // Build собирает новый pipeline. Fail-fast на invalid config.
 func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	if opt.Config == nil {
-		return nil, fmt.Errorf("httpapi: build: nil config")
+		return nil, fmt.Errorf("composition: build: nil config")
 	}
 	compiled, err := opt.Config.Compile()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: build: compile config: %w", err)
+		return nil, fmt.Errorf("composition: build: compile config: %w", err)
 	}
 
 	// Общий бюджет памяти процесса для spillable-буферов (source+result).
@@ -107,7 +108,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	if sources == nil || results == nil {
 		s, r, err := ensureFSStores(ctx, opt.SourceDir, opt.ResultDir, opt.SourceStorage, opt.ResultStorage)
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: build: %w", err)
+			return nil, fmt.Errorf("composition: build: %w", err)
 		}
 		if sources == nil {
 			sources = s
@@ -120,7 +121,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	// Процессор.
 	proc := opt.Processor
 	if proc == nil {
-		return nil, fmt.Errorf("httpapi: build: processor is required (ImageMagick adapter or fake)")
+		return nil, fmt.Errorf("composition: build: processor is required (ImageMagick adapter or fake)")
 	}
 
 	// Sidecar-кэш метаданных
@@ -146,7 +147,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		if metaRoot != "" {
 			ms, err := fs.NewMetadataStore(metaRoot)
 			if err != nil {
-				return nil, fmt.Errorf("httpapi: build: metadata store: %w", err)
+				return nil, fmt.Errorf("composition: build: metadata store: %w", err)
 			}
 			metaStore = ms
 		}
@@ -180,15 +181,15 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		DefaultVideoAttempts:     compiled.DefaultVideoAttempts,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: build: generatev2: %w", err)
+		return nil, fmt.Errorf("composition: build: generatev2: %w", err)
 	}
 
 	// HTTP handler. Пробрасываем хранилище исходников в конфиг для source
 	// fallback (nil = фича недоступна).
 	opt.HTTP.Sources = sources
-	h, err := New(svc, opt.HTTP)
+	h, err := httpapi.New(svc, opt.HTTP)
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: build: handler: %w", err)
+		return nil, fmt.Errorf("composition: build: handler: %w", err)
 	}
 
 	// Admin-сервис и handler (только если admin включён). Валидация
@@ -210,9 +211,9 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 			WaitTimeout: opt.HTTP.Admin.WaitTimeout,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: build: adminsvc: %w", err)
+			return nil, fmt.Errorf("composition: build: adminsvc: %w", err)
 		}
-		adminHandler = NewAdminHandler(adminSvc, opt.HTTP.Admin, opt.HTTP.Logger)
+		adminHandler = httpapi.NewAdminHandler(adminSvc, opt.HTTP.Admin, opt.HTTP.Logger)
 	}
 
 	return &App{

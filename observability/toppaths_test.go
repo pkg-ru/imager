@@ -81,12 +81,3 @@ func TestTopPathsConcurrent(t *testing.T) {
 		t.Fatal("Top(10) empty")
 	}
 }
-
-func TestTopPathsSnapshot(t *testing.T) {
-	tp := NewTopPaths(10)
-	tp.Inc("x")
-	snap := tp.Snapshot(5)
-	if len(snap) != 1 || snap[0].Path != "x" {
-		t.Errorf("Snapshot = %+v, want [x:1]", snap)
-	}
-}

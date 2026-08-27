@@ -11,16 +11,17 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/pkg-ru/imager/adapters/lru"
 	"github.com/pkg-ru/imager/adapters/processor/routing"
-	"github.com/pkg-ru/imager/app/generatev2"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/generation"
 )
 
 // PixelGenerator — генератор прозрачного 1x1 пикселя в заданном формате.
@@ -30,9 +31,7 @@ type PixelGenerator interface {
 }
 
 // Generator — узкий порт генерации ассета, реализуемый generatev2.Service.
-type Generator interface {
-	Generate(ctx context.Context, req *asset.Request) (*generatev2.Result, error)
-}
+type Generator = generation.Generator
 
 // Handler — HTTP-обработчик versioned asset URL.
 type Handler struct {
@@ -222,7 +221,7 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveResult отдаёт успешный artifact с корректными headers.
-func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *generatev2.Result) {
+func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *generation.Result) {
 	meta := result.Opened.Metadata()
 
 	// Content-Type из безопасного format mapping (не доверяем пользователю).
@@ -268,7 +267,7 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 // etagFor вычисляет стабильный ETag из metadata/content identity.
 // Результат кэшируется по identity (canonical URL + size), чтобы не
 // пересчитывать SHA-256 на каждый запрос.
-func (h *Handler) etagFor(meta object.ObjectMetadata, result *generatev2.Result) string {
+func (h *Handler) etagFor(meta object.ObjectMetadata, result *generation.Result) string {
 	// Если metadata предоставляет ETag, используем его. Нормализуем:
 	// убираем кавычки, если хранилище уже вернуло quoted-ETag, чтобы не
 	// получить двойные кавычки в заголовке.
@@ -320,7 +319,7 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, ra
 			"requested format is not supported: "+err.Error())
 		return
 	}
-	var oe *generatev2.OutcomeError
+	var oe *generation.OutcomeError
 	if !errors.As(err, &oe) {
 		h.log.Errorf("httpapi: unexpected error: %v", err)
 		h.writeError(w, r, http.StatusInternalServerError, "processing", "internal server error")
@@ -328,7 +327,7 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, ra
 	}
 
 	switch oe.Kind {
-	case generatev2.OutcomeInvalid:
+	case generation.OutcomeInvalid:
 		// Определяем категорию: preset_not_found (неразрешимый пресет) или
 		// invalid_plan (недопустимый план/канонизация).
 		kind := observability.AssetErrInvalidPlan
@@ -342,7 +341,7 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, ra
 			return
 		}
 		h.writeError(w, r, http.StatusBadRequest, "invalid", "invalid request")
-	case generatev2.OutcomeForbidden:
+	case generation.OutcomeForbidden:
 		h.recordAssetError(observability.AssetErrPolicyDenied, rawPath, "", oe.Reason)
 		// Source fallback: если исходник существует, отдаём его вместо
 		// ошибки (запрещённая политика).
@@ -351,23 +350,23 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, ra
 		}
 		h.log.Warnf("httpapi: forbidden: %v", oe)
 		h.writeError(w, r, http.StatusForbidden, "forbidden", "forbidden")
-	case generatev2.OutcomeNotFound:
+	case generation.OutcomeNotFound:
 		h.notFound(w, r)
-	case generatev2.OutcomeQuota:
+	case generation.OutcomeQuota:
 		h.log.Errorf("httpapi: quota: %v", oe)
 		h.writeError(w, r, http.StatusInsufficientStorage, "quota", "storage quota exceeded")
-	case generatev2.OutcomeUnavailable:
+	case generation.OutcomeUnavailable:
 		h.log.Errorf("httpapi: unavailable: %v", oe)
 		h.writeError(w, r, http.StatusServiceUnavailable, "unavailable", "service temporarily unavailable")
-	case generatev2.OutcomeOverloaded:
+	case generation.OutcomeOverloaded:
 		// Перегрузка процессоров: клиенту следует повторить позже.
 		h.log.Warnf("httpapi: overloaded: %v", oe)
 		w.Header().Set("Retry-After", "1")
 		h.writeError(w, r, http.StatusServiceUnavailable, "overloaded", "service overloaded, retry later")
-	case generatev2.OutcomeProcessing:
+	case generation.OutcomeProcessing:
 		h.log.Errorf("httpapi: processing: %v", oe)
 		h.writeError(w, r, http.StatusInternalServerError, "processing", "processing error")
-	case generatev2.OutcomeCanceled:
+	case generation.OutcomeCanceled:
 		h.log.Warnf("httpapi: canceled: %v", oe)
 		h.writeError(w, r, http.StatusGatewayTimeout, "canceled", "request canceled")
 	default:
@@ -431,7 +430,9 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 // Не использует http.ServeFile (который сам пишет 200): сначала
 // WriteHeader(404), затем копируем содержимое.
 func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file string) {
-	f, err := openFallback(file)
+	// os.Open вместо http.ServeFile (который сам пишет 200): статус 404
+	// пишется явно ниже, до записи body.
+	f, err := os.Open(file)
 	if err != nil {
 		h.log.Errorf("httpapi: fallback file %q: %v", file, err)
 		h.writeError(w, r, http.StatusNotFound, "not_found", "not found")
@@ -569,7 +570,7 @@ func (h *Handler) topPathKey(rawURL string) string {
 
 // isPresetNotFound сообщает, является ли OutcomeInvalid ошибкой
 // неразрешимого пресета (preset not found).
-func isPresetNotFound(oe *generatev2.OutcomeError) bool {
+func isPresetNotFound(oe *generation.OutcomeError) bool {
 	if oe == nil {
 		return false
 	}
@@ -581,7 +582,7 @@ func isPresetNotFound(oe *generatev2.OutcomeError) bool {
 }
 
 // presetNameOf извлекает имя пресета из ошибки разрешения, если есть.
-func presetNameOf(oe *generatev2.OutcomeError) string {
+func presetNameOf(oe *generation.OutcomeError) string {
 	if oe == nil {
 		return ""
 	}

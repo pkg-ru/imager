@@ -1,4 +1,4 @@
-package httpapi
+package composition
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 
 	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/internal/testutil"
 )
 
 // testConfigYAML — валидная конфигурация с unsafe policy (разрешает всё).
@@ -28,6 +30,16 @@ http:
     - https://example.com
   cache-control: "public, max-age=31536000, immutable"
 `
+
+// memSourceStore — in-memory storage.SourceStore (алиас testutil).
+type memSourceStore = testutil.MemSourceStore
+
+func newMemSourceStore() *memSourceStore { return testutil.NewMemSourceStore() }
+
+// memResultStore — in-memory storage.ResultStore (алиас testutil).
+type memResultStore = testutil.MemResultStore
+
+func newMemResultStore() *memResultStore { return testutil.NewMemResultStore() }
 
 func TestBuildFailFastInvalidConfig(t *testing.T) {
 	// Невалидная версия.
@@ -73,7 +85,7 @@ func TestBuildFullPipeline(t *testing.T) {
 
 	sources := newMemSourceStore()
 	// Исходник: img.png (source key = "img.png").
-	sources.data["img.png"] = []byte("RAWIMAGE")
+	sources.Add(object.ObjectKey("img.png"), []byte("RAWIMAGE"))
 
 	results := newMemResultStore()
 
@@ -117,7 +129,7 @@ func TestBuildWithMetadataEnabled(t *testing.T) {
 	cfg, httpCfg := rc.Pipeline, rc.HTTP
 
 	sources := newMemSourceStore()
-	sources.data["img.png"] = []byte("RAWIMAGE")
+	sources.Add(object.ObjectKey("img.png"), []byte("RAWIMAGE"))
 	results := newMemResultStore()
 
 	app, err := Build(context.Background(), AppOptions{

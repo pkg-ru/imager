@@ -30,7 +30,7 @@ func waitForFrameKey(t *testing.T, env *testEnv, metaS *fakeMetadataStore, frame
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		// x.jpg опубликован в ResultStore.
-		if env.res.has(frameKey) {
+		if env.res.Has(frameKey) {
 			metaS.mu.Lock()
 			m := metaS.data[metaKey]
 			metaS.mu.Unlock()
@@ -52,7 +52,7 @@ func TestVideoOriginalServedAsIs(t *testing.T) {
 	ext := newFakeVideoExtractor()
 	metaS := newFakeMetadataStore()
 	env := videoEnv(t, ext, metaS)
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	req := mustReqSize(t, "", "clip", "mp4", asset.Transform(""), asset.NewOriginalSize(), 1, "mp4")
@@ -95,7 +95,7 @@ func TestVideoGenerateFirstTime(t *testing.T) {
 	ext := newFakeVideoExtractor()
 	metaS := newFakeMetadataStore()
 	env := videoEnv(t, ext, metaS)
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	// mp4→webp с resize — не original, идёт генерация из кадра.
@@ -131,10 +131,10 @@ func TestVideoGenerateFirstTime(t *testing.T) {
 	// x.jpg асинхронно сохранён в ResultStore по ключу <видео-ключ>/x.jpg.
 	frameKey := videoFrameKey(object.ObjectKey("clip.mp4"))
 	waitForFrameKey(t, env, metaS, frameKey, "clip.mp4")
-	if !env.res.has(frameKey) {
+	if !env.res.Has(frameKey) {
 		t.Fatalf("x.jpg not published at %q", frameKey)
 	}
-	if got := env.res.get(frameKey); !bytes.Equal(got, ext.frameData()) {
+	if got := env.res.Get(frameKey); !bytes.Equal(got, ext.frameData()) {
 		t.Fatalf("x.jpg data mismatch: got %d bytes, want %d", len(got), len(ext.frameData()))
 	}
 	// VideoFrameKey зафиксирован в метаданных видео.
@@ -153,11 +153,11 @@ func TestVideoGenerateReusesCachedFrame(t *testing.T) {
 	ext := newFakeVideoExtractor()
 	metaS := newFakeMetadataStore()
 	env := videoEnv(t, ext, metaS)
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	// Заранее: x.jpg сохранён и VideoFrameKey зафиксирован в метаданных.
 	frameKey := videoFrameKey(object.ObjectKey("clip.mp4"))
-	env.res.add(frameKey, ext.frameData())
+	env.res.Add(frameKey, ext.frameData())
 	metaS.data["clip.mp4"] = &filemeta.FileMetadata{VideoFrameKey: string(frameKey)}
 
 	ctx := context.Background()
@@ -174,7 +174,7 @@ func TestVideoGenerateReusesCachedFrame(t *testing.T) {
 		t.Fatalf("VideoExtractor calls = %d, want 0 (frame cached)", ext.callCount())
 	}
 	// Оригинал видео НЕ открывается (SourceStore не запрашивает видео).
-	for _, k := range env.src.openedKeys() {
+	for _, k := range env.src.OpenedKeys() {
 		if k == "clip.mp4" {
 			t.Fatalf("video source %q was opened, want not opened (frame cached)", k)
 		}
@@ -194,7 +194,7 @@ func TestVideoGenerateCacheHit(t *testing.T) {
 	ext := newFakeVideoExtractor()
 	metaS := newFakeMetadataStore()
 	env := videoEnv(t, ext, metaS)
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
@@ -247,7 +247,7 @@ func TestVideoExtractError(t *testing.T) {
 	ext.setErr(errors.New("ffmpeg failed"))
 	metaS := newFakeMetadataStore()
 	env := videoEnv(t, ext, metaS)
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
@@ -270,7 +270,7 @@ func TestVideoExtractorNotConfigured(t *testing.T) {
 		d.Metadata = metaS
 		// VideoExtractor остаётся nil.
 	})
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
@@ -338,7 +338,7 @@ func TestVideoOptionsPassedToExtractor(t *testing.T) {
 		d.DefaultVideoFrameStep = 2
 		d.DefaultVideoAttempts = 4
 	})
-	env.src.add("clip.mp4", []byte("VIDEO-BYTES"))
+	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")

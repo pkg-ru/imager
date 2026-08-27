@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // TestResultStoreContractFS — контрактные тесты ResultStore против продового

@@ -30,7 +30,7 @@ size-rules:
 |------|----------|
 | `dpr: "0-1"` | Ограничение диапазона DPR |
 | `crop: center \| smart \| face \| object` | Единственный разрешённый режим кропа |
-| `crop: [smart, face]` | Whitelist режимов |
+| `crop: [smart, face]` | allowlist режимов |
 | `crop: none` | Любой кроп запрещён |
 | `trim: true/false` | Trim обязателен / запрещён |
 
@@ -47,7 +47,7 @@ size-rules:
 | `frames`/`duration` | Для анимаций |
 | `output-bytes` | После обработки по фактическому размеру выхода |
 
-Превышение → HTTP `403 forbidden`. Дополнительно `application.output-limit` прерывает генерацию при превышении размера выхода (bounded writer), а `http.max-concurrent-requests` ограничивает число одновременных asset-запросов (`503` + `Retry-After: 1`; health/metrics остаются доступными).
+Превышение → HTTP `403 forbidden`. Дополнительно `application.output-limit` прерывает генерацию при превышении размера выхода (bounded writer).
 
 ## Безопасность URL
 
@@ -77,7 +77,7 @@ size-rules:
 Три слоя ограничений subprocess:
 
 1. `-limit` аргументы командной строки (memory/map/disk/threads/time/pixels/frames);
-2. генерируемый deny-by-default `policy.xml` (через `MAGICK_CONFIGURE_PATH`): все coders/delegates запрещены, разрешён только безопасный whitelist форматов; network- и scripting-coders (URL/HTTPS/FTP/MSL/MVG/LABEL/TEXT/PS/PDF/SVG…) и delegates (curl, wget, ssh, rsvg, inkscape…) явно заблокированы; `imagemagick.policy.disable-network` держите включённым в production (риск SSRF);
+2. генерируемый deny-by-default `policy.xml` (через `MAGICK_CONFIGURE_PATH`): все coders/delegates запрещены, разрешён только безопасный allowlist форматов; network- и scripting-coders (URL/HTTPS/FTP/MSL/MVG/LABEL/TEXT/PS/PDF/SVG…) и delegates (curl, wget, ssh, rsvg, inkscape…) явно заблокированы; `imagemagick.policy.disable-network` держите включённым в production (риск SSRF);
 3. application-level: bounded writer на stdout (лимит выхода) и context deadline (убийство процесса по таймауту).
 
 Защита от decompression bomb: `max-pixels` / `pixels` (по умолчанию 256 MP).
@@ -97,13 +97,13 @@ In-process без subprocess; ограничения: `libvips.limits.timeout` (
 | Лимит тела | `server.max-body-bytes` (сервис тело не принимает) |
 | Лимит URL | `http.max-url-len` → `414` |
 | Таймаут генерации | `http.generate-timeout` → `504` |
-| Admission control | `http.max-concurrent-requests` → `503` + `Retry-After` |
+| Admission control | `http.max-concurrent-requests` → `503` + `Retry-After: 1`; health/metrics остаются доступными |
 | Content-Type | Только из безопасного маппинга форматов, не из пользовательского ввода |
 | Fallback-файлы | Отдаются с явным статусом `404`, без `http.ServeFile` |
 
 ## Админ-эндпоинты
 
-Административные эндпоинты (`POST /admin/assets/generate`, `DELETE /admin/assets/delete`) управляют ассетами: фоновая генерация и удаление. Они **выключены по умолчанию** (`admin.enabled: false`) и регистрируются в mux только при включении. При `admin.enabled: true` обязателен непустой `admin.token`, иначе старт завершится ошибкой (fail-fast) — эндпоинты не могут работать с пустой авторизацией.
+Административные эндпоинты (`POST /admin/assets/generate`, `DELETE /admin/assets/delete`) управляют ассетами: фоновая генерация и удаление. Они **выключены по умолчанию** (`admin.enabled: false`) и регистрируются в mux только при включении. При `admin.enabled: true` обязателен непустой `admin.token`, иначе старт завершится ошибкой (fail-fast).
 
 ### Bearer-токен
 
@@ -117,11 +117,10 @@ Authorization: Bearer <token>
 
 ### Рекомендации
 
-- **Храните токен в секретах.** Размещайте `admin.token` в `setting-local.yaml` (не коммитится, см. `.gitignore`) или в секрет-менеджере; не зашивайте в базовые `*.yaml` и не передавайте через аргументы/URL.
+- **Храните токен в секретах.** Используйте `setting-local.yaml` или секрет-менеджер (подробнее — «Секреты»); не зашивайте токен в базовые `*.yaml` и не передавайте через аргументы/URL.
 - **Используйте сильный случайный токен** (например, `openssl rand -hex 32`). Не используйте короткие/предсказуемые значения.
 - **Ротация.** Периодически меняйте токен; при компрометации — немедленно. Ротация требует перезапуска сервиса (конфиг читается на старте).
-- **Отключение по умолчанию.** Держите `admin.enabled: false`, пока админ-эндпоинты не нужны. Включайте только при необходимости и ограничивайте доступ к `/admin/*` на уровне сети/фаервола (например, только из внутренней сети или через reverse-proxy с дополнительной аутентификацией).
-- **Не выставляйте `/admin/*` в публичный интернет** без дополнительной защиты. Bearer-токен — единственный барьер; при его утечке злоумышленник получит возможность генерировать и удалять ассеты.
+- **Сетевая изоляция.** Не выставляйте `/admin/*` в публичный интернет: Bearer-токен — единственный барьер, при его утечке злоумышленник получит возможность генерировать и удалять ассеты. Ограничивайте доступ на уровне сети/фаервола (внутренняя сеть или reverse-proxy с дополнительной аутентификацией).
 - **Мониторинг:** следите за `403` на `/admin/*` в логах — это может указывать на попытки несанкционированного доступа.
 
 ## Секреты
@@ -138,4 +137,4 @@ URL, query, raw user input и секреты не логируются и не �
 
 ## Контейнерный hardening
 
-См. [DEPLOYMENT.md](DEPLOYMENT.md#hardening-контейнера): non-root, read-only root fs, dropped capabilities, no-new-privileges, tmpfs для `/tmp`.
+См. [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening): non-root, read-only root fs, dropped capabilities, no-new-privileges, tmpfs для `/tmp`.

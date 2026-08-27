@@ -24,8 +24,8 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/pkg-ru/imager/adapters/lru"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // multipartPartSize — размер одной части multipart upload (5 МБ минимум S3).
@@ -178,20 +178,20 @@ func httpStatus(err error) int {
 }
 
 // MapError маппит ошибку S3 в типизированную ошибку domain/object.
-// Различает 403 (ErrForbidden), 429/5xx (ErrUnavailable с пометкой для
-// ретраев), 404 (ErrNotFound) и прочие (ErrUnavailable).
+// Различает 403 (ErrForbidden), 404 (ErrNotFound), 429/5xx и прочие
+// ошибки (ErrUnavailable через remote.MapError).
 func MapError(op string, err error) error {
 	if err == nil {
 		return nil
 	}
 	switch {
 	case isNotFound(err):
-		return remote.MapError(op, remote.NotFound(object.ObjectKey("")))
+		return remote.NotFound(object.ObjectKey(""))
 	case isForbidden(err):
 		return fmt.Errorf("%s: %w", op, object.ErrForbidden)
-	case isThrottled(err), isServerError(err):
-		return remote.MapError(op, err)
 	default:
+		// Включая throttled/server errors: remote.MapError сводит их к
+		// ErrUnavailable, сохраняя исходную ошибку в цепочке для ретраев.
 		return remote.MapError(op, err)
 	}
 }

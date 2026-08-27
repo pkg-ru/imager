@@ -1,8 +1,6 @@
-package httpapi
+package composition
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -188,8 +186,8 @@ result:
 	if rc.Source.Kind != StorageS3 {
 		t.Errorf("Source.Kind = %q, want s3", rc.Source.Kind)
 	}
-	if rc.Source.DialTimeout.String() != "10s" {
-		t.Errorf("Source.DialTimeout = %v, want 10s", rc.Source.DialTimeout)
+	if rc.Source.Conn.DialTimeout.String() != "10s" {
+		t.Errorf("Source.DialTimeout = %v, want 10s", rc.Source.Conn.DialTimeout)
 	}
 	// Умолчания для пути (когда storage: fs или fs не указан).
 	if rc.SourceDir != "./data/source" {
@@ -221,23 +219,23 @@ source:
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
 	}
-	if rc.Source.DialTimeout.String() != "15s" {
-		t.Errorf("DialTimeout = %v, want 15s", rc.Source.DialTimeout)
+	if rc.Source.Conn.DialTimeout.String() != "15s" {
+		t.Errorf("DialTimeout = %v, want 15s", rc.Source.Conn.DialTimeout)
 	}
-	if rc.Source.ReadTimeout.String() != "45s" {
-		t.Errorf("ReadTimeout = %v, want 45s", rc.Source.ReadTimeout)
+	if rc.Source.Conn.ReadTimeout.String() != "45s" {
+		t.Errorf("ReadTimeout = %v, want 45s", rc.Source.Conn.ReadTimeout)
 	}
-	if rc.Source.MaxAttempts != 5 {
-		t.Errorf("MaxAttempts = %d, want 5", rc.Source.MaxAttempts)
+	if rc.Source.Conn.MaxAttempts != 5 {
+		t.Errorf("MaxAttempts = %d, want 5", rc.Source.Conn.MaxAttempts)
 	}
-	if rc.Source.MaxIdleConns != 200 {
-		t.Errorf("MaxIdleConns = %d, want 200", rc.Source.MaxIdleConns)
+	if rc.Source.Conn.MaxIdleConns != 200 {
+		t.Errorf("MaxIdleConns = %d, want 200", rc.Source.Conn.MaxIdleConns)
 	}
-	if rc.Source.MaxIdleConnsPerHost != 20 {
-		t.Errorf("MaxIdleConnsPerHost = %d, want 20", rc.Source.MaxIdleConnsPerHost)
+	if rc.Source.Conn.MaxIdleConnsPerHost != 20 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 20", rc.Source.Conn.MaxIdleConnsPerHost)
 	}
-	if rc.Source.IdleConnTimeout != 120*time.Second {
-		t.Errorf("IdleConnTimeout = %v, want 120s", rc.Source.IdleConnTimeout)
+	if rc.Source.Conn.IdleConnTimeout != 120*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 120s", rc.Source.Conn.IdleConnTimeout)
 	}
 	if rc.Source.MetadataTTL != 60*time.Second {
 		t.Errorf("MetadataTTL = %v, want 60s", rc.Source.MetadataTTL)
@@ -777,18 +775,6 @@ result:
 	}
 }
 
-// captureLogger — тестовый логгер, собирающий warning-сообщения.
-type captureLogger struct {
-	warnings []string
-}
-
-func (c *captureLogger) Debugf(string, ...any) {}
-func (c *captureLogger) Infof(string, ...any)  {}
-func (c *captureLogger) Warnf(format string, args ...any) {
-	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
-}
-func (c *captureLogger) Errorf(string, ...any) {}
-
 // TestLoadConfigDirTopLevelConflict проверяет, что при совпадении top-level
 // ключа между базовыми файлами слоёв пишется warning, а deep merge выполняется
 // в порядке setting -> generate -> failback (более специализированный слой
@@ -910,26 +896,5 @@ application:
 	}
 	if !rc.HTTP.NotFound.Pixel {
 		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
-	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		(len(s) > 0 && indexOf(s, sub) >= 0))
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func writeConfig(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write %s: %v", path, err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/domain/object"
 )
 
@@ -288,7 +289,10 @@ func TestSourceStoreTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s, err := NewSourceStore(Options{BaseURL: srv.URL + "/", ReadTimeout: 20 * time.Millisecond})
+	s, err := NewSourceStore(Options{
+		BaseURL:     srv.URL + "/",
+		ConnOptions: remote.ConnOptions{ReadTimeout: 20 * time.Millisecond},
+	})
 	if err != nil {
 		t.Fatalf("NewSourceStore: %v", err)
 	}

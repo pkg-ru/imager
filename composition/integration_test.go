@@ -1,7 +1,8 @@
-package httpapi
+package composition
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // buildFSApp собирает полный production pipeline с реальными FS-хранилищами
@@ -288,4 +289,20 @@ func itoa(v int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// assertErrorCode проверяет, что тело ответа содержит error.code == want.
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("error body not JSON: %v (body=%q)", err, rec.Body.String())
+	}
+	if env.Error.Code != want {
+		t.Errorf("error code = %q, want %q", env.Error.Code, want)
+	}
 }

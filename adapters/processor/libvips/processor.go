@@ -25,6 +25,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/processor/shared"
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/bounded"
 	"github.com/pkg-ru/imager/ports/processor"
 )
 
@@ -380,13 +381,13 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 
 	// Запись результата через bounded writer: OutputBytes → LimitOutput.
-	bw := shared.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
+	bw := bounded.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
 	_, _ = bw.Write(br.data)
 	exceeded, actual := bw.ExceededN()
 	if exceeded {
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
 	}
-	if err != nil && !errors.Is(err, shared.ErrOutputLimitExceeded) {
+	if err != nil && !errors.Is(err, bounded.ErrOutputLimitExceeded) {
 		return nil, err
 	}
 	return &processor.Result{

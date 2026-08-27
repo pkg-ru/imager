@@ -8,6 +8,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/app/adminsvc"
 	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/composition"
 	"github.com/pkg-ru/imager/config"
 	"github.com/pkg-ru/imager/ports/detector"
 	"github.com/pkg-ru/imager/ports/processor"
@@ -32,10 +33,10 @@ type Options struct {
 	ResultDir string
 	// SourceStorage — конфигурация удалённого source-хранилища (S3/SFTP/
 	// FTP/FTPS). Пустой Kind = FS fallback на SourceDir.
-	SourceStorage httpapi.RemoteStorageConfig
+	SourceStorage composition.RemoteStorageConfig
 	// ResultStorage — конфигурация удалённого result-хранилища (S3/SFTP/
 	// FTPS). Пустой Kind = FS fallback на ResultDir.
-	ResultStorage httpapi.RemoteStorageConfig
+	ResultStorage composition.RemoteStorageConfig
 
 	// Processor — абстрактный процессор. Обязателен (или ImageMagick-адаптер).
 	Processor processor.Processor
@@ -85,7 +86,7 @@ type App struct {
 // New собирает pipeline программно (без YAML). Пользователь подставляет
 // порты через Options. Возвращает App с Handler и Service.
 func New(ctx context.Context, opts Options) (*App, error) {
-	app, err := httpapi.Build(ctx, httpapi.AppOptions{
+	app, err := composition.Build(ctx, composition.AppOptions{
 		Config:          opts.Config,
 		HTTP:            opts.HTTP,
 		SourceDir:       opts.SourceDir,

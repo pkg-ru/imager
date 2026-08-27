@@ -9,8 +9,96 @@ permissions:
   contents: read
 
 jobs:
+  # ── Build & test matrix across build tags and platforms ──────────────────────
   test:
-    name: Go checks
+    name: "${{ matrix.tags || 'default' }} @ ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Stub branches (no build tags): verify compilation of !libvips / !onnx paths.
+          # Run on both Linux and Windows to exercise platform-specific files
+          # (_unix.go / _windows.go / _linux.go / _other.go).
+          - { os: ubuntu-latest,  tags: "" }
+          - { os: windows-latest, tags: "" }
+
+          # ONNX detection – pure Go (onnxruntime binding is NOT imported yet,
+          # see the TODO in adapters/processor/detection/onnx.go).  Both stub and
+          # real code paths are exercised.
+          - { os: ubuntu-latest,  tags: "onnx" }
+          - { os: windows-latest, tags: "onnx" }
+
+          # libvips – requires CGO + libvips dev libraries.  Runs only on Linux
+          # where we can install libvips-dev from the system package manager.
+          - { os: ubuntu-latest, tags: "libvips",       cgo: "1", install_libvips: true }
+          - { os: ubuntu-latest, tags: "libvips,onnx",  cgo: "1", install_libvips: true }
+
+    env:
+      CGO_ENABLED: ${{ matrix.cgo || '0' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache: true
+
+      - name: Install libvips (Linux)
+        if: matrix.install_libvips
+        run: sudo apt-get update && sudo apt-get install -y libvips-dev
+
+      # ── go vet ──────────────────────────────────────────────────────────
+      - name: go vet
+        env:
+          TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "${TAGS}" ]; then
+            go vet -tags="${TAGS}" ./...
+          else
+            go vet ./...
+          fi
+
+      # ── go test ─────────────────────────────────────────────────────────
+      - name: go test
+        env:
+          TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "${TAGS}" ]; then
+            go test -tags="${TAGS}" ./... -count=1
+          else
+            go test ./... -count=1
+          fi
+
+      # ── go test -race (Linux only – race detector needs CGO) ────────────
+      - name: go test -race
+        if: runner.os == 'Linux'
+        env:
+          TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "${TAGS}" ]; then
+            go test -race -tags="${TAGS}" ./... -count=1
+          else
+            go test -race ./... -count=1
+          fi
+
+      # ── Build the final binary ──────────────────────────────────────────
+      - name: Build cmd/imager
+        env:
+          TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "${TAGS}" ]; then
+            go build -tags="${TAGS}" -trimpath -ldflags="-s -w" ./cmd/imager
+          else
+            go build -trimpath -ldflags="-s -w" ./cmd/imager
+          fi
+
+  # ── Lint & format (tag-independent, runs once) ──────────────────────────
+  lint:
+    name: Lint & Format
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,20 +119,26 @@ jobs:
             exit 1
           fi
 
-      - name: go vet
-        run: go vet ./...
+  # ── Analysis: govulncheck + fuzz smoke (runs once, after tests pass) ────
+  analysis:
+    name: Analysis & Fuzz
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.0"
+          cache: true
 
       - name: govulncheck
         uses: golang/govulncheck-action@v1
         with:
           go-version-input: "1.25.0"
           go-package: ./...
-
-      - name: go test
-        run: go test ./... -count=1
-
-      - name: go test -race
-        run: go test -race ./... -count=1
 
       - name: fuzz smoke (FuzzParse)
         run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=10s ./domain/asset
@@ -55,14 +149,9 @@ jobs:
       - name: fuzz smoke (FuzzCleanRelContainment)
         run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=10s ./adapters/storage/fs
 
-      - name: fuzz smoke (FuzzSafeKey)
-        run: go test -run=^$ -fuzz=^FuzzSafeKey$ -fuzztime=10s ./adapters/storage/fs
-
-      - name: build (cmd/imager)
-        run: go build -trimpath -ldflags="-s -w" ./cmd/imager
-
+  # ── Docker: container build + vulnerability scan ────────────────────────
   docker:
-    name: Container build + scan placeholder
+    name: Container build + scan
     runs-on: ubuntu-latest
     needs: test
     steps:

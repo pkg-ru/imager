@@ -14,6 +14,7 @@ import (
 	"github.com/pkg-ru/imager/domain/filemeta"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/internal/testutil"
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/storage"
 )
@@ -29,171 +30,6 @@ func wantErr(t *testing.T, err error, want error) {
 		t.Fatalf("err = %v (%T), want %v", err, err, want)
 	}
 }
-
-// memArtifact — object.Artifact поверх []byte.
-type memArtifact struct {
-	mu   sync.Mutex
-	buf  []byte
-	pos  int64
-	meta object.ObjectMetadata
-}
-
-func (a *memArtifact) Read(p []byte) (int, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.pos >= int64(len(a.buf)) {
-		return 0, io.EOF
-	}
-	n := copy(p, a.buf[a.pos:])
-	a.pos += int64(n)
-	return n, nil
-}
-
-func (a *memArtifact) Seek(offset int64, whence int) (int64, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var np int64
-	switch whence {
-	case io.SeekStart:
-		np = offset
-	case io.SeekCurrent:
-		np = a.pos + offset
-	case io.SeekEnd:
-		np = int64(len(a.buf)) + offset
-	}
-	if np < 0 || np > int64(len(a.buf)) {
-		return a.pos, errors.New("invalid seek")
-	}
-	a.pos = np
-	return np, nil
-}
-
-func (a *memArtifact) Close() error { return nil }
-
-func (a *memArtifact) Metadata() object.ObjectMetadata { return a.meta }
-
-// memSourceStore — storage.SourceStore в памяти.
-type memSourceStore struct {
-	mu    sync.Mutex
-	files map[object.ObjectKey][]byte
-}
-
-func newMemSourceStore() *memSourceStore {
-	return &memSourceStore{files: map[object.ObjectKey][]byte{}}
-}
-
-func (s *memSourceStore) add(key object.ObjectKey, data []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.files[key] = data
-}
-
-func (s *memSourceStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.files[key]
-	if !ok {
-		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
-	}
-	return object.ObjectMetadata{Key: key, Size: int64(len(d))}, nil
-}
-
-func (s *memSourceStore) Open(_ context.Context, key object.ObjectKey) (object.Artifact, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.files[key]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &memArtifact{buf: append([]byte(nil), d...), meta: object.ObjectMetadata{Key: key, Size: int64(len(d))}}, nil
-}
-
-var _ storage.SourceStore = (*memSourceStore)(nil)
-
-// memResultStore — storage.ResultStore в памяти с поддержкой List (Lister).
-type memResultStore struct {
-	mu   sync.Mutex
-	data map[string][]byte
-}
-
-func newMemResultStore() *memResultStore {
-	return &memResultStore{data: map[string][]byte{}}
-}
-
-func (r *memResultStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
-	}
-	return object.ObjectMetadata{Key: key, Size: int64(len(d))}, nil
-}
-
-func (r *memResultStore) Open(_ context.Context, key object.ObjectKey) (object.Artifact, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &memArtifact{buf: append([]byte(nil), d...), meta: object.ObjectMetadata{Key: key, Size: int64(len(d))}}, nil
-}
-
-func (r *memResultStore) ReadStream(_ context.Context, key object.ObjectKey) (object.Stream, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &memArtifact{buf: append([]byte(nil), d...), meta: object.ObjectMetadata{Key: key, Size: int64(len(d))}}, nil
-}
-
-func (r *memResultStore) Publish(_ context.Context, key object.ObjectKey, src io.Reader, _ object.PublishOptions) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	data, err := io.ReadAll(src)
-	if err != nil {
-		return err
-	}
-	r.data[key.String()] = data
-	return nil
-}
-
-func (r *memResultStore) Delete(_ context.Context, key object.ObjectKey) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.data, key.String())
-	return nil
-}
-
-func (r *memResultStore) Stats(_ context.Context) (object.StoreStats, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var st object.StoreStats
-	for _, d := range r.data {
-		st.Objects++
-		st.TotalBytes += int64(len(d))
-	}
-	return st, nil
-}
-
-// List реализует storage.Lister: возвращает ключи с заданным префиксом.
-func (r *memResultStore) List(_ context.Context, prefix object.ObjectKey) ([]object.ObjectKey, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []object.ObjectKey
-	for k := range r.data {
-		if strings.HasPrefix(k, prefix.String()) {
-			out = append(out, object.ObjectKey(k))
-		}
-	}
-	return out, nil
-}
-
-var _ storage.ResultStore = (*memResultStore)(nil)
-var _ storage.Lister = (*memResultStore)(nil)
 
 // fakeGenerator — управляемый fake Generator (совместим с adminsvc.Generator).
 type fakeGenerator struct {
@@ -258,27 +94,19 @@ func (f *fakeGenerator) Generate(_ context.Context, req *asset.Request) (*genera
 
 var _ Generator = (*fakeGenerator)(nil)
 
-// fakeLogger — заглушка.
-type fakeLogger struct{}
-
-func (fakeLogger) Debugf(string, ...any) {}
-func (fakeLogger) Infof(string, ...any)  {}
-func (fakeLogger) Warnf(string, ...any)  {}
-func (fakeLogger) Errorf(string, ...any) {}
-
 // testConfig — конфигурация с малыми значениями для быстрых тестов.
 func testConfig() Config {
 	return Config{Workers: 2, QueueSize: 4, WaitTimeout: 5 * time.Second}
 }
 
 // newTestService создаёт Service с fakes.
-func newTestService(t *testing.T, gen Generator, sources *memSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy) *Service {
+func newTestService(t *testing.T, gen Generator, sources *testutil.MemSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy) *Service {
 	t.Helper()
 	return newTestServiceMeta(t, gen, sources, results, presets, pol, nil)
 }
 
 // newTestServiceMeta создаёт Service с fakes и опциональным metadata.Store.
-func newTestServiceMeta(t *testing.T, gen Generator, sources *memSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy, meta metadata.Store) *Service {
+func newTestServiceMeta(t *testing.T, gen Generator, sources *testutil.MemSourceStore, results storage.ResultStore, presets *asset.PresetSet, pol *policy.Policy, meta metadata.Store) *Service {
 	t.Helper()
 	svc, err := New(Deps{
 		Gen:      gen,
@@ -287,7 +115,7 @@ func newTestServiceMeta(t *testing.T, gen Generator, sources *memSourceStore, re
 		Presets:  presets,
 		Policy:   pol,
 		Metadata: meta,
-		Logger:   fakeLogger{},
+		Logger:   testutil.NopLogger{},
 	}, testConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -415,8 +243,8 @@ func unsafePolicy() *policy.Policy {
 // TestEnqueueGenerateInvalidRequest — оба/ни одного из source/assets → 400.
 func TestEnqueueGenerateInvalidRequest(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	// Ни одного.
@@ -431,8 +259,8 @@ func TestEnqueueGenerateInvalidRequest(t *testing.T) {
 // TestEnqueueGenerateSourceNotFound — несуществующий исходник → 404.
 func TestEnqueueGenerateSourceNotFound(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
 	_, err := svc.EnqueueGenerate("thumbs/missing.jpg", nil, false)
@@ -442,9 +270,9 @@ func TestEnqueueGenerateSourceNotFound(t *testing.T) {
 // TestEnqueueGenerateUnsafeCannotEnumerate — unsafe без size-rules → 400.
 func TestEnqueueGenerateUnsafeCannotEnumerate(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	src.add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	src.Add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), unsafePolicy())
 
 	_, err := svc.EnqueueGenerate("thumbs/photo.jpg", nil, false)
@@ -455,9 +283,9 @@ func TestEnqueueGenerateUnsafeCannotEnumerate(t *testing.T) {
 // полный результат.
 func TestEnqueueGenerateWaitMode(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	src.add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	src.Add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
 	svc.Start(context.Background())
@@ -481,12 +309,12 @@ func TestEnqueueGenerateWaitMode(t *testing.T) {
 // TestEnqueueGenerateSkipExisting — существующие ассеты пропускаются.
 func TestEnqueueGenerateSkipExisting(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	src.add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	src.Add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
+	res := testutil.NewMemResultStore()
 	// Заранее публикуем один канонический ассет, чтобы он был пропущен.
 	url := "thumbs/photo-jpg/120x80.jpeg"
-	res.Publish(context.Background(), object.ObjectKey(url), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey(url), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
 	svc.Start(context.Background())
@@ -504,8 +332,8 @@ func TestEnqueueGenerateSkipExisting(t *testing.T) {
 // TestEnqueueGenerateAssetsMode — режим B (assets) генерирует перечисленные.
 func TestEnqueueGenerateAssetsMode(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	svc.Start(context.Background())
@@ -527,8 +355,8 @@ func TestEnqueueGenerateAssetsMode(t *testing.T) {
 // TestEnqueueGenerateQueueFull — переполнение очереди → 503.
 func TestEnqueueGenerateQueueFull(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	// QueueSize=1, workers не запущены → очередь переполняется.
 	svc, err := New(Deps{
 		Gen:     gen,
@@ -536,7 +364,7 @@ func TestEnqueueGenerateQueueFull(t *testing.T) {
 		Results: res,
 		Presets: mustPresetSet(t),
 		Policy:  &policy.Policy{},
-		Logger:  fakeLogger{},
+		Logger:  testutil.NopLogger{},
 	}, Config{Workers: 1, QueueSize: 1, WaitTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -555,13 +383,13 @@ func TestEnqueueGenerateQueueFull(t *testing.T) {
 // TestDeleteBySource — удаление всех ассетов исходника.
 func TestDeleteBySource(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	// Публикуем ассеты исходника.
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет (другой исходник) — не должен удаляться.
-	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
@@ -580,10 +408,10 @@ func TestDeleteBySource(t *testing.T) {
 // TestDeleteAssets — удаление перечисленных ассетов.
 func TestDeleteAssets(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	deleted, err := svc.DeleteAssets(context.Background(), []string{"thumbs/photo-jpg/thumb.webp", "thumbs/photo-jpg/c-120x80@2.webp"})
@@ -601,7 +429,7 @@ func TestDeleteAssets(t *testing.T) {
 // пустой список — удаление завершается без ошибки.
 func TestDeleteBySourceNotLister(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
+	src := testutil.NewMemSourceStore()
 	// Обычный ResultStore без List.
 	res := &nonListerResultStore{}
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
@@ -636,11 +464,6 @@ func (nonListerResultStore) Stats(_ context.Context) (object.StoreStats, error) 
 }
 
 var _ storage.ResultStore = (*nonListerResultStore)(nil)
-
-// emptyReader — пустой io.Reader для Publish в тестах.
-func emptyReader() io.Reader {
-	return strings.NewReader("")
-}
 
 // prefixDeleterResultStore — ResultStore, реализующий storage.PrefixDeleter
 // (но НЕ storage.Lister), для проверки пути DeleteByPrefix в DeleteBySource.
@@ -713,12 +536,12 @@ var _ storage.PrefixDeleter = (*prefixDeleterResultStore)(nil)
 // когда хранилище его реализует (даже без Lister).
 func TestDeleteBySourcePrefixDeleter(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
+	src := testutil.NewMemSourceStore()
 	res := newPrefixDeleterResultStore()
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет — не должен удаляться.
-	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
@@ -763,15 +586,15 @@ func (b *blockingGenerator) Generate(ctx context.Context, _ *asset.Request) (*ge
 // отменяется, и воркер может прервать генерацию (нет утечки).
 func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
 	gen := newBlockingGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	svc, err := New(Deps{
 		Gen:     gen,
 		Sources: src,
 		Results: res,
 		Presets: mustPresetSet(t),
 		Policy:  &policy.Policy{},
-		Logger:  fakeLogger{},
+		Logger:  testutil.NopLogger{},
 	}, Config{Workers: 1, QueueSize: 4, WaitTimeout: 50 * time.Millisecond})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -801,8 +624,8 @@ func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
 // (гонка «send on closed channel»).
 func TestConcurrentEnqueueStop(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 	svc.Start(context.Background())
 
@@ -882,13 +705,13 @@ var _ storage.ResultStore = (*blindResultStore)(nil)
 // из политик/правил, для хранилища без List и без PrefixDeleter.
 func TestDeleteBySourceBlindKeys(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
+	src := testutil.NewMemSourceStore()
 	res := newBlindResultStore()
 	// Публикуем ассеты, которые должны быть сформированы политикой/пресетами.
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет — не должен удаляться (вне сформированных ключей).
-	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), emptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
 	deleted, err := svc.DeleteBySource(context.Background(), "thumbs/photo.jpg")
@@ -908,8 +731,8 @@ func TestDeleteBySourceBlindKeys(t *testing.T) {
 // родителя (.meta.json).
 func TestDeleteBySourceRemovesMeta(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	meta := newMemMetadataStore()
 	// Sidecar родителя: ключ = каталог ассета + имя файла.
 	meta.Save(context.Background(), "thumbs/photo-jpg/x", filemeta.NewFileMetadata())
@@ -927,8 +750,8 @@ func TestDeleteBySourceRemovesMeta(t *testing.T) {
 // если удаляется именно этот ассет, но НЕ удаляет сам .meta.json.
 func TestDeleteAssetsClearsLargestAIAsset(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	meta := newMemMetadataStore()
 	// Sidecar с зафиксированным largest_ai_asset.
 	url := "thumbs/photo-jpg/thumb.webp"
@@ -954,8 +777,8 @@ func TestDeleteAssetsClearsLargestAIAsset(t *testing.T) {
 // largest_ai_asset, если удаляется другой ассет.
 func TestDeleteAssetsKeepsLargestAIAssetOther(t *testing.T) {
 	gen := newFakeGenerator()
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	meta := newMemMetadataStore()
 	url := "thumbs/photo-jpg/thumb.webp"
 	m := filemeta.NewFileMetadata()

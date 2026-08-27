@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -317,7 +318,10 @@ func TestSFTPLookupRetry(t *testing.T) {
 	c := newFakeClient()
 	c.files["dir/file.bin"] = []byte("payload")
 	c.statFailures = 2
-	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c, MaxAttempts: 3})
+	s, err := NewSourceStore(Options{
+		Addr: "h:22", User: "u", Client: c,
+		ConnOptions: remote.ConnOptions{MaxAttempts: 3},
+	})
 	if err != nil {
 		t.Fatalf("NewSourceStore: %v", err)
 	}
@@ -336,7 +340,10 @@ func TestSFTPLookupRetryExhausted(t *testing.T) {
 	c := newFakeClient()
 	c.files["dir/file.bin"] = []byte("payload")
 	c.statFailures = 100
-	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c, MaxAttempts: 2})
+	s, err := NewSourceStore(Options{
+		Addr: "h:22", User: "u", Client: c,
+		ConnOptions: remote.ConnOptions{MaxAttempts: 2},
+	})
 	if err != nil {
 		t.Fatalf("NewSourceStore: %v", err)
 	}

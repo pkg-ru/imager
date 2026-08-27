@@ -41,7 +41,7 @@ func TestGenerateOriginalFastPath(t *testing.T) {
 		d.Metadata = metaS
 		d.Detector = det
 	})
-	env.src.add("photo.png", []byte("SRC-ORIGINAL"))
+	env.src.Add("photo.png", []byte("SRC-ORIGINAL"))
 
 	ctx := context.Background()
 	// size=x, без transform, output == source (png).
@@ -87,7 +87,7 @@ func TestGenerateOriginalNotFound(t *testing.T) {
 // вызывается).
 func TestGenerateOriginalWithTransformNotFastPath(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// transform=crop, size=x → не оригинал (есть transform).
 	req := mustReqSize(t, "", "photo", "png", asset.TransformCrop, asset.NewOriginalSize(), 1, "png")
@@ -105,7 +105,7 @@ func TestGenerateOriginalWithTransformNotFastPath(t *testing.T) {
 // исходного → нужна конвертация, оригинал не отдаётся как есть.
 func TestGenerateOriginalFormatMismatchNotFast(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// size=x, без transform, но output=webp != source=png → конвертация.
 	req := mustReqSize(t, "", "photo", "png", asset.Transform(""), asset.NewOriginalSize(), 1, "webp")
@@ -128,7 +128,7 @@ func TestGenerateCachedAssetNoMetadataRead(t *testing.T) {
 		d.Metadata = metaS
 		d.Detector = det
 	})
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "webp")
@@ -166,7 +166,7 @@ func TestGenerateCachedAssetNoMetadataRead(t *testing.T) {
 // если файл существует.
 func TestGenerateNonMediaRejected(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// output=html — не медиа-формат.
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "html")

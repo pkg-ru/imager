@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jlaffaye/ftp"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/domain/object"
 )
 
@@ -336,7 +337,10 @@ func TestFTPSourceLookupRetry(t *testing.T) {
 	conn := newFakeConn()
 	conn.files["dir/file.bin"] = []byte("payload")
 	conn.listFailures = 2
-	s, err := NewSourceStore(Options{Addr: "localhost:21", User: "u", Dialer: dialerFor(conn), MaxAttempts: 3})
+	s, err := NewSourceStore(Options{
+		Addr: "localhost:21", User: "u", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 3},
+	})
 	if err != nil {
 		t.Fatalf("NewSourceStore: %v", err)
 	}
@@ -355,7 +359,10 @@ func TestFTPSourceLookupRetryExhausted(t *testing.T) {
 	conn := newFakeConn()
 	conn.files["dir/file.bin"] = []byte("payload")
 	conn.listFailures = 100
-	s, err := NewSourceStore(Options{Addr: "localhost:21", User: "u", Dialer: dialerFor(conn), MaxAttempts: 2})
+	s, err := NewSourceStore(Options{
+		Addr: "localhost:21", User: "u", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 2},
+	})
 	if err != nil {
 		t.Fatalf("NewSourceStore: %v", err)
 	}
@@ -366,29 +373,34 @@ func TestFTPSourceLookupRetryExhausted(t *testing.T) {
 
 // TestFTPPoolConcurrentDial проверяет, что пул выполняет dial вне блокировки:
 // параллельные acquire могут создавать несколько соединений одновременно,
-// а не сериализуются на одном мьютексе.
+// а не сериализуются на одном мьютексе. Пул теперь общий (remote.Pool);
+// проверяем его через FTP-dial-функцию адаптера.
 func TestFTPPoolConcurrentDial(t *testing.T) {
 	var mu sync.Mutex
 	dials := 0
 	// dial блокируется на 50ms, имитируя медленную сеть.
-	dial := func(ctx context.Context, addr string, tls bool) (conn, error) {
-		time.Sleep(50 * time.Millisecond)
-		mu.Lock()
-		dials++
-		mu.Unlock()
-		return newFakeConn(), nil
+	opts := Options{
+		Addr: "localhost:21", User: "u",
+		ConnOptions: remote.ConnOptions{MaxConns: 4},
+		Dialer: func(ctx context.Context, addr string, tls bool) (conn, error) {
+			time.Sleep(50 * time.Millisecond)
+			mu.Lock()
+			dials++
+			mu.Unlock()
+			return newFakeConn(), nil
+		},
 	}
-	pool := newConnPool(Options{Addr: "localhost:21", User: "u", Dialer: dial, MaxConns: 4})
+	pool := remote.NewPool(opts.dial, func(c conn) error { return c.Quit() }, opts.MaxConns)
 
 	ctx := context.Background()
 	const n = 4
-	conns := make([]*pooledConn, n)
+	sessions := make([]*remote.Session[conn], n)
 	for i := 0; i < n; i++ {
-		c, err := pool.acquire(ctx)
+		e, err := pool.Acquire(ctx)
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
-		conns[i] = c
+		sessions[i] = remote.NewSession(e)
 	}
 	mu.Lock()
 	got := dials
@@ -396,9 +408,9 @@ func TestFTPPoolConcurrentDial(t *testing.T) {
 	if got != n {
 		t.Fatalf("dials = %d, want %d (dial должен выполняться параллельно)", got, n)
 	}
-	// Возвращаем все соединения в пул (discard, т.к. release-цепочка удалена).
-	for _, c := range conns {
-		c.discard()
+	// Возвращаем все соединения в пул (Discard идемпотентен).
+	for _, s := range sessions {
+		s.Discard()
 	}
 }
 

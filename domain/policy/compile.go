@@ -131,7 +131,7 @@ type CropRuleConfig []string
 // или список строк сводятся к единому представлению — списку имён режимов.
 // БУЛЕВЫЕ значения НЕ ПРИНИМАЮТСЯ: crop — только строка. Отсутствие значения
 // (null) не вызывает unmarshaler: поле остаётся nil («не ограничено»).
-func (c *CropRuleConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (c *CropRuleConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	var s string
 	if err := unmarshal(&s); err == nil {
 		if s == "" {

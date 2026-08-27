@@ -1,10 +1,44 @@
-/*.log
+# --- Build artifacts ---
 /imager
 /imager.*
 !/imager.go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+
+# --- Logs ---
+/*.log
+
+# --- Local configuration (secrets) ---
 /*-local.yaml
-.DS_Store
-.idea
-libintl-8.def
-/data
 /config/*-local.yaml
+.env
+.env.*
+
+# --- Data directories ---
+/data
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE / editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Go workspace ---
+# go.work is kept in the repository for local development convenience;
+# go.work.sum may be regenerated and is ignored.
+go.work.sum
+
+# --- Misc ---
+libintl-8.def

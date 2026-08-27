@@ -16,7 +16,7 @@ import (
 // (без повторной генерации и без гонки).
 func TestGenerateCacheStampedeSingleFlight(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	// Блокируем процессор, чтобы все запросы вошли в singleflight.
 	block := make(chan struct{})
@@ -71,7 +71,7 @@ func TestGenerateCacheStampedeSingleFlight(t *testing.T) {
 // sleep для маскировки).
 func TestGenerateCancelNoGoroutineLeak(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	block := make(chan struct{})
 	env.proc.setBlock(block)

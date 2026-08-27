@@ -31,7 +31,7 @@ docker run -d \
 
 Сборка и зависимости — [INSTALLATION.md](INSTALLATION.md). Конфигурация читается из каталога `IMAGER_CONFIG_DIR` (по умолчанию текущий каталог).
 
-## Hardening контейнера
+## Укрепление контейнера (hardening)
 
 | Мера | Реализация |
 |------|------------|
@@ -64,9 +64,9 @@ Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 512M`; r
 
 Compose использует `stop_signal: INT` и `stop_grace_period: 15s`.
 
-## Health endpoints
+## Health-check эндпоинты
 
-| Endpoint | Назначение |
+| Эндпоинт | Назначение |
 |----------|------------|
 | `/healthz` | Liveness: `200 {"status":"alive"}`; `503` если процесс завершается |
 | `/readyz` | Readiness: `200 {"status":"ready"}`; `503` при shutdown |
@@ -77,7 +77,7 @@ Health/metrics остаются доступными при перегрузке
 
 ## nginx как фронт-прокси
 
-Для совместного использования nginx + imager (раздача готовых файлов через `try_files`, проксирование генерации, проброс/скрытие эндпоинтов, выравнивание заголовков ответа) см. подробную документацию:
+Раздача готовых файлов через `try_files`, проксирование генерации, проброс/скрытие эндпоинтов и выравнивание заголовков ответа описаны в отдельной документации:
 
 - **[NGINX.md](NGINX.md)** — настройка nginx как фронт-прокси перед imager.
 
@@ -85,10 +85,10 @@ Health/metrics остаются доступными при перегрузке
 
 - **Раздача готовых файлов.** Ключ результата совпадает с путём в URL (без ведущего `/`), поэтому `try_files $uri @imager` с `root` на `result.path` отдаёт уже сгенерированные ассеты напрямую, не нагружая imager. Пути задаются в `source.path` / `result.path` (см. [STORAGE.md](STORAGE.md)).
 - **Проксирование.** `proxy_pass` на адрес imager с пробросом `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`; таймауты `proxy_read_timeout`/`proxy_send_timeout` должны быть больше `http.generate-timeout` (по умолчанию 30s).
-- **Эндпоинты.** В паблик пробрасываются asset URL (`/`), `/healthz`, `/readyz`. Служебные `/metrics`, `/debug/vars`, `/admin/*` рекомендуется закрыть (см. [NGINX.md](NGINX.md#3-проброс-эндпоинтов)).
-- **Заголовки.** Для идентичности ответов используйте `server_tokens off`, `etag off`, `if_modified_since off`, `expires off` и `proxy_pass_header`/`proxy_hide_header` (см. [NGINX.md](NGINX.md#4-идентичность-заголовков-ответа)).
+- **Эндпоинты.** В паблик пробрасываются asset URL (`/`), `/healthz`, `/readyz`. Служебные `/metrics`, `/debug/vars`, `/admin/*` рекомендуется закрыть (см. [NGINX.md](NGINX.md#3-общая-конфигурация-nginx)).
+- **Заголовки.** Для идентичности ответов используйте `server_tokens off`, `etag off`, `if_modified_since off`, `expires off` и `proxy_pass_header`/`proxy_hide_header` (см. [NGINX.md](NGINX.md#11-etag-и-last-modified)).
 
-## Observability
+## Наблюдаемость
 
 ### Логи
 
@@ -112,7 +112,7 @@ Health/metrics остаются доступными при перегрузке
 
 ### Защита /metrics
 
-В composition root поддержана опциональная защита `/metrics` по bearer-токену (`X-Metrics-Token`) и/или списку IP/CIDR. По умолчанию защита выключена; при публичном доступе ограничьте endpoint на уровне reverse-proxy или сети.
+Опциональная защита `/metrics` по bearer-токену (`X-Metrics-Token`) и/или списку IP/CIDR настраивается в composition root. По умолчанию выключена; при публичном доступе ограничьте эндпоинт на уровне reverse-proxy или сети.
 
 ## Рекомендуемый production-профиль
 

@@ -1,4 +1,4 @@
-package httpapi
+package composition
 
 import (
 	"fmt"
@@ -72,7 +72,7 @@ func LoadConfigDir(dir string) (*RuntimeConfig, error) {
 
 	data, err := yaml.Marshal(merged)
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: re-encode merged config: %w", err)
+		return nil, fmt.Errorf("composition: re-encode merged config: %w", err)
 	}
 	return ParseRuntimeConfig(data)
 }
@@ -80,18 +80,18 @@ func LoadConfigDir(dir string) (*RuntimeConfig, error) {
 // loadLayer читает пару base+local и возвращает слитую map.
 // requireBase=true требует наличия базового файла (для setting); иначе
 // отсутствие базового файла — нормальная ситуация (пустая map).
-func loadLayer(dir, baseName, localName string, requireBase bool) (map[interface{}]interface{}, error) {
+func loadLayer(dir, baseName, localName string, requireBase bool) (map[any]any, error) {
 	basePath := filepath.Join(dir, baseName)
 	baseData, err := os.ReadFile(basePath)
 	if err != nil {
 		if os.IsNotExist(err) && !requireBase {
-			return map[interface{}]interface{}{}, nil
+			return map[any]any{}, nil
 		}
-		return nil, fmt.Errorf("httpapi: read base config %s: %w", basePath, err)
+		return nil, fmt.Errorf("composition: read base config %s: %w", basePath, err)
 	}
 	baseMap, err := yamlToMap(baseData)
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: parse base config %s: %w", basePath, err)
+		return nil, fmt.Errorf("composition: parse base config %s: %w", basePath, err)
 	}
 
 	// Опциональный local-конфиг. Если файла нет — используем base как есть.
@@ -99,20 +99,20 @@ func loadLayer(dir, baseName, localName string, requireBase bool) (map[interface
 	localData, err := os.ReadFile(localPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("httpapi: read local config %s: %w", localPath, err)
+			return nil, fmt.Errorf("composition: read local config %s: %w", localPath, err)
 		}
 		return baseMap, nil
 	}
 	localMap, lerr := yamlToMap(localData)
 	if lerr != nil {
-		return nil, fmt.Errorf("httpapi: parse local config %s: %w", localPath, lerr)
+		return nil, fmt.Errorf("composition: parse local config %s: %w", localPath, lerr)
 	}
 	return deepMerge(baseMap, localMap), nil
 }
 
 // checkLayerVersion проверяет, что ключ version в опциональном слое (если
 // присутствует) равен "1". Отсутствие ключа — нормальная ситуация.
-func checkLayerVersion(layer map[interface{}]interface{}, file string) error {
+func checkLayerVersion(layer map[any]any, file string) error {
 	v, ok := layer["version"]
 	if !ok {
 		return nil
@@ -120,16 +120,16 @@ func checkLayerVersion(layer map[interface{}]interface{}, file string) error {
 	if s, ok := v.(string); ok && s == "1" {
 		return nil
 	}
-	return fmt.Errorf("httpapi: %s: unsupported version %v (only \"1\" allowed)", file, v)
+	return fmt.Errorf("composition: %s: unsupported version %v (only \"1\" allowed)", file, v)
 }
 
 // mergeLayers объединяет три слоя в порядке setting → generate → failback
 // (более специализированный слой выигрывает при конфликте скаляров). При
 // совпадении top-level ключа в нескольких базовых файлах в лог пишется warning
 // с перечнем конфликтующих файлов.
-func mergeLayers(setting, generate, failback map[interface{}]interface{}) map[interface{}]interface{} {
+func mergeLayers(setting, generate, failback map[any]any) map[any]any {
 	// Собираем, какие базовые файлы содержат каждый top-level ключ.
-	owners := map[interface{}][]string{}
+	owners := map[any][]string{}
 	for k := range setting {
 		owners[k] = append(owners[k], BaseConfigFile)
 	}
@@ -151,16 +151,16 @@ func mergeLayers(setting, generate, failback map[interface{}]interface{}) map[in
 
 // yamlToMap десериализует YAML-документ в map. Пустой документ допустим и
 // даёт пустую map (все умолчания применяются при typed decode).
-func yamlToMap(data []byte) (map[interface{}]interface{}, error) {
-	var m map[interface{}]interface{}
+func yamlToMap(data []byte) (map[any]any, error) {
+	var m map[any]any
 	if len(data) == 0 {
-		return map[interface{}]interface{}{}, nil
+		return map[any]any{}, nil
 	}
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
 	if m == nil {
-		return map[interface{}]interface{}{}, nil
+		return map[any]any{}, nil
 	}
 	return m, nil
 }
@@ -172,15 +172,15 @@ func yamlToMap(data []byte) (map[interface{}]interface{}, error) {
 //
 // Списки заменяются целиком, а не мержатся — это контракт для конфигурации
 // (например allowed-origins или disabled-coders нельзя "дополнить" в local).
-func deepMerge(base, override map[interface{}]interface{}) map[interface{}]interface{} {
+func deepMerge(base, override map[any]any) map[any]any {
 	for k, ov := range override {
 		bv, ok := base[k]
 		if !ok {
 			base[k] = ov
 			continue
 		}
-		bm, okB := bv.(map[interface{}]interface{})
-		om, okO := ov.(map[interface{}]interface{})
+		bm, okB := bv.(map[any]any)
+		om, okO := ov.(map[any]any)
 		if okB && okO {
 			base[k] = deepMerge(bm, om)
 			continue

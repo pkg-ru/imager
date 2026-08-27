@@ -29,8 +29,8 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // Options — параметры HTTP/HTTPS source-адаптера.
@@ -46,37 +46,14 @@ type Options struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	// Если nil, буферы работают только через память без spill.
 	Pool *remote.BufferPool
-	// DialTimeout — таймаут установки TCP-соединения (0 = 30s).
-	DialTimeout time.Duration
-	// ReadTimeout — таймаут чтения ответа (0 = 60s).
-	ReadTimeout time.Duration
-	// MaxAttempts — максимальное число попыток запроса (0 = 3).
-	MaxAttempts int
-	// MaxIdleConns — максимальное число idle-соединений в пуле (0 = 100).
-	MaxIdleConns int
-	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
-	// (0 = 10).
-	MaxIdleConnsPerHost int
-	// IdleConnTimeout — таймаут idle-соединений (0 = 90s).
-	IdleConnTimeout time.Duration
+	// ConnOptions — общие параметры соединения: DialTimeout, ReadTimeout,
+	// MaxAttempts, MaxIdleConns, MaxIdleConnsPerHost, IdleConnTimeout.
+	// Дефолты — remote.Default* (единый источник с S3-клиентом).
+	remote.ConnOptions
 	// Client — опциональный HTTP-клиент (для тестов). Если задан,
 	// все настройки пула/таймаутов игнорируются.
 	Client *http.Client
 }
-
-// Умолчания для HTTP-клиента (согласованы с S3-клиентом).
-const (
-	defaultDialTimeout      = 30 * time.Second
-	defaultReadTimeout      = 60 * time.Second
-	defaultMaxAttempts      = 3
-	defaultMaxIdleConns     = 100
-	defaultMaxIdleConnsHost = 10
-	defaultIdleConnTimeout  = 90 * time.Second
-	defaultKeepAlive        = 30 * time.Second
-	defaultTLSHandshake     = 10 * time.Second
-	defaultExpectContinue   = 1 * time.Second
-	defaultMaxConnsPerHost  = 2048
-)
 
 func (o Options) validate() error {
 	if o.BaseURL == "" {
@@ -122,52 +99,27 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 	} else {
 		baseDir += "/"
 	}
-	maxAttempts := opts.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = defaultMaxAttempts
-	}
 	client := opts.Client
 	if client == nil {
-		dialTimeout := opts.DialTimeout
-		if dialTimeout <= 0 {
-			dialTimeout = defaultDialTimeout
-		}
-		readTimeout := opts.ReadTimeout
-		if readTimeout <= 0 {
-			readTimeout = defaultReadTimeout
-		}
-		maxIdleConns := opts.MaxIdleConns
-		if maxIdleConns <= 0 {
-			maxIdleConns = defaultMaxIdleConns
-		}
-		maxIdleConnsPerHost := opts.MaxIdleConnsPerHost
-		if maxIdleConnsPerHost <= 0 {
-			maxIdleConnsPerHost = defaultMaxIdleConnsHost
-		}
-		idleConnTimeout := opts.IdleConnTimeout
-		if idleConnTimeout <= 0 {
-			idleConnTimeout = defaultIdleConnTimeout
-		}
-
 		dialer := &net.Dialer{
-			Timeout:   dialTimeout,
-			KeepAlive: defaultKeepAlive,
+			Timeout:   opts.DialTimeoutOrDefault(),
+			KeepAlive: remote.DefaultKeepAlive,
 			DualStack: true,
 		}
 		transport := &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,
 			DialContext:           dialer.DialContext,
-			MaxIdleConns:          maxIdleConns,
-			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-			MaxConnsPerHost:       defaultMaxConnsPerHost,
-			IdleConnTimeout:       idleConnTimeout,
-			TLSHandshakeTimeout:   defaultTLSHandshake,
-			ExpectContinueTimeout: defaultExpectContinue,
+			MaxIdleConns:          opts.MaxIdleConnsOrDefault(),
+			MaxIdleConnsPerHost:   opts.MaxIdleConnsPerHostOrDefault(),
+			MaxConnsPerHost:       remote.DefaultMaxConnsPerHost,
+			IdleConnTimeout:       opts.IdleConnTimeoutOrDefault(),
+			TLSHandshakeTimeout:   remote.DefaultTLSHandshake,
+			ExpectContinueTimeout: remote.DefaultExpectContinue,
 			ForceAttemptHTTP2:     true,
 		}
 		client = &http.Client{
 			Transport: transport,
-			Timeout:   readTimeout,
+			Timeout:   opts.ReadTimeoutOrDefault(),
 			// Redirects запрещены: возвращаем сам ответ 3xx, чтобы
 			// обработать его как недоступность.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -175,7 +127,13 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 			},
 		}
 	}
-	return &SourceStore{base: base, baseDir: baseDir, opts: opts, client: client, maxAttempts: maxAttempts}, nil
+	return &SourceStore{
+		base:        base,
+		baseDir:     baseDir,
+		opts:        opts,
+		client:      client,
+		maxAttempts: opts.MaxAttemptsOrDefault(),
+	}, nil
 }
 
 // do выполняет HTTP-запрос с ограниченным числом попыток (retry) при

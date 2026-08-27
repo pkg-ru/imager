@@ -18,11 +18,11 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/pkg-ru/imager/adapters/httpapi"
 	"github.com/pkg-ru/imager/adapters/processor/detection"
 	"github.com/pkg-ru/imager/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/adapters/processor/routing"
+	"github.com/pkg-ru/imager/composition"
 	"github.com/pkg-ru/imager/domain/processing"
 	"github.com/pkg-ru/imager/observability"
 	"github.com/pkg-ru/imager/ports/detector"
@@ -59,7 +59,7 @@ type ProcessorBuild struct {
 //
 // Возвращает процессор, реализующий processor.Processor и Close, закрывающий
 // все созданные движки, а также детектор для sidecar-кэша моделей.
-func BuildProcessor(logger Logger, rc *httpapi.RuntimeConfig) (*ProcessorBuild, error) {
+func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBuild, error) {
 	var closers []io.Closer
 
 	// Детектор лиц/объектов (face-crop/object-crop). Создаётся всегда из

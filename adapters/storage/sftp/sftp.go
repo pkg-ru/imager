@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -64,20 +64,11 @@ type Options struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	// Если nil, буферы работают только через память без spill.
 	Pool *remote.BufferPool
-	// DialTimeout — таймаут установки SSH-соединения.
-	DialTimeout time.Duration
-	// ReadTimeout — таймаут операции (0 = без ограничения).
-	ReadTimeout time.Duration
-	// MaxAttempts — максимальное число попыток операции (0 = 1).
-	MaxAttempts int
-	// MaxIdleConns — максимальное число idle-соединений в пуле
-	// (0 = не держать соединение между операциями).
-	MaxIdleConns int
-	// MaxConns — максимальное число одновременных соединений в пуле
-	// (0 = 2). Позволяет конкурентным операциям работать параллельно.
-	MaxConns int
-	// IdleConnTimeout — таймаут idle-соединений (0 = без ограничения).
-	IdleConnTimeout time.Duration
+	// ConnOptions — общие параметры соединения: DialTimeout, ReadTimeout,
+	// MaxAttempts, MaxConns, MaxIdleConns, MaxIdleConnsPerHost,
+	// IdleConnTimeout. Раньше эти поля дублировались в Options каждого
+	// адаптера; теперь единый тип из remote.
+	remote.ConnOptions
 	// HostKeyFingerprint — ожидаемый SHA-256 fingerprint host key
 	// (например "SHA256:..."). Пусто = InsecureIgnoreHostKey (небезопасно).
 	HostKeyFingerprint string
@@ -138,7 +129,7 @@ func (o Options) dial() (client, error) {
 // hostKeyCallback возвращает callback проверки host key. Если задан
 // HostKeyFingerprint (SHA256:...), проверяется точное совпадение. Иначе
 // используется InsecureIgnoreHostKey — это небезопасно и должно быть
-// заменено на fingerprint в production (см. docs/PRODUCTION.md).
+// заменено на fingerprint в production (см. docs/DEPLOYMENT.md).
 func (o Options) hostKeyCallback() (ssh.HostKeyCallback, error) {
 	if o.HostKeyFingerprint == "" {
 		return ssh.InsecureIgnoreHostKey(), nil
@@ -200,25 +191,6 @@ func (o Options) statWithClient(ctx context.Context, key object.ObjectKey, cl cl
 	}, nil
 }
 
-// isClientErr отличает ошибки соединения (требуют discard и повторной
-// попытки) от бизнес-ошибок; общая логика вынесена в remote.IsConnErr.
-// Ошибки соединения — сырые SSH/IO, бизнес-ошибки мапятся через
-// MapError/NotFound.
-func isClientErr(err error) bool {
-	return remote.IsConnErr(err)
-}
-
-// attempts возвращает число попыток операции (>= 1).
-func (o Options) attempts() int {
-	return remote.Attempts(o.MaxAttempts)
-}
-
-// withTimeout оборачивает ctx таймаутом операции, если задан ReadTimeout.
-// Возвращает cancel-функцию, которую вызывающий обязан вызвать (defer cancel()).
-func (o Options) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	return remote.WithOpTimeout(ctx, o.ReadTimeout)
-}
-
 // SourceStore — SFTP-реализация storage.SourceStore (read-only).
 type SourceStore struct {
 	store
@@ -243,7 +215,7 @@ func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 			return meta, nil, nil
 		case os.IsNotExist(err):
 			return object.ObjectMetadata{}, nil, remote.NotFound(key)
-		case !isClientErr(err):
+		case !remote.IsConnErr(err):
 			return object.ObjectMetadata{}, nil, remote.MapError("sftp stat", err)
 		default:
 			return object.ObjectMetadata{}, err, remote.MapError("sftp stat", err)
@@ -333,7 +305,7 @@ func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 			return meta, nil, nil
 		case os.IsNotExist(err):
 			return object.ObjectMetadata{}, nil, remote.NotFound(key)
-		case !isClientErr(err):
+		case !remote.IsConnErr(err):
 			return object.ObjectMetadata{}, nil, remote.MapError("sftp stat", err)
 		default:
 			return object.ObjectMetadata{}, err, remote.MapError("sftp stat", err)
@@ -376,18 +348,21 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 			_ = f.Close()
 			return nil, nil, remote.NotFound(key)
 		}
+		// Соединение должно жить до закрытия потока: передаём владение
+		// (каркас не выполнит discard после успешного возврата).
+		cl.keepAlive()
 		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
-		// f закрывается через Stream.Close; соединение возвращается в пул
-		// после закрытия потока (cl.discard вызывается в Close).
-		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, client: cl}, meta), nil, nil
+		// f закрывается через Stream.Close; соединение освобождается
+		// после закрытия потока (session.Discard вызывается в Close).
+		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, session: cl.session}, meta), nil, nil
 	})
 }
 
 // sftpStreamCloser закрывает поток и сбрасывает соединение пула.
 type sftpStreamCloser struct {
-	f      io.Closer
-	client *pooledClient
-	once   bool
+	f       io.Closer
+	session *remote.Session[client]
+	once    bool
 }
 
 func (c *sftpStreamCloser) Close() error {
@@ -396,7 +371,7 @@ func (c *sftpStreamCloser) Close() error {
 	}
 	c.once = true
 	err := c.f.Close()
-	c.client.discard()
+	c.session.Discard()
 	return err
 }
 
@@ -405,14 +380,14 @@ func (c *sftpStreamCloser) Close() error {
 // Особенность метода: внутренние ошибки (dial/mkdir/create/write/close/
 // rename temp) не ретраятся — операция выполняется ровно одной попыткой
 // и возвращает ошибку сразу. Это выражено через общий каркас
-// withRetryPolicy с политикой neverRetry; работа с src-ридером и очистка
-// temp-файлов выполняются внутри одиночной попытки (publishAttempt).
+// withRetryPolicy с политикой remote.NeverRetry; работа с src-ридером и
+// очистка temp-файлов выполняются внутри одиночной попытки (publishAttempt).
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
 	full, err := r.opts.key(key)
 	if err != nil {
 		return err
 	}
-	_, err = withRetryPolicy(ctx, &r.store, neverRetry, func(cl *pooledClient) (struct{}, error, error) {
+	_, err = withRetryPolicy(ctx, &r.store, remote.NeverRetry, func(cl *pooledClient) (struct{}, error, error) {
 		return struct{}{}, nil, r.publishAttempt(full, key, src, opts, cl)
 	})
 	return err
@@ -433,8 +408,6 @@ func (r *ResultStore) publishAttempt(full string, key object.ObjectKey, src io.R
 		dst, err := cl.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
 			if isExistErr(err) {
-				// Бизнес-отказ не закрывает соединение каркасом.
-				cl.detach()
 				return remote.Conflict(key)
 			}
 			return remote.MapError("sftp create target", err)
@@ -492,7 +465,7 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 		case os.IsNotExist(err):
 			// Идемпотентность: объекта уже нет.
 			return struct{}{}, nil, nil
-		case !isClientErr(err):
+		case !remote.IsConnErr(err):
 			return struct{}{}, nil, remote.MapError("sftp remove", err)
 		default:
 			return struct{}{}, err, remote.MapError("sftp remove", err)
@@ -524,7 +497,7 @@ func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKe
 			case os.IsNotExist(err):
 				// Каталог уже удалён — идемпотентно.
 				return n, nil, nil
-			case !isClientErr(err):
+			case !remote.IsConnErr(err):
 				return n, nil, remote.MapError("sftp delete by prefix", err)
 			default:
 				return n, err, remote.MapError("sftp delete by prefix", err)

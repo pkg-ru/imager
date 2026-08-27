@@ -4,23 +4,22 @@ import (
 	"context"
 	"errors"
 	"io"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/ports/coordinator"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/ports/coordinator"
 )
 
 // testEnv — окружение для тестов.
 type testEnv struct {
 	svc   *Service
-	src   *memSourceStore
-	res   *memResultStore
+	src   *testutil.MemSourceStore
+	res   *testutil.MemResultStore
 	proc  *fakeProcessor
 	coord coordinator.Keyed
 }
@@ -29,8 +28,8 @@ type testEnv struct {
 func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 	t.Helper()
 
-	src := newMemSourceStore()
-	res := newMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	proc := newFakeProcessor([]byte("IMG"))
 	coord := singleflight.New(singleflight.Options{})
 
@@ -56,7 +55,7 @@ func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 		Presets:     presets,
 		OutputLimit: 0,
 		Quality:     85,
-		Logger:      fakeLogger{},
+		Logger:      testutil.NopLogger{},
 	}
 	for _, o := range opts {
 		o(&deps)
@@ -155,7 +154,7 @@ func mustReq(t *testing.T, path, srcName, srcFmt string, tr asset.Transform, siz
 
 func TestGenerateCacheMissThenHit(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
@@ -197,7 +196,7 @@ func TestGenerateCacheMissThenHit(t *testing.T) {
 
 func TestGeneratePresetResolves(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photos/photo.png", []byte("SRC"))
+	env.src.Add("photos/photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	// Preset-запрос: photos/photo-png/thumb@2.webp
@@ -227,7 +226,7 @@ func TestGeneratePresetResolves(t *testing.T) {
 // ключ ResultStore/кэша) равен каноническому URL, а не SHA-256 хешу.
 func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photos/photo.png", []byte("SRC"))
+	env.src.Add("photos/photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	// Preset-запрос: photos/photo-png/thumb@2.webp раскрывается в
@@ -300,82 +299,9 @@ func TestGenerateNotFound(t *testing.T) {
 	wantOutcome(t, err, OutcomeNotFound)
 }
 
-func TestGenerateConcurrentSameKeyDedup(t *testing.T) {
-	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
-
-	// Блокируем процессор, чтобы оба запроса попали в singleflight.
-	block := make(chan struct{})
-	env.proc.setBlock(block)
-
-	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
-
-	const n = 8
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	results := make([]*Result, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			results[i], errs[i] = env.svc.Generate(ctx, req)
-		}(i)
-	}
-
-	// Ждём, пока все запросы войдут в singleflight.
-	time.Sleep(50 * time.Millisecond)
-	close(block)
-	wg.Wait()
-
-	for i := 0; i < n; i++ {
-		if errs[i] != nil {
-			t.Fatalf("Generate[%d]: %v", i, errs[i])
-		}
-		if results[i] == nil {
-			t.Fatalf("Generate[%d]: nil result", i)
-		}
-		results[i].Close()
-	}
-	if env.proc.callCount() != 1 {
-		t.Fatalf("processor calls = %d, want 1 (dedup)", env.proc.callCount())
-	}
-}
-
-func TestGenerateCanceled(t *testing.T) {
-	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
-
-	block := make(chan struct{})
-	env.proc.setBlock(block)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := env.svc.Generate(ctx, req)
-		done <- err
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	close(block)
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected canceled error")
-		}
-		wantOutcome(t, err, OutcomeCanceled)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Generate did not return after cancel")
-	}
-}
-
 func TestGenerateProcessorError(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 	env.proc.setErr(errors.New("boom"))
 
 	ctx := context.Background()
@@ -391,7 +317,7 @@ func TestGenerateProcessorError(t *testing.T) {
 // (ErrTooManyConcurrency) маппится в OutcomeOverloaded, а не OutcomeProcessing.
 func TestGenerateProcessorOverloaded(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 	env.proc.setErr(errors.New("libvips: too many concurrent requests waiting for a slot"))
 
 	ctx := context.Background()
@@ -405,8 +331,8 @@ func TestGenerateProcessorOverloaded(t *testing.T) {
 
 func TestGeneratePublishError(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
-	env.res.pubErr = object.ErrUnavailable
+	env.src.Add("photo.png", []byte("SRC"))
+	env.res.SetPubErr(object.ErrUnavailable)
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
@@ -421,7 +347,7 @@ func TestGenerateOutputLimit(t *testing.T) {
 	env := newTestEnv(t, func(d *Deps) {
 		d.OutputLimit = 2 // payload "IMG" = 3 байта > 2
 	})
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
@@ -434,8 +360,8 @@ func TestGenerateOutputLimit(t *testing.T) {
 
 func TestGenerateQuotaOnPublish(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
-	env.res.pubErr = object.ErrQuota
+	env.src.Add("photo.png", []byte("SRC"))
+	env.res.SetPubErr(object.ErrQuota)
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
@@ -448,7 +374,7 @@ func TestGenerateQuotaOnPublish(t *testing.T) {
 
 func TestGenerateInvalidPlan(t *testing.T) {
 	env := newTestEnv(t)
-	env.src.add("photo.png", []byte("SRC"))
+	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
 	// Неподдерживаемый выходной формат → invalid.

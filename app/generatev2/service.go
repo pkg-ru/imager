@@ -15,9 +15,11 @@ import (
 	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/domain/processing"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/bounded"
 	"github.com/pkg-ru/imager/ports/buffer"
 	"github.com/pkg-ru/imager/ports/coordinator"
 	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/generation"
 	"github.com/pkg-ru/imager/ports/metadata"
 	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/ports/storage"
@@ -26,9 +28,6 @@ import (
 
 // Logger — единый интерфейс логирования из observability.
 type Logger = observability.Logger
-
-// errOutputLimit — сигнал превышения лимита размера выходного файла.
-var errOutputLimit = errors.New("output exceeds limit")
 
 // errLimitExceeded — сигнал превышения лимита политики (C1).
 var errLimitExceeded = errors.New("policy limit exceeded")
@@ -154,28 +153,8 @@ func New(d Deps) (*Service, error) {
 	return &Service{deps: d, log: log, metrics: metrics}, nil
 }
 
-// Result — типизированный результат генерации ассета.
-type Result struct {
-	// Key — канонический cache key (canonical URL), под которым ассет
-	// опубликован.
-	Key object.ObjectKey
-	// URL — каноническая форма URL (без ведущего "/").
-	URL string
-	// Request — конечный канонический запрос (уже с разрешённым preset).
-	Request *asset.Request
-	// Opened — готовый к чтению поток ассета (для отдачи клиенту).
-	Opened object.Stream
-	// FromCache — true, если ассет уже существовал и генерация не выполнялась.
-	FromCache bool
-}
-
-// Close закрывает Opened, если он есть.
-func (r *Result) Close() error {
-	if r != nil && r.Opened != nil {
-		return r.Opened.Close()
-	}
-	return nil
-}
+// Result — типизированный результат генерации ассета (порт ports/generation).
+type Result = generation.Result
 
 // Generate выполняет полный конвейер генерации ассета из уже parsed/validated
 // запроса req.
@@ -654,7 +633,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		s.metrics.IncProcessorError()
 		s.metrics.ObserveProcessorDuration(time.Since(procStart))
 		_ = buf.Close()
-		return nil, outcome(OutcomeQuota, "output exceeds limit", errOutputLimit)
+		return nil, outcome(OutcomeQuota, "output exceeds limit", bounded.ErrOutputLimitExceeded)
 	}
 	s.metrics.IncProcessorSuccess()
 	s.metrics.ObserveProcessorDuration(time.Since(procStart))
@@ -731,15 +710,13 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 	defer reader.Close()
 
 	var r io.Reader = reader
+	var br *bounded.BoundedReader
 	if s.deps.OutputLimit > 0 {
-		r = &boundedReader{r: reader, max: s.deps.OutputLimit}
+		br = bounded.NewBoundedReader(reader, s.deps.OutputLimit)
+		r = br
 	}
 
 	var lastErr error
-	var br *boundedReader
-	if limiter, ok := r.(*boundedReader); ok {
-		br = limiter
-	}
 	for attempt := range publishRetryAttempts {
 		if attempt > 0 {
 			delay := publishRetryBase << (attempt - 1)
@@ -761,7 +738,7 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 			return err
 		}
 		if br != nil {
-			br.reset()
+			br.Reset()
 		}
 		lastErr = s.deps.Results.Publish(ctx, key, r, object.PublishOptions{})
 		if lastErr == nil {
@@ -776,48 +753,6 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 		}
 	}
 	return lastErr
-}
-
-// boundedReader ограничивает чтение max байт и сигнализирует о превышении
-// через errOutputLimit. Лимит проверяется ДО передачи данных дальше: лишний
-// байт не читается в p и не передаётся в Publish, поэтому при превышении
-// в remote не попадает битый объект.
-//
-// Граничный случай: вывод ровно max байт допустим. Когда прочитано ровно
-// max, выполняется пробное чтение одного байта: если данных больше нет —
-// возвращается io.EOF (публикация успешна), если есть — errOutputLimit.
-type boundedReader struct {
-	r     io.Reader
-	max   int64
-	read  int64
-	probe [1]byte
-}
-
-func (b *boundedReader) Read(p []byte) (int, error) {
-	if b.read >= b.max {
-		// Достигнут лимит. Пробуем прочитать один байт вне p, чтобы
-		// отличить «ровно max» (EOF) от «больше max» (ошибка).
-		n, err := b.r.Read(b.probe[:])
-		if n > 0 {
-			return 0, errOutputLimit
-		}
-		if err != nil {
-			return 0, err // io.EOF, если данных больше нет
-		}
-		return 0, errOutputLimit
-	}
-	if int64(len(p)) > b.max-b.read {
-		p = p[:b.max-b.read]
-	}
-	n, err := b.r.Read(p)
-	b.read += int64(n)
-	return n, err
-}
-
-// reset сбрасывает счётчик прочитанных байт перед повторной попыткой
-// публикации (после Seek(0) базового reader'а).
-func (b *boundedReader) reset() {
-	b.read = 0
 }
 
 // mapResultError маппит ошибку ResultStore в типизированный OutcomeError.

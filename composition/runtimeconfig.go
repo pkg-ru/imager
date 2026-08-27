@@ -1,4 +1,4 @@
-package httpapi
+package composition
 
 import (
 	"fmt"
@@ -8,19 +8,16 @@ import (
 	"github.com/pkg-ru/dynamic"
 	"gopkg.in/yaml.v2"
 
+	"github.com/pkg-ru/imager/adapters/httpapi"
 	"github.com/pkg-ru/imager/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/adapters/processor/libvips"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/config"
 )
 
 // DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 // по умолчанию (500 МБ).
 const DefaultBufferMaxBytes int64 = 500 * 1024 * 1024
-
-// DefaultMaxBodyBytes — жёсткий лимит тела запроса по умолчанию (4 KiB).
-// Сервис не принимает тела запросов, поэтому лимит мал (защита от slow-body
-// / DoS). Настраивается через server.max-body-bytes.
-const DefaultMaxBodyBytes = 4 * 1024
 
 // RuntimeConfig — единый typed runtime-конфиг всего приложения.
 //
@@ -32,14 +29,14 @@ type RuntimeConfig struct {
 	// Pipeline — typed конфигурация конвейера (policy/processing).
 	Pipeline *config.Config
 	// HTTP — конфигурация HTTP-адаптера.
-	HTTP Config
+	HTTP httpapi.Config
 	// Server — конфигурация HTTP-сервера (адрес и таймауты).
 	Server ServerConfig
 
 	// Admin — конфигурация административных эндпоинтов. По умолчанию
 	// выключены (enabled: false). При включении регистрируются
 	// POST /admin/assets/generate и DELETE /admin/assets/delete.
-	Admin AdminConfig
+	Admin httpapi.AdminConfig
 
 	// SourceDir — каталог исходников (используется при FS source).
 	SourceDir string
@@ -83,7 +80,7 @@ type RuntimeConfig struct {
 // ServerConfig — конфигурация HTTP-сервера.
 //
 // Нулевое значение таймаута означает "использовать умолчание runtime"
-// (см. defaultTimeouts).
+// (см. httpapi.defaultTimeouts).
 type ServerConfig struct {
 	// Addr — адрес прослушивания (TCP), например ":8080".
 	Addr string
@@ -285,7 +282,7 @@ type StorageYAML struct {
 	TLSVerify dynamic.Nullable[dynamic.Bool] `yaml:"tls-verify"`
 	// HostKeyFingerprint — ожидаемый SHA-256 fingerprint SFTP host key.
 	// Пример: "SHA256:abcdef...". Пусто = фундаментально небезопасно
-	// (см. docs/PRODUCTION.md); рекомендуется задавать всегда.
+	// (см. docs/DEPLOYMENT.md); рекомендуется задавать всегда.
 	HostKeyFingerprint dynamic.String `yaml:"host-key-fingerprint"`
 	// SpoolDir — каталог временных spool.
 	SpoolDir dynamic.String `yaml:"spool-dir"`
@@ -617,7 +614,7 @@ type NotFoundYAML struct {
 func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	var raw RuntimeConfigFile
 	if err := yaml.UnmarshalStrict(data, &raw); err != nil {
-		return nil, fmt.Errorf("httpapi: decode yaml: %w", err)
+		return nil, fmt.Errorf("composition: decode yaml: %w", err)
 	}
 
 	// Собираем config.Config из сырых секций.
@@ -628,30 +625,30 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			continue // пустой path отклонится в config.Validate
 		}
 		if _, err := os.Stat(w.Path.Unwrap()); err != nil {
-			return nil, fmt.Errorf("httpapi: watermarks[%d] (%s): %w", i, w.Name.Unwrap(), err)
+			return nil, fmt.Errorf("composition: watermarks[%d] (%s): %w", i, w.Name.Unwrap(), err)
 		}
 	}
 	if raw.Policy != nil {
 		pol, err := yaml.Marshal(raw.Policy)
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: re-encode policy: %w", err)
+			return nil, fmt.Errorf("composition: re-encode policy: %w", err)
 		}
 		if err := yaml.Unmarshal(pol, &cfg.Policy); err != nil {
-			return nil, fmt.Errorf("httpapi: decode policy: %w", err)
+			return nil, fmt.Errorf("composition: decode policy: %w", err)
 		}
 	}
 	if raw.Processing != nil {
 		proc, err := yaml.Marshal(raw.Processing)
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: re-encode processing: %w", err)
+			return nil, fmt.Errorf("composition: re-encode processing: %w", err)
 		}
 		if err := yaml.Unmarshal(proc, &cfg.Processing); err != nil {
-			return nil, fmt.Errorf("httpapi: decode processing: %w", err)
+			return nil, fmt.Errorf("composition: decode processing: %w", err)
 		}
 	}
 	cfg.Normalize() // пустая version → SupportedVersion (унифицировано с Validate)
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("httpapi: config: %w", err)
+		return nil, fmt.Errorf("composition: config: %w", err)
 	}
 
 	// HTTP-адаптер.
@@ -659,7 +656,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	for _, o := range raw.HTTP.AllowedOrigins {
 		allowedOrigins = append(allowedOrigins, o.Unwrap())
 	}
-	httpCfg := Config{
+	httpCfg := httpapi.Config{
 		AllowedOrigins:        allowedOrigins,
 		AllowCredentials:      raw.HTTP.AllowCredentials.Unwrap(),
 		CacheControl:          raw.HTTP.CacheControl.Unwrap(),
@@ -668,18 +665,18 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		CSP:                   raw.HTTP.CSP.Unwrap(),
 		MaxURLLen:             int(raw.HTTP.MaxURLLen.Unwrap()),
 		MaxConcurrentRequests: int(raw.HTTP.MaxConcurrentRequests.Unwrap()),
-		NotFound: NotFoundConfig{
+		NotFound: httpapi.NotFoundConfig{
 			Pixel:    raw.HTTP.NotFound.Pixel.Unwrap(),
 			Image:    raw.HTTP.NotFound.Image.Unwrap(),
 			Page:     raw.HTTP.NotFound.Page.Unwrap(),
 			Redirect: raw.HTTP.NotFound.Redirect.Unwrap(),
 		},
-		SourceFallback: SourceFallbackConfig{
+		SourceFallback: httpapi.SourceFallbackConfig{
 			Enabled:      raw.HTTP.SourceFallback.Enabled.Unwrap(),
 			Status:       int(raw.HTTP.SourceFallback.Status.Unwrap()),
 			CacheControl: raw.HTTP.SourceFallback.CacheControl.Unwrap(),
 		},
-		Admin: AdminConfig{
+		Admin: httpapi.AdminConfig{
 			Enabled:   raw.Admin.Enabled.Unwrap(),
 			Token:     raw.Admin.Token.Unwrap(),
 			Workers:   int(raw.Admin.Workers.Unwrap()),
@@ -690,10 +687,10 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	if raw.Admin.WaitTimeout.Unwrap() != "" {
 		d, err := time.ParseDuration(raw.Admin.WaitTimeout.Unwrap())
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: admin.wait-timeout: %w", err)
+			return nil, fmt.Errorf("composition: admin.wait-timeout: %w", err)
 		}
 		if d < 0 {
-			return nil, fmt.Errorf("httpapi: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout.Unwrap())
+			return nil, fmt.Errorf("composition: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout.Unwrap())
 		}
 		httpCfg.Admin.WaitTimeout = d
 	}
@@ -702,10 +699,10 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	if raw.Observability.AssetErrors.Enabled.Set {
 		assetErrorsEnabled = raw.Observability.AssetErrors.Enabled.Value.Unwrap()
 	}
-	httpCfg.AssetErrors = AssetErrorConfig{
+	httpCfg.AssetErrors = httpapi.AssetErrorConfig{
 		Enabled:  assetErrorsEnabled,
 		LogLevel: raw.Observability.AssetErrors.LogLevel.Unwrap(),
-		TopPaths: TopPathsConfig{
+		TopPaths: httpapi.TopPathsConfig{
 			Enabled:    raw.Observability.AssetErrors.TopPaths.Enabled.Unwrap(),
 			MaxEntries: int(raw.Observability.AssetErrors.TopPaths.MaxEntries.Unwrap()),
 			ReportTop:  int(raw.Observability.AssetErrors.TopPaths.ReportTop.Unwrap()),
@@ -715,26 +712,26 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	if raw.HTTP.GenerateTimeout.Unwrap() != "" {
 		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout.Unwrap())
 		if err != nil {
-			return nil, fmt.Errorf("httpapi: http.generate-timeout: %w", err)
+			return nil, fmt.Errorf("composition: http.generate-timeout: %w", err)
 		}
 		if d < 0 {
-			return nil, fmt.Errorf("httpapi: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout.Unwrap())
+			return nil, fmt.Errorf("composition: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout.Unwrap())
 		}
 		httpCfg.GenerateTimeout = d
 	}
-	httpCfg.normalize() // применяем умолчания (статус 404, cache-control и т.д.)
+	httpCfg.Normalize() // применяем умолчания (статус 404, cache-control и т.д.)
 	if err := httpCfg.Validate(); err != nil {
-		return nil, fmt.Errorf("httpapi: http: %w", err)
+		return nil, fmt.Errorf("composition: http: %w", err)
 	}
 
 	// Хранилища.
 	source, err := raw.Source.toRemoteStorageConfig()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: source: %w", err)
+		return nil, fmt.Errorf("composition: source: %w", err)
 	}
 	result, err := raw.Result.toRemoteStorageConfig()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: result: %w", err)
+		return nil, fmt.Errorf("composition: result: %w", err)
 	}
 	if err := validateStorageConfig(source, "source"); err != nil {
 		return nil, err
@@ -756,39 +753,39 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	// HTTP-сервер.
 	server, err := raw.Server.build()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: server: %w", err)
+		return nil, fmt.Errorf("composition: server: %w", err)
 	}
 	if server.MaxBodyBytes < 0 {
-		return nil, fmt.Errorf("httpapi: server.max-body-bytes: negative value %d", server.MaxBodyBytes)
+		return nil, fmt.Errorf("composition: server.max-body-bytes: negative value %d", server.MaxBodyBytes)
 	}
 	if server.MaxBodyBytes == 0 {
-		server.MaxBodyBytes = DefaultMaxBodyBytes
+		server.MaxBodyBytes = httpapi.DefaultMaxBodyBytes
 	}
 
 	// ImageMagick.
 	img, err := raw.ImageMagick.build()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: imagemagick: %w", err)
+		return nil, fmt.Errorf("composition: imagemagick: %w", err)
 	}
 
 	// Libvips.
 	lv, err := raw.Libvips.build()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: libvips: %w", err)
+		return nil, fmt.Errorf("composition: libvips: %w", err)
 	}
 
 	// Детектор лиц/объектов (face-crop/object-crop).
 	det, err := raw.Detection.build()
 	if err != nil {
-		return nil, fmt.Errorf("httpapi: detection: %w", err)
+		return nil, fmt.Errorf("composition: detection: %w", err)
 	}
 
 	// Прикладные лимиты.
 	if raw.Application.OutputLimit.Unwrap() < 0 {
-		return nil, fmt.Errorf("httpapi: application.output-limit: negative value %d", raw.Application.OutputLimit.Unwrap())
+		return nil, fmt.Errorf("composition: application.output-limit: negative value %d", raw.Application.OutputLimit.Unwrap())
 	}
 	if raw.Application.BufferMaxBytes.Unwrap() < 0 {
-		return nil, fmt.Errorf("httpapi: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes.Unwrap())
+		return nil, fmt.Errorf("composition: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes.Unwrap())
 	}
 	bufferMaxBytes := raw.Application.BufferMaxBytes.Unwrap()
 	if bufferMaxBytes == 0 {
@@ -866,7 +863,9 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		HostKeyFingerprint: s.HostKeyFingerprint.Unwrap(),
 		SpoolDir:           s.SpoolDir.Unwrap(),
 		SpoolMaxBytes:      s.SpoolMaxBytes.Unwrap(),
-		DialTimeout:        30 * time.Second,
+		Conn: remote.ConnOptions{
+			DialTimeout: 30 * time.Second,
+		},
 	}
 	if s.TLSVerify.Set {
 		cfg.TLSVerify = s.TLSVerify.Value.Unwrap()
@@ -879,7 +878,7 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		if d < 0 {
 			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: negative duration %q", s.DialTimeout.Unwrap())
 		}
-		cfg.DialTimeout = d
+		cfg.Conn.DialTimeout = d
 	}
 	// Общие настройки HTTP-подобных хранилищ (S3, HTTP): таймауты, retry,
 	// пул соединений, кэш метаданных. Для SFTP/FTP/FTPS применяется только
@@ -892,7 +891,7 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		if d < 0 {
 			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: negative duration %q", s.ReadTimeout.Unwrap())
 		}
-		cfg.ReadTimeout = d
+		cfg.Conn.ReadTimeout = d
 	}
 	if s.IdleConnTimeout.Unwrap() != "" {
 		d, err := time.ParseDuration(s.IdleConnTimeout.Unwrap())
@@ -902,7 +901,7 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		if d < 0 {
 			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: negative duration %q", s.IdleConnTimeout.Unwrap())
 		}
-		cfg.IdleConnTimeout = d
+		cfg.Conn.IdleConnTimeout = d
 	}
 	if s.MetadataTTL.Unwrap() != "" {
 		d, err := time.ParseDuration(s.MetadataTTL.Unwrap())
@@ -917,19 +916,19 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 	if s.MaxAttempts.Unwrap() < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("max-attempts: negative value %d", s.MaxAttempts.Unwrap())
 	}
-	cfg.MaxAttempts = int(s.MaxAttempts.Unwrap())
+	cfg.Conn.MaxAttempts = int(s.MaxAttempts.Unwrap())
 	if s.MaxIdleConns.Unwrap() < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns.Unwrap())
 	}
-	cfg.MaxIdleConns = int(s.MaxIdleConns.Unwrap())
+	cfg.Conn.MaxIdleConns = int(s.MaxIdleConns.Unwrap())
 	if s.MaxConns.Unwrap() < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("max-conns: negative value %d", s.MaxConns.Unwrap())
 	}
-	cfg.MaxConns = int(s.MaxConns.Unwrap())
+	cfg.Conn.MaxConns = int(s.MaxConns.Unwrap())
 	if s.MaxIdleConnsPerHost.Unwrap() < 0 {
 		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost.Unwrap())
 	}
-	cfg.MaxIdleConnsPerHost = int(s.MaxIdleConnsPerHost.Unwrap())
+	cfg.Conn.MaxIdleConnsPerHost = int(s.MaxIdleConnsPerHost.Unwrap())
 	if s.PrivateKeyFile.Unwrap() != "" {
 		data, err := os.ReadFile(s.PrivateKeyFile.Unwrap())
 		if err != nil {
@@ -1219,28 +1218,28 @@ func validateStorageConfig(cfg RemoteStorageConfig, role string) error {
 	switch cfg.Kind {
 	case StorageS3:
 		if cfg.Bucket == "" {
-			return fmt.Errorf("httpapi: %s storage: s3 bucket is required", role)
+			return fmt.Errorf("composition: %s storage: s3 bucket is required", role)
 		}
 		if (cfg.AccessKey == "") != (cfg.SecretKey == "") {
-			return fmt.Errorf("httpapi: %s storage: s3 access-key and secret-key must be set together", role)
+			return fmt.Errorf("composition: %s storage: s3 access-key and secret-key must be set together", role)
 		}
 	case StorageSFTP:
 		if cfg.Addr == "" || cfg.User == "" {
-			return fmt.Errorf("httpapi: %s storage: sftp addr and user are required", role)
+			return fmt.Errorf("composition: %s storage: sftp addr and user are required", role)
 		}
 		if cfg.HostKeyFingerprint == "" {
-			return fmt.Errorf("httpapi: %s storage: sftp host-key-fingerprint is required (SHA256:...)", role)
+			return fmt.Errorf("composition: %s storage: sftp host-key-fingerprint is required (SHA256:...)", role)
 		}
 	case StorageFTP, StorageFTPS:
 		if cfg.Addr == "" {
-			return fmt.Errorf("httpapi: %s storage: %s addr is required", role, cfg.Kind)
+			return fmt.Errorf("composition: %s storage: %s addr is required", role, cfg.Kind)
 		}
 		if cfg.Kind == StorageFTPS && !cfg.TLSVerify {
-			return fmt.Errorf("httpapi: %s storage: ftps tls-verify=false is forbidden; set tls-verify: true", role)
+			return fmt.Errorf("composition: %s storage: ftps tls-verify=false is forbidden; set tls-verify: true", role)
 		}
 	case StorageHTTP:
 		if cfg.BaseURL == "" {
-			return fmt.Errorf("httpapi: %s storage: http base-url is required", role)
+			return fmt.Errorf("composition: %s storage: http base-url is required", role)
 		}
 	}
 	return nil

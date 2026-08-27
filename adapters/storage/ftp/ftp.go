@@ -23,8 +23,8 @@ import (
 
 	"github.com/jlaffaye/ftp"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // conn — узкий интерфейс FTP-соединения, используемый адаптером. Выделен,
@@ -68,20 +68,11 @@ type Options struct {
 	// Pool — общий бюджет памяти процесса для spillable-буферов.
 	// Если nil, буферы работают только через память без spill.
 	Pool *remote.BufferPool
-	// DialTimeout — таймаут соединения.
-	DialTimeout time.Duration
-	// ReadTimeout — таймаут операции (0 = без ограничения).
-	ReadTimeout time.Duration
-	// MaxAttempts — максимальное число попыток операции (0 = 1).
-	MaxAttempts int
-	// MaxIdleConns — максимальное число idle-соединений в пуле
-	// (0 = не держать соединение между операциями).
-	MaxIdleConns int
-	// MaxConns — максимальное число одновременных соединений в пуле
-	// (0 = 2). Позволяет конкурентным операциям работать параллельно.
-	MaxConns int
-	// IdleConnTimeout — таймаут idle-соединений (0 = без ограничения).
-	IdleConnTimeout time.Duration
+	// ConnOptions — общие параметры соединения: DialTimeout, ReadTimeout,
+	// MaxAttempts, MaxConns, MaxIdleConns, MaxIdleConnsPerHost,
+	// IdleConnTimeout. Раньше эти поля дублировались в Options каждого
+	// адаптера; теперь единый тип из remote.
+	remote.ConnOptions
 	// Dialer — опциональный кастомный dialer (для тестов).
 	Dialer func(ctx context.Context, addr string, tls bool) (conn, error)
 }
@@ -99,31 +90,11 @@ func (o Options) validate() error {
 	return nil
 }
 
-// attempts возвращает число попыток операции (>= 1).
-func (o Options) attempts() int {
-	return remote.Attempts(o.MaxAttempts)
-}
-
-// withTimeout оборачивает ctx таймаутом операции, если задан ReadTimeout.
-// Возвращает cancel-функцию, которую вызывающий обязан вызвать (defer cancel()).
-func (o Options) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	return remote.WithOpTimeout(ctx, o.ReadTimeout)
-}
-
-// isConnErr отличает ошибки соединения (требуют discard и повторной попытки)
-// от бизнес-ошибок; общая логика вынесена в remote.IsConnErr.
-func isConnErr(err error) bool {
-	return remote.IsConnErr(err)
-}
-
 func (o Options) dial(ctx context.Context) (conn, error) {
 	if o.Dialer != nil {
 		return o.Dialer(ctx, o.Addr, o.TLS)
 	}
-	timeout := o.DialTimeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := o.DialTimeoutOrDefault()
 	opts := []ftp.DialOption{ftp.DialWithTimeout(timeout), ftp.DialWithContext(ctx)}
 	if o.TLS {
 		// FTPS: explicit TLS (AUTH TLS) поверх управляющего соединения.
@@ -347,18 +318,21 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		if err != nil {
 			return nil, err, remote.MapError("ftp retr", err)
 		}
+		// Соединение должно жить до закрытия потока: передаём владение
+		// (каркас не выполнит discard после успешного возврата).
+		c.keepAlive()
 		meta := object.ObjectMetadata{Key: key}
-		// rc закрывается через Stream.Close; соединение возвращается в пул
-		// после закрытия потока (c.discard вызывается в Close).
-		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, conn: c}, meta), nil, nil
+		// rc закрывается через Stream.Close; соединение освобождается
+		// после закрытия потока (session.Discard вызывается в Close).
+		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, session: c.session}, meta), nil, nil
 	})
 }
 
 // ftpStreamCloser закрывает поток и сбрасывает соединение пула.
 type ftpStreamCloser struct {
-	rc   io.Closer
-	conn *pooledConn
-	once bool
+	rc      io.Closer
+	session *remote.Session[conn]
+	once    bool
 }
 
 func (c *ftpStreamCloser) Close() error {
@@ -367,7 +341,7 @@ func (c *ftpStreamCloser) Close() error {
 	}
 	c.once = true
 	err := c.rc.Close()
-	c.conn.discard()
+	c.session.Discard()
 	return err
 }
 

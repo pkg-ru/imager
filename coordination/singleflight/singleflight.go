@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/ports/coordinator"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/coordinator"
 )
 
 // Ограничения по умолчанию.

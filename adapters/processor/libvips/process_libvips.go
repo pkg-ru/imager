@@ -36,6 +36,11 @@ var (
 // libvipsBackend — реальный движок обработки через govips.
 type libvipsBackend struct {
 	opts Options
+	// wmCache — in-memory кэш байтов файлов ватермарок этого движка
+	// (LRU + TTL + singleflight; см. watermarkcache.go). Привязан к
+	// экземпляру backend, поэтому несколько Processor с разными
+	// WatermarkCacheOpts не влияют друг на друга.
+	wmCache *watermarkCache
 }
 
 var _ backend = (*libvipsBackend)(nil)
@@ -53,12 +58,14 @@ func Compiled() bool { return true }
 // newLibvipsBackend создаёт движок и выполняет однократный Startup govips с
 // конфигурацией из Limits (ConcurrencyLevel, MaxCacheMem/Files/Size).
 func newLibvipsBackend(opts Options) (backend, error) {
-	// Кэш ватермарок (Фаза 3): инициализируется один раз на процесс
-	// настройками из конфигурации (идемпотентно).
-	configureWatermarkCache(opts.WatermarkCache)
+	b := &libvipsBackend{
+		opts:    opts,
+		wmCache: newWatermarkCache(opts.WatermarkCache),
+	}
 	// Vips-метрики (Фаза 4): регистрируем провайдер снимков libvips +
-	// кэша ватермарок в observability (периодический сборщик, отказоустойчивый).
-	registerVipsStatsProvider(opts.VipsMetricsInterval)
+	// кэша ватермарок этого движка в observability (периодический сборщик,
+	// отказоустойчивый). Повторное создание движка заменяет провайдер.
+	registerVipsStatsProvider(opts.VipsMetricsInterval, b.wmCache)
 	startupOnce.Do(func() {
 		// Лимиты кэша (Фаза 5b): при отключённом operation cache передаются
 		// НУЛЕВЫЕ значения. В govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша
@@ -84,7 +91,7 @@ func newLibvipsBackend(opts Options) (backend, error) {
 	if startupErr != nil {
 		return nil, fmt.Errorf("libvips: startup: %w", startupErr)
 	}
-	return &libvipsBackend{opts: opts}, nil
+	return b, nil
 }
 
 func (b *libvipsBackend) close() error {
@@ -1143,23 +1150,6 @@ func normalizeResolution(img *vips.ImageRef, targetDPI float64) (*vips.ImageRef,
 // repeat покроет холст миллионами копий).
 const maxWatermarkTiles = 4096
 
-// wmCache — глобальный in-memory кэш байтов файлов ватермарок (LRU + TTL +
-// singleflight; см. watermarkcache.go). Настройки применяются один раз при
-// создании движка через configureWatermarkCache.
-var (
-	wmCacheOnce sync.Once
-	wmCache     *watermarkCache
-)
-
-// configureWatermarkCache инициализирует глобальный кэш ватермарок настройками
-// из конфигурации. Вызывается при создании движка (newLibvipsBackend);
-// повторные вызовы идемпотентны (первая конфигурация выигрывает).
-func configureWatermarkCache(opts WatermarkCacheOpts) {
-	wmCacheOnce.Do(func() {
-		wmCache = newWatermarkCache(opts)
-	})
-}
-
 // registerVipsStatsProvider публикует провайдер vips-метрик в observability:
 // tracked memory/allocs, open files, mem highwater, operation cache hits/
 // misses (govips ReadVipsMemStats + счётчики операций) и метрики кэша
@@ -1169,7 +1159,7 @@ func configureWatermarkCache(opts WatermarkCacheOpts) {
 // Отказоустойчивость: сам провайдер не паникует (cgo-вызовы обёрнуты
 // recover'ом на стороне collector'а); до Startup значения нулевые — это
 // корректное состояние.
-func registerVipsStatsProvider(interval time.Duration) {
+func registerVipsStatsProvider(interval time.Duration, wmCache *watermarkCache) {
 	observability.SetVipsStatsProvider(func() (observability.VipsSnapshot, error) {
 		var snap observability.VipsSnapshot
 		var ms vips.MemoryStats
@@ -1196,12 +1186,13 @@ func registerVipsStatsProvider(interval time.Duration) {
 	}, interval)
 }
 
-// loadWatermark читает файл ватермарки через кэш байтов: stat файла выполняется
-// на каждый вызов (дёшево) для инвалидации по mtime/размеру; сами байты берутся
-// из памяти при попадании. При любой ошибке кэша/чтения возвращается ошибка —
-// вызывающий не должен «ломаться» молча (ватермарка обязательна для запроса),
-// но сам кэш ошибок не генерирует: промах просто означает чтение с диска.
-func loadWatermark(path string) ([]byte, error) {
+// loadWatermark читает файл ватермарки через кэш байтов этого движка:
+// stat файла выполняется на каждый вызов (дёшево) для инвалидации по
+// mtime/размеру; сами байты берутся из памяти при попадании. При любой
+// ошибке кэша/чтения возвращается ошибка — вызывающий не должен «ломаться»
+// молча (ватермарка обязательна для запроса), но сам кэш ошибок не
+// генерирует: промах просто означает чтение с диска.
+func (b *libvipsBackend) loadWatermark(path string) ([]byte, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat watermark file: %w", err)
@@ -1213,7 +1204,7 @@ func loadWatermark(path string) ([]byte, error) {
 		}
 		return data, nil
 	}
-	return wmCache.getOrLoad(path, st.ModTime(), st.Size(), loader)
+	return b.wmCache.getOrLoad(path, st.ModTime(), st.Size(), loader)
 }
 
 // applyWatermark накладывает ватермарку из плана на изображение.
@@ -1236,7 +1227,7 @@ func loadWatermark(path string) ([]byte, error) {
 // код обязан закрыть старое).
 func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	wm := plan.Watermark
-	data, err := loadWatermark(wm.Path)
+	data, err := b.loadWatermark(wm.Path)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: watermark %q: %w", wm.Name, err)
 	}

@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pkg-ru/imager/app/adminsvc"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/admin"
 )
 
 // AdminHandler — HTTP-обработчик административных эндпоинтов.
@@ -24,13 +24,13 @@ import (
 // Авторизация: Authorization: Bearer <token> через crypto/subtle.
 // Неверный/отсутствующий токен → 403 JSON (в стиле writeError).
 type AdminHandler struct {
-	svc *adminsvc.Service
+	svc admin.Service
 	cfg AdminConfig
 	log Logger
 }
 
 // NewAdminHandler создаёт AdminHandler.
-func NewAdminHandler(svc *adminsvc.Service, cfg AdminConfig, log Logger) *AdminHandler {
+func NewAdminHandler(svc admin.Service, cfg AdminConfig, log Logger) *AdminHandler {
 	if log == nil {
 		log = observability.NopLogger()
 	}
@@ -149,15 +149,15 @@ func (a *AdminHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 // mapServiceError маппит ошибку adminsvc в HTTP-ответ.
 func (a *AdminHandler) mapServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, adminsvc.ErrInvalidRequest):
+	case errors.Is(err, admin.ErrInvalidRequest):
 		a.writeError(w, r, http.StatusBadRequest, "invalid", err.Error())
-	case errors.Is(err, adminsvc.ErrSourceNotFound):
+	case errors.Is(err, admin.ErrSourceNotFound):
 		a.writeError(w, r, http.StatusNotFound, "not_found", "source not found")
-	case errors.Is(err, adminsvc.ErrQueueFull):
+	case errors.Is(err, admin.ErrQueueFull):
 		a.writeError(w, r, http.StatusServiceUnavailable, "overloaded", "queue is full")
-	case errors.Is(err, adminsvc.ErrNotImplemented):
+	case errors.Is(err, admin.ErrNotImplemented):
 		a.writeError(w, r, http.StatusNotImplemented, "not_implemented", "result store does not support listing")
-	case errors.Is(err, adminsvc.ErrWaitTimeout):
+	case errors.Is(err, admin.ErrWaitTimeout):
 		a.writeError(w, r, http.StatusGatewayTimeout, "timeout", "wait timeout")
 	default:
 		a.log.Errorf("httpapi: admin: %v", err)

@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pkg-ru/imager/ports/processor"
 	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // ErrEngineUnavailable — сигнал, что для запрошенного формата/операции нет

@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // DefaultGenerateTimeout — таймаут генерации ассета по умолчанию.
@@ -186,6 +186,11 @@ const DefaultReferrerPolicy = "no-referrer"
 // DefaultNotFoundCacheControl — Cache-Control по умолчанию для fallback.
 const DefaultNotFoundCacheControl = "no-store"
 
+// DefaultMaxBodyBytes — жёсткий лимит тела запроса по умолчанию (4 KiB).
+// Сервис не принимает тела запросов, поэтому лимит мал (защита от slow-body
+// / DoS). Настраивается через server.max-body-bytes.
+const DefaultMaxBodyBytes = 4 * 1024
+
 // Validate проверяет корректность конфигурации.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -242,6 +247,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("httpapi: admin.wait-timeout must be non-negative, got %v", c.Admin.WaitTimeout)
 	}
 	return nil
+}
+
+// Normalize применяет умолчания к конфигурации. Публичная обёртка над
+// normalize для composition root (загрузка YAML-конфигурации).
+func (c *Config) Normalize() {
+	c.normalize()
 }
 
 // normalize применяет умолчания.

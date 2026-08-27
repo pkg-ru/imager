@@ -9,6 +9,7 @@ import (
 
 	"github.com/pkg-ru/imager/app/generatev2"
 	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/observability"
 )
 
@@ -57,7 +58,7 @@ func fallbackConfig(sources *memSourceStore, status int) Config {
 
 func TestSourceFallbackParseError(t *testing.T) {
 	src := newMemSourceStore()
-	src.data["img.png"] = []byte("SOURCE")
+	src.Add(object.ObjectKey("img.png"), []byte("SOURCE"))
 	gen := newFakeGenerator()
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeNotFound, Reason: "nf"})
 
@@ -85,7 +86,7 @@ func TestSourceFallbackParseError(t *testing.T) {
 
 func TestHandlerSourceFallbackDisabled(t *testing.T) {
 	src := newMemSourceStore()
-	src.data["img.png"] = []byte("SOURCE")
+	src.Add(object.ObjectKey("img.png"), []byte("SOURCE"))
 	gen := newFakeGenerator()
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeNotFound, Reason: "nf"})
 
@@ -106,7 +107,7 @@ func TestHandlerSourceFallbackDisabled(t *testing.T) {
 
 func TestHandlerSourceFallbackStatus200(t *testing.T) {
 	src := newMemSourceStore()
-	src.data["img.png"] = []byte("SOURCE")
+	src.Add(object.ObjectKey("img.png"), []byte("SOURCE"))
 	gen := newFakeGenerator()
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeNotFound, Reason: "nf"})
 
@@ -123,7 +124,7 @@ func TestHandlerSourceFallbackStatus200(t *testing.T) {
 
 func TestHandlerSourceFallbackHead(t *testing.T) {
 	src := newMemSourceStore()
-	src.data["img.png"] = []byte("SOURCE")
+	src.Add(object.ObjectKey("img.png"), []byte("SOURCE"))
 	gen := newFakeGenerator()
 	gen.setFallback(&generatev2.OutcomeError{Kind: generatev2.OutcomeNotFound, Reason: "nf"})
 
@@ -160,7 +161,7 @@ func TestHandlerSourceFallbackSourceNotFound(t *testing.T) {
 
 func TestHandlerSourceFallbackPresetNotFound(t *testing.T) {
 	src := newMemSourceStore()
-	src.data["img.png"] = []byte("SOURCE")
+	src.Add(object.ObjectKey("img.png"), []byte("SOURCE"))
 	gen := newFakeGenerator()
 	// Несуществующий пресет -> OutcomeInvalid с ResolveError.
 	gen.setFallback(&generatev2.OutcomeError{

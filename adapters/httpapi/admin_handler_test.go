@@ -3,8 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,18 +12,18 @@ import (
 
 	"github.com/pkg-ru/imager/app/adminsvc"
 	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/ports/storage"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/object"
 	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/internal/testutil"
 )
 
 // adminTestCtx — контекст для тестов admin handler.
 type adminTestCtx struct {
 	svc  *adminsvc.Service
 	gen  *adminFakeGenerator
-	src  *adminMemSourceStore
-	res  *adminMemResultStore
+	src  *testutil.MemSourceStore
+	res  *testutil.MemResultStore
 	cfg  AdminConfig
 	auth *AdminHandler
 }
@@ -34,8 +32,8 @@ type adminTestCtx struct {
 func newAdminTestCtx(t *testing.T) *adminTestCtx {
 	t.Helper()
 	gen := newAdminFakeGenerator()
-	src := newAdminMemSourceStore()
-	res := newAdminMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	presets, err := asset.NewPresetSet([]*asset.Preset{})
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
@@ -47,178 +45,14 @@ func newAdminTestCtx(t *testing.T) *adminTestCtx {
 		Results: res,
 		Presets: presets,
 		Policy:  pol,
-		Logger:  adminFakeLogger{},
+		Logger:  testutil.NopLogger{},
 	}, adminsvc.Config{Workers: 2, QueueSize: 4, WaitTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("adminsvc.New: %v", err)
 	}
 	cfg := AdminConfig{Enabled: true, Token: "secret-token", Workers: 2, QueueSize: 4, WaitTimeout: 5 * time.Second}
-	return &adminTestCtx{svc: svc, gen: gen, src: src, res: res, cfg: cfg, auth: NewAdminHandler(svc, cfg, adminFakeLogger{})}
+	return &adminTestCtx{svc: svc, gen: gen, src: src, res: res, cfg: cfg, auth: NewAdminHandler(svc, cfg, testutil.NopLogger{})}
 }
-
-// adminFakeLogger — заглушка.
-type adminFakeLogger struct{}
-
-func (adminFakeLogger) Debugf(string, ...any) {}
-func (adminFakeLogger) Infof(string, ...any)  {}
-func (adminFakeLogger) Warnf(string, ...any)  {}
-func (adminFakeLogger) Errorf(string, ...any) {}
-
-// adminMemArtifact — in-memory object.Artifact.
-type adminMemArtifact struct {
-	data []byte
-	meta object.ObjectMetadata
-	off  int
-}
-
-func (a *adminMemArtifact) Read(p []byte) (int, error) {
-	if a.off >= len(a.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, a.data[a.off:])
-	a.off += n
-	return n, nil
-}
-
-func (a *adminMemArtifact) Seek(offset int64, whence int) (int64, error) {
-	var base int64
-	switch whence {
-	case io.SeekStart:
-		base = 0
-	case io.SeekCurrent:
-		base = int64(a.off)
-	case io.SeekEnd:
-		base = int64(len(a.data))
-	default:
-		return 0, errors.New("invalid whence")
-	}
-	base += offset
-	if base < 0 {
-		return 0, errors.New("negative seek")
-	}
-	a.off = int(base)
-	return base, nil
-}
-
-func (a *adminMemArtifact) Close() error { return nil }
-
-func (a *adminMemArtifact) Metadata() object.ObjectMetadata { return object.ObjectMetadata{} }
-
-// adminMemSourceStore — in-memory storage.SourceStore.
-type adminMemSourceStore struct {
-	mu   sync.Mutex
-	data map[string][]byte
-}
-
-func newAdminMemSourceStore() *adminMemSourceStore {
-	return &adminMemSourceStore{data: map[string][]byte{}}
-}
-
-func (s *adminMemSourceStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.data[key.String()]
-	if !ok {
-		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
-	}
-	return object.ObjectMetadata{Key: key, Size: int64(len(d))}, nil
-}
-
-func (s *adminMemSourceStore) Open(_ context.Context, key object.ObjectKey) (object.Artifact, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.data[key.String()]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &adminMemArtifact{data: d}, nil
-}
-
-var _ storage.SourceStore = (*adminMemSourceStore)(nil)
-
-// adminMemResultStore — in-memory storage.ResultStore с List.
-type adminMemResultStore struct {
-	mu   sync.Mutex
-	data map[string][]byte
-}
-
-func newAdminMemResultStore() *adminMemResultStore {
-	return &adminMemResultStore{data: map[string][]byte{}}
-}
-
-func (r *adminMemResultStore) Lookup(_ context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return object.ObjectMetadata{}, &object.NotFoundError{Key: key}
-	}
-	return object.ObjectMetadata{Key: key, Size: int64(len(d))}, nil
-}
-
-func (r *adminMemResultStore) Open(_ context.Context, key object.ObjectKey) (object.Artifact, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &adminMemArtifact{data: d}, nil
-}
-
-func (r *adminMemResultStore) ReadStream(_ context.Context, key object.ObjectKey) (object.Stream, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.data[key.String()]
-	if !ok {
-		return nil, &object.NotFoundError{Key: key}
-	}
-	return &adminMemArtifact{data: d}, nil
-}
-
-func (r *adminMemResultStore) Publish(_ context.Context, key object.ObjectKey, src io.Reader, _ object.PublishOptions) error {
-	data, err := io.ReadAll(src)
-	if err != nil {
-		return err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.data[key.String()] = data
-	return nil
-}
-
-func (r *adminMemResultStore) Delete(_ context.Context, key object.ObjectKey) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.data, key.String())
-	return nil
-}
-
-func (r *adminMemResultStore) Stats(_ context.Context) (object.StoreStats, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var st object.StoreStats
-	for _, d := range r.data {
-		st.Objects++
-		st.TotalBytes += int64(len(d))
-	}
-	return st, nil
-}
-
-func (r *adminMemResultStore) List(_ context.Context, prefix object.ObjectKey) ([]object.ObjectKey, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var out []object.ObjectKey
-	for k := range r.data {
-		if strings.HasPrefix(k, prefix.String()) {
-			out = append(out, object.ObjectKey(k))
-		}
-	}
-	return out, nil
-}
-
-var _ storage.ResultStore = (*adminMemResultStore)(nil)
-var _ storage.Lister = (*adminMemResultStore)(nil)
 
 // adminFakeGenerator — управляемый fake Generator.
 type adminFakeGenerator struct {
@@ -398,8 +232,8 @@ func TestAdminGenerateSourceNotFound404(t *testing.T) {
 func TestAdminGenerateQueueFull503(t *testing.T) {
 	// Отдельный Service с QueueSize=1 и без запущенных воркеров.
 	gen := newAdminFakeGenerator()
-	src := newAdminMemSourceStore()
-	res := newAdminMemResultStore()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
 	presets, err := asset.NewPresetSet([]*asset.Preset{})
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
@@ -410,12 +244,12 @@ func TestAdminGenerateQueueFull503(t *testing.T) {
 		Results: res,
 		Presets: presets,
 		Policy:  &policy.Policy{},
-		Logger:  adminFakeLogger{},
+		Logger:  testutil.NopLogger{},
 	}, adminsvc.Config{Workers: 1, QueueSize: 1, WaitTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("adminsvc.New: %v", err)
 	}
-	auth := NewAdminHandler(svc, AdminConfig{Enabled: true, Token: "secret-token", Workers: 1, QueueSize: 1, WaitTimeout: 5 * time.Second}, adminFakeLogger{})
+	auth := NewAdminHandler(svc, AdminConfig{Enabled: true, Token: "secret-token", Workers: 1, QueueSize: 1, WaitTimeout: 5 * time.Second}, testutil.NopLogger{})
 
 	// Первая задача занимает очередь.
 	rec1 := doAdmin(auth, http.MethodPost, "/admin/assets/generate", "secret-token",
