@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+###############################################################################
+# Dockerfile.test — контейнер для запуска тестов с libvips (cgo/govips).
+#
+# Аналог builder-стадии production Dockerfile: golang + vips-dev + кодеки.
+# Модели ONNX в тестах не требуются (детектор тестируется через заглушки и
+# абстракцию modelBackend, реальный ONNX Runtime не подключён — см. TODO в
+# adapters/processor/detection/onnx.go), поэтому onnx-теги не требуют
+# libonnxruntime.
+#
+# Использование:
+#   docker build -f Dockerfile.test -t imager:test .
+#   docker run --rm -v "%cd%":/src -w /src imager:test \
+#       sh -c "go test -tags libvips ./... -count=1"
+###############################################################################
+FROM golang:1.25.0-alpine
+
+ENV CGO_ENABLED=1 \
+    GOOS=linux \
+    GOARCH=amd64
+
+# Зависимости для cgo (libvips, govips) — те же, что в production builder.
+# Без пиннинга версий: golang:1.25.0-alpine базируется на Alpine 3.22, где
+# версии пакетов отличаются от production (vips 8.16, tzdata 2026c).
+RUN apk add --no-cache --update \
+        build-base \
+        pkgconf \
+        musl-dev \
+        vips-dev \
+        glib-dev \
+        libheif-dev \
+        libde265-dev \
+        libjxl-dev \
+        librsvg-dev \
+        poppler-dev \
+        libraw-dev \
+        tzdata
+
+WORKDIR /src

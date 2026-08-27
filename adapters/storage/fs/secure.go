@@ -23,9 +23,15 @@ func (e *unsafePathError) Error() string { return e.msg }
 func (e *unsafePathError) Unwrap() error { return object.ErrUnsafePath }
 
 // walkComponentsNotSymlink проверяет все существующие компоненты пути от root
-// до родительского каталога full: ни один не должен быть символьной ссылкой
+// до самого full включительно: ни один не должен быть символьной ссылкой
 // (symlink), junction или reparse point. Сама root может быть symlink
 // (конфигурация); проверка начинается с первого каталога внутри root.
+// Несуществующие компоненты пропускаются (каталоги появляются при publish,
+// при чтении отсутствие вернёт not-found).
+//
+// Финальный компонент full тоже проверяется через Lstat: даже если операция
+// над ним (например os.Remove при Delete) не следует по ссылке, политика
+// запрещает любые операции с ключом, чей путь проходит через ссылку.
 //
 // Эта проверка best-effort: она не даёт атомарной гарантии (TOCTOU-окно
 // между проверкой и операцией остаётся). На Unix жёсткую гарантию для
@@ -68,6 +74,17 @@ func walkComponentsNotSymlink(root, full string) error {
 			break
 		}
 		cur = parent
+	}
+
+	// Финальный компонент: если full — символьная ссылка, блокируем любые
+	// операции с этим путём. Несуществующий full — обычный случай для
+	// Publish ДО создания файла и для чтения отсутствующего ключа.
+	info, err := os.Lstat(full)
+	if err == nil && isSymlink(info) {
+		return fmt.Errorf("%w: %q", errSymlinkEscape, full)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("fs: lstat %q: %w", full, err)
 	}
 	return nil
 }

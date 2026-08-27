@@ -2,6 +2,13 @@ module github.com/pkg-ru/imager
 
 go 1.25.0
 
+// Вендоренный форк govips v2.18.0 (third_party/govips) с доработкой:
+// поддержка аргумента "strip" (VipsForeignSave) для heifsave/jxlsave —
+// чтобы перекодированные HEIF/JXL не получали синтезированный EXIF-блок
+// из заголовка (vips__exif_update). Подробности — в third_party/govips/go.mod.
+
+replace github.com/davidbyttow/govips/v2 => ./third_party/govips
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.37
@@ -32,7 +39,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.6 // indirect
 	github.com/kr/fs v0.1.0 // indirect
-	github.com/kr/text v0.2.0 // indirect
+	github.com/yalue/onnxruntime_go v1.35.0 // indirect
 	golang.org/x/image v0.38.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

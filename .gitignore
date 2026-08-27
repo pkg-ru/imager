@@ -8,6 +8,7 @@
 *.so
 *.dylib
 *.test
+!/Dockerfile.test
 *.out
 *.prof
 

@@ -3,6 +3,7 @@
 package fs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -28,6 +29,11 @@ func secureOpenFile(root string, rel string, flag int, perm os.FileMode) (*os.Fi
 	defer unix.Close(rootFd)
 	fd, err := unix.Openat(rootFd, rel, flag|unix.O_NOFOLLOW, uint32(perm.Perm()))
 	if err != nil {
+		// O_NOFOLLOW при symlink-компоненте возвращает ELOOP. Нормализуем
+		// его в errSymlinkEscape, чтобы вызывающий распознал unsafe path.
+		if errors.Is(err, unix.ELOOP) {
+			return nil, errSymlinkEscape
+		}
 		return nil, &os.PathError{Op: "open", Path: full, Err: err}
 	}
 	return os.NewFile(uintptr(fd), full), nil

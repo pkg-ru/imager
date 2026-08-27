@@ -35,6 +35,12 @@ func secureOpenFile(root string, rel string, flag int, perm os.FileMode) (*os.Fi
 
 	fd, err := openat2NoSymlink(rootFd, rel, flag, perm)
 	if err != nil {
+		// RESOLVE_NO_SYMLINKS / O_NOFOLLOW при symlink-компоненте возвращают
+		// ELOOP. Нормализуем его в errSymlinkEscape, чтобы вызывающий
+		// (store.Open/ReadStream) распознал unsafe path через isSymlinkErr.
+		if errors.Is(err, unix.ELOOP) {
+			return nil, errSymlinkEscape
+		}
 		return nil, &os.PathError{Op: "open", Path: full, Err: err}
 	}
 	return os.NewFile(uintptr(fd), full), nil

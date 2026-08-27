@@ -1090,11 +1090,17 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 	case processing.FormatHEIF:
 		p := vips.NewHeifExportParams()
 		p.Quality = plan.Quality
+		// Форк govips (third_party/govips) поддерживает для heifsave/jxlsave
+		// общий аргумент VipsForeignSave "strip": при strip=true libvips не
+		// синтезирует технический EXIF-блок из заголовка (vips__exif_update),
+		// который иначе просачивается в выходной файл.
+		p.StripMetadata = true
 		out, _, err := img.ExportHeif(p)
 		return out, err
 	case processing.FormatJPEGXL:
 		p := vips.NewJxlExportParams()
 		p.Quality = plan.Quality
+		p.StripMetadata = true
 		// JXL effort (Волна 5d): 0 = умолчание govips (7).
 		if e := jxlEffort(enc.JXLEffort); e > 0 {
 			p.Effort = e
