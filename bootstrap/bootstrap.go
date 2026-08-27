@@ -68,6 +68,7 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 	det := detection.NewDetector(detection.Options{
 		FaceModel:           rc.Detection.FaceModel,
 		ObjectModel:         rc.Detection.ObjectModel,
+		OnnxRuntimeLib:      rc.Detection.OnnxRuntimeLib,
 		ConfidenceThreshold: rc.Detection.ConfidenceThreshold,
 		MaxObjects:          rc.Detection.MaxObjects,
 	})

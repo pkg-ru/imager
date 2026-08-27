@@ -40,6 +40,10 @@ type Options struct {
 	// ObjectModel — путь к ONNX-моде SSD/YOLO для детекции объектов.
 	// Пусто = object-crop не используется.
 	ObjectModel string
+	// OnnxRuntimeLib — путь к библиотеке libonnxruntime (dlopen). Пусто =
+	// автодетекция по стандартным путям (см. onnx_cgo.go). Задаётся через
+	// конфиг-файл (detection.onnx-runtime-lib), а не через env.
+	OnnxRuntimeLib string
 	// ConfidenceThreshold — порог уверенности в интервале [0,1].
 	// Боксы с Confidence < порога отбрасываются до NMS.
 	ConfidenceThreshold float64

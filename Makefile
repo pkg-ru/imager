@@ -8,9 +8,10 @@ install:
 	go mod download
 	go mod tidy
 
-# Основная сборка: с libvips (production-сценарий). Для сборки без тегов
-# используйте `go build ./cmd/imager` или `make build TAGS=`.
-TAGS ?= libvips
+# Основная сборка: с libvips + onnx (production-сценарий). Для сборки без
+# тегов используйте `go build ./cmd/imager` или `make build TAGS=`.
+# onnx требует C-библиотеку ONNX Runtime (libonnxruntime) и cgo.
+TAGS ?= libvips onnx
 
 .PHONY: build
 build:
@@ -58,6 +59,24 @@ tags-check:
 	go vet -tags onnx ./...
 	go build -tags "libvips onnx" ./...
 	go vet -tags "libvips onnx" ./...
+
+# --- ONNX Runtime ---
+
+# Сборка с реальным ONNX Runtime (требует libonnxruntime + cgo).
+.PHONY: build-onnx
+build-onnx:
+	go build -tags "libvips onnx" -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
+
+# Тесты реального инференса (YuNet + SSD) с тегом onnx.
+# Требует модели в ./models и libonnxruntime.
+.PHONY: test-onnx
+test-onnx:
+	go test -tags onnx ./adapters/processor/detection/... -count=1
+
+# Полный прогон тестов с libvips + onnx (как в Docker).
+.PHONY: test-onnx-all
+test-onnx-all:
+	go test -tags "libvips onnx" ./... -count=1
 
 .PHONY: test
 test:

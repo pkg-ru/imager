@@ -431,11 +431,20 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 |------|-----|--------------|----------|
 | `face-model` | string | пусто | Путь к ONNX-модели YuNet (лица) |
 | `object-model` | string | пусто | Путь к ONNX-модели SSD/YOLO (объекты) |
+| `onnx-runtime-lib` | string | пусто | Путь к библиотеке ONNX Runtime (libonnxruntime). Пусто = кроссплатформенная автодетекция (Linux `.so` / Windows `.dll` / macOS `.dylib`) по стандартным путям. Задаётся ТОЛЬКО через конфиг; env `ONNXRUNTIME_SHARED_LIBRARY_PATH` не используется |
 | `confidence-threshold` | float | `0.5` | Порог уверенности детекции `[0,1]` |
 | `max-objects` | int | `5` | Максимум объектов после NMS |
 | `margin` | float | `0.1` | Отступ вокруг найденной области как доля её размера `[0,1]` |
 
-Модели загружаются лениво при первом запросе и кэшируются в памяти до завершения процесса.
+Модели загружаются лениво при первом запросе и кэшируются в памяти до завершения процесса. Путь к библиотеке ONNX Runtime (`onnx-runtime-lib`) берётся из конфиг-файла, а не из env-переменной `ONNXRUNTIME_SHARED_LIBRARY_PATH`.
+
+Автодетект библиотеки (`onnx-runtime-lib` пуст) кроссплатформенный и работает на Linux, Windows и macOS:
+
+- **Linux** — ищутся `libonnxruntime.so.1.29.0`, `libonnxruntime.so`, `onnxruntime.so` и `libonnxruntime.so` в `/usr/lib/`, `/usr/lib/x86_64-linux-gnu/`, `/usr/local/lib/`, `/opt/onnxruntime/lib/`;
+- **Windows** — ищется `onnxruntime.dll` (дефолт биндинга через `LoadLibrary`), рядом с исполняемым файлом, в `%WINDIR%\System32` и в каталоге установки ONNX Runtime (`%ProgramFiles%\onnxruntime\lib\`);
+- **macOS** — ищутся `libonnxruntime.1.29.0.dylib` и `libonnxruntime.dylib` в `/usr/local/lib/`, `/opt/homebrew/lib/`, `/opt/onnxruntime/lib/`, а также голое имя `libonnxruntime.dylib`.
+
+Приоритет: путь из конфига → первый существующий кандидат автодетекта → дефолт биндинга. Если ни один файл не найден, биндинг `github.com/yalue/onnxruntime_go` сам пробует `onnxruntime.so` (Linux/macOS) или `onnxruntime.dll` (Windows) через системные механизмы (ld.so / dyld / LoadLibrary).
 
 ## imagemagick
 

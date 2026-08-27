@@ -2,45 +2,45 @@ module github.com/pkg-ru/imager
 
 go 1.25.0
 
-// Вендоренный форк govips v2.18.0 (third_party/govips) с доработкой:
+// Вендоренный форк govips v2.18.0 (govips) с доработкой:
 // поддержка аргумента "strip" (VipsForeignSave) для heifsave/jxlsave —
 // чтобы перекодированные HEIF/JXL не получали синтезированный EXIF-блок
-// из заголовка (vips__exif_update). Подробности — в third_party/govips/go.mod.
+// из заголовка (vips__exif_update). Подробности — в govips/go.mod.
 
-replace github.com/davidbyttow/govips/v2 => ./third_party/govips
+replace github.com/davidbyttow/govips/v2 => ./govips
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.43.6
-	github.com/aws/aws-sdk-go-v2/config v1.32.37
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.2
-	github.com/aws/smithy-go v1.27.8
+	github.com/aws/aws-sdk-go-v2 v1.45.0
+	github.com/aws/aws-sdk-go-v2/config v1.33.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.109.0
+	github.com/aws/smithy-go v1.28.1
 	github.com/davidbyttow/govips/v2 v2.18.0
-	github.com/jlaffaye/ftp v0.2.2
+	github.com/jlaffaye/ftp v0.2.4
 	github.com/pkg-ru/dynamic v1.0.0
 	github.com/pkg/sftp v1.13.11
+	github.com/yalue/onnxruntime_go v1.35.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.18 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.36 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.37 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.37 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.37 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.38 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.17 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.30 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.37 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.38 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.5.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.33.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.6 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.45.6 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.20.0 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.19.0 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.0 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.0 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.7.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.35.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.40.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.47.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
-	github.com/yalue/onnxruntime_go v1.35.0 // indirect
-	golang.org/x/image v0.38.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/image v0.45.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

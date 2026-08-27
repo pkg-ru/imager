@@ -154,6 +154,10 @@ type DetectionConfig struct {
 	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
 	// объектов. Пусто = object-crop недоступен.
 	ObjectModel string
+	// OnnxRuntimeLib — путь к библиотеке libonnxruntime (dlopen). Пусто =
+	// автодетекция по стандартным путям (см. onnx_cgo.go). Задаётся через
+	// конфиг-файл, а не через env ONNXRUNTIME_SHARED_LIBRARY_PATH.
+	OnnxRuntimeLib string
 	// ConfidenceThreshold — порог уверенности в интервале [0,1]. Боксы
 	// с Confidence ниже порога отбрасываются (до NMS). Дефолт: 0.5.
 	ConfidenceThreshold float64
@@ -176,6 +180,9 @@ type DetectionYAML struct {
 	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
 	// объектов.
 	ObjectModel dynamic.String `yaml:"object-model"`
+	// OnnxRuntimeLib — путь к библиотеке libonnxruntime (dlopen). Пусто =
+	// автодетекция по стандартным путям.
+	OnnxRuntimeLib dynamic.String `yaml:"onnx-runtime-lib"`
 	// ConfidenceThreshold — порог уверенности в интервале [0,1] (nil = 0.5).
 	ConfidenceThreshold dynamic.Nullable[dynamic.Float64] `yaml:"confidence-threshold"`
 	// MaxObjects — максимальное число объектов после NMS (первые N самых
@@ -1182,6 +1189,7 @@ func (d DetectionYAML) build() (DetectionConfig, error) {
 	cfg := DetectionConfig{
 		FaceModel:           d.FaceModel.Unwrap(),
 		ObjectModel:         d.ObjectModel.Unwrap(),
+		OnnxRuntimeLib:      d.OnnxRuntimeLib.Unwrap(),
 		ConfidenceThreshold: 0.5,
 		MaxObjects:          5,
 		Margin:              0.1,

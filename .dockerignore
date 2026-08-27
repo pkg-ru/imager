@@ -1,0 +1,15 @@
+# Локальные артефакты сборки
+imager
+imager.exe
+*.exe
+
+# Git и IDE
+.git
+.github
+.gigacode
+.vscode
+.idea
+
+# Логи и временные файлы
+*.log
+*.tmp

@@ -1,17 +1,16 @@
 # syntax=docker/dockerfile:1.7
 ###############################################################################
-# Dockerfile.test — контейнер для запуска тестов с libvips (cgo/govips).
+# Dockerfile.test — контейнер для запуска тестов с libvips (cgo/govips) и
+# ONNX Runtime (реальная детекция лиц/объектов).
 #
-# Аналог builder-стадии production Dockerfile: golang + vips-dev + кодеки.
-# Модели ONNX в тестах не требуются (детектор тестируется через заглушки и
-# абстракцию modelBackend, реальный ONNX Runtime не подключён — см. TODO в
-# adapters/processor/detection/onnx.go), поэтому onnx-теги не требуют
-# libonnxruntime.
-#
-# Использование:
+# Аналог builder-стадии production Dockerfile: golang + vips-dev + кодеки +
+# onnxruntime (edge, musl). Сборка и прогон тестов — с тэгами "libvips,onnx":
 #   docker build -f Dockerfile.test -t imager:test .
 #   docker run --rm -v "%cd%":/src -w /src imager:test \
-#       sh -c "go test -tags libvips ./... -count=1"
+#       sh -c "go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
+#
+# Модели ONNX и тестовое изображение ожидаются в ./models (монтируется в
+# /src/models через -v) — тесты реального инференса находят их автоматически.
 ###############################################################################
 FROM golang:1.25.0-alpine
 
@@ -22,7 +21,12 @@ ENV CGO_ENABLED=1 \
 # Зависимости для cgo (libvips, govips) — те же, что в production builder.
 # Без пиннинга версий: golang:1.25.0-alpine базируется на Alpine 3.22, где
 # версии пакетов отличаются от production (vips 8.16, tzdata 2026c).
-RUN apk add --no-cache --update \
+# onnxruntime (1.29.0) и libstdc++/libgcc 15.2 — из edge (C++23-символ).
+# dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
+# на mirror.yandex.ru (v3.22 для golang:1.25.0-alpine).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.22/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.22/community" >> /etc/apk/repositories \
+    && apk add --no-cache --update \
         build-base \
         pkgconf \
         musl-dev \
@@ -34,6 +38,9 @@ RUN apk add --no-cache --update \
         librsvg-dev \
         poppler-dev \
         libraw-dev \
-        tzdata
+        tzdata \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
+    && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime
 
 WORKDIR /src

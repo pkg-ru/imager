@@ -12,12 +12,11 @@
 //   - если путь к модели пуст или файл отсутствует — Available() false,
 //     Detect* возвращает типизированную ошибку БЕЗ загрузки модели.
 //
-// TODO(onnx-runtime): подключить реальный Go-биндинг ONNX Runtime
-// (github.com/yalue/onnxruntime_go — существует и активно поддерживается).
-// Биндинг требует установленную C-библиотеку ONNX Runtime (libonnxruntime)
-// и cgo, поэтому здесь он НЕ импортируется напрямую (это бы сломало сборку).
-// Инференс абстрагируется через modelBackend, который в полной сборке
-// заполняется ONNX-сессией.
+// Инференс выполняется реальным Go-биндингом ONNX Runtime
+// (github.com/yalue/onnxruntime_go): см. onnx_cgo.go (build tag
+// "onnx && cgo"). Биндинг использует cgo + dlopen libonnxruntime, поэтому
+// для сборок с CGO_ENABLED=0 (CI) предусмотрен onnx_nocgo.go
+// ("onnx && !cgo"), возвращающий понятную ошибку.
 package detection
 
 import (
@@ -37,15 +36,13 @@ var ErrModelNotConfigured = errors.New("detection: model not configured (empty m
 // ErrModelNotFound — файл модели не существует.
 var ErrModelNotFound = errors.New("detection: model file not found")
 
-// modelBackend — абстракция инференса модели. Реальные реализации (ONNX
-// Runtime session) подключаются при наличии биндинга (см. buildModel).
+// modelBackend — абстракция инференса модели. Реальная реализация — сессия
+// ONNX Runtime (см. onnx_cgo.go).
 //
 // Контракт реализации:
-//   - resize входного RGB-кадра к входному размеру модели (обычно
-//     320x320 для YuNet / SSD-MobileNet);
-//   - нормализация (scale 1/255 и mean/std при необходимости);
-//   - возврат сырых боксов ДО NMS в координатах ОРИГИНАЛЬНОГО кадра
-//     (координаты масштабируются обратно из входного размера модели).
+//   - resize входного RGB-кадра к входному размеру модели;
+//   - нормализация (если требуется моделью);
+//   - возврат сырых боксов ДО NMS в координатах ОРИГИНАЛЬНОГО кадра.
 type modelBackend interface {
 	// run выполняет инференс над кадром. rgb — RGB-пиксели исходного
 	// кадра (len == width*height*3). Возвращает боксы в координатах
@@ -142,27 +139,6 @@ func (d *OnnxDetector) load(slot *modelBackend, ready *bool, path, kind string) 
 	return backend, nil
 }
 
-// buildModel создаёт modelBackend для пути. Возвращает nil для пустого
-// пути или отсутствующего файла (типизированная ошибка БЕЗ загрузки).
-//
-// TODO(onnx-layout): заполнить реальным инференс-бэкендом из биндинга
-// github.com/yalue/onnxruntime_go. Сейчас (без подключённого биндинга)
-// загрузка модели не выполняется —
-// возвращается понятная ошибка, чтобы не ломать сборку и явно указать
-// на ненастроенную интеграцию.
-func (d *OnnxDetector) buildModel(path, kind string) (modelBackend, error) {
-	if path == "" {
-		return nil, ErrModelNotConfigured
-	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: %s (%s)", ErrModelNotFound, path, kind)
-		}
-		return nil, fmt.Errorf("detection: stat %s: %w", path, err)
-	}
-	return nil, fmt.Errorf("detection: ONNX runtime backend not linked in this build; rebuild with the ONNX Runtime binding (github.com/yalue/onnxruntime_go) to enable %s model %q", kind, path)
-}
-
 // postprocess применяет порог уверенности, NMS (IoU 0.45) и лимит
 // max-objects. Вход — декодированные боксы в координатах исходного кадра.
 func (d *OnnxDetector) postprocess(boxes []Box) []Box {
@@ -186,4 +162,20 @@ func (d *OnnxDetector) postprocess(boxes []Box) []Box {
 		out = out[:d.opts.MaxObjects]
 	}
 	return out
+}
+
+// modelExists проверяет наличие файла модели и возвращает типизированную
+// ошибку для пустого пути / отсутствующего файла. Используется общими
+// реализациями buildModel (onnx_cgo.go / onnx_nocgo.go).
+func modelExists(path, kind string) error {
+	if path == "" {
+		return ErrModelNotConfigured
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s (%s)", ErrModelNotFound, path, kind)
+		}
+		return fmt.Errorf("detection: stat %s: %w", path, err)
+	}
+	return nil
 }

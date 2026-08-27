@@ -9,6 +9,11 @@
 # Библиотеки, необходимые govips для кодирования/декодирования форматов:
 #   vips-dev (сам libvips), libheif-dev (HEIF/AVIF), libjxl-dev (JPEG XL),
 #   librsvg-dev (SVG), libpoppler-glib-dev (PDF), libraw-dev (RAW) — гипотетически.
+#
+# ONNX Runtime (детекция лиц/объектов): сборка с тэком "onnx" + cgo-библиотека
+# onnxruntime (бэкенд github.com/yalue/onnxruntime_go). Пакет onnxruntime
+# 1.29.0 доступен только в edge-репозитории Alpine (musl); libstdc++/libgcc
+# 15.2 из edge требуются из-за C++23-символа в onnxruntime.
 ###############################################################################
 FROM golang:1.25.0-alpine3.20 AS builder
 
@@ -19,8 +24,15 @@ ENV CGO_ENABLED=1 \
     GOARCH=amd64 \
     GOFLAGS=${GOFLAGS}
 
-# Устанавливаем зависимости для cgo (libvips, govips) в builder.
-RUN apk add --no-cache --update \
+# Разрешаем сборку с тегами: базовый — "libvips"; ONNX Runtime подключается
+# через "--build-arg BUILD_TAGS=libvips,onnx" (docker-compose).
+ARG BUILD_TAGS=libvips,onnx
+
+# dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
+# на mirror.yandex.ru (v3.20 для golang:1.25.0-alpine3.20).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/community" >> /etc/apk/repositories \
+    && apk add --no-cache --update \
         build-base \
         pkgconf \
         musl-dev \
@@ -32,7 +44,10 @@ RUN apk add --no-cache --update \
         librsvg-dev \
         poppler-dev \
         libraw-dev \
-    && apk add --no-cache tzdata~=2024a
+    && apk add --no-cache tzdata~=2024a \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
+    && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime
 
 WORKDIR /src
 
@@ -41,9 +56,9 @@ COPY go.mod go.sum ./
 COPY go.work go.work.sum ./
 RUN go mod download
 
-# Копируем исходники и собираем с тэком libvips.
+# Копируем исходники и собираем с тэками.
 COPY . .
-RUN go build -tags libvips -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
+RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
 # Runtime: минимальный образ с libvips (основной движок) и FFmpeg.
@@ -57,7 +72,12 @@ FROM alpine:3.20
 #   libheif (HEIF/AVIF), libde265 (HEVC), libjxl (JPEG XL),
 #   poppler (PDF), libraw (RAW), librsvg (SVG), ghostscript (PDF/PS).
 # ffmpeg — пост-обработка видео (если нужна).
-RUN apk add --no-cache --update \
+# onnxruntime — runtime для бинаря, собранного с тэком "onnx" (детекция
+# лиц/объектов). Обновление libstdc++/libgcc обязательно: edge-пакет
+# собран с C++23 (символ std::__format::__locale_encoding_to_utf8).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/community" >> /etc/apk/repositories \
+    && apk add --no-cache --update \
         vips-tools~=8.15 \
         libvips~=8.15 \
         libheif~=1.17 \
@@ -70,6 +90,9 @@ RUN apk add --no-cache --update \
         ffmpeg~=6.1 \
         tzdata~=2024a \
         ca-certificates \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
+    && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime \
     && addgroup -S -g 10001 imager \
     && adduser -S -D -H -u 10001 -G imager imager
 
@@ -78,9 +101,11 @@ ENV TZ=Europe/Moscow
 
 # Writable каталоги: только source/result и tmp. Root fs остаётся read-only
 # (read_only: true в compose). /tmp — tmpfs в compose.
-RUN mkdir -p /data/source /data/result /etc/imager \
+RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
     && chown -R imager:imager /data \
-    && chmod 0750 /data /data/source /data/result
+    && chmod 0750 /data /data/source /data/result \
+    && chown root:imager /etc/imager/models \
+    && chmod 0755 /etc/imager/models
 
 # Копируем static binary и базовый конфиг. Каталог конфигурации задаётся
 # через IMAGER_CONFIG_DIR (единственная env-переменная). Локальная
@@ -88,15 +113,22 @@ RUN mkdir -p /data/source /data/result /etc/imager \
 COPY --from=builder /out/imager /usr/local/bin/imager
 COPY config/setting.yaml /etc/imager/setting.yaml
 
+# ONNX модели (YuNet для лиц, SSD для объектов) — копируются в образ;
+# в compose дополнительно монтируется ./models для обновления без пересборки.
+COPY models/face_detection_yunet_2023mar.onnx /etc/imager/models/
+COPY models/ssd_mobilenet_v1_12.onnx /etc/imager/models/
+
 # Dynamic binary: копируем libvips-зависимости через ld-linux. В Alpine
 # динамическая линковка разрешена; пакеты уже установлены в runtime.
 # (govips-библиотеки ищутся через ldconfig автоматически.)
+# libonnxruntime грузится через dlopen (библиотека установлена выше).
 
 # Restrictive permissions: бинарь 0755, конфиг 0640 (не содержит секретов,
 # но ограничиваем чтение).
 RUN chmod 0755 /usr/local/bin/imager \
     && chmod 0640 /etc/imager/setting.yaml \
-    && chown root:imager /etc/imager/setting.yaml
+    && chown root:imager /etc/imager/setting.yaml \
+    && chmod 0644 /etc/imager/models/*
 
 # Non-root runtime user.
 USER imager:imager

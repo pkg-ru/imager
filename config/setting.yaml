@@ -555,11 +555,25 @@ processing:
 detection:
   # face-model — путь к ONNX-модели YuNet для детекции лиц ("fc").
   # Тип: string. Пусто = face-crop отключён.
-  face-model: ""
+  # В Docker модели монтируются/копируются в /etc/imager/models/.
+  face-model: "/etc/imager/models/face_detection_yunet_2023mar.onnx"
 
   # object-model — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
   # объектов ("oc"). Тип: string. Пусто = object-crop отключён.
-  object-model: ""
+  object-model: "/etc/imager/models/ssd_mobilenet_v1_12.onnx"
+
+  # onnx-runtime-lib — путь к библиотеке ONNX Runtime (libonnxruntime),
+  # загружаемой через dlopen (Linux/macOS) или LoadLibrary (Windows).
+  # Тип: string. Пусто = КРОССПЛАТФОРМЕННАЯ автодетекция по стандартным
+  # путям (см. ort_library.go): Linux — libonnxruntime.so*/onnxruntime.so в
+  # /usr/lib, /usr/local/lib, /opt/onnxruntime/lib; Windows — onnxruntime.dll
+  # (рядом с exe, %WINDIR%\System32, %ProgramFiles%\onnxruntime\lib);
+  # macOS — libonnxruntime*.dylib в /usr/local/lib, /opt/homebrew/lib,
+  # /opt/onnxruntime/lib.
+  # ВАЖНО: настройка задаётся ТОЛЬКО через конфиг-файл. Env-переменная
+  # ONNXRUNTIME_SHARED_LIBRARY_PATH НЕ используется (соглашение проекта:
+  # все настройки — через конфиг).
+  onnx-runtime-lib: "/usr/lib/libonnxruntime.so.1.29.0"
 
   # confidence-threshold — порог уверенности детектора в интервале [0,1].
   # Боксы с уверенностью ниже порога отбрасываются (до NMS).

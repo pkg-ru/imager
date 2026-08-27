@@ -43,14 +43,18 @@ services:
 
     # Конфигурация монтируется read-only. Внутри каталога лежат
     # setting.yaml (обязательный) и setting-local.yaml (опциональный).
+    # Модели ONNX монтируются отдельно (./models), чтобы их можно было
+    # обновлять без пересборки образа (в Dockerfile также запечены копии).
     volumes:
       - ./config:/etc/imager:ro
+      - ./models:/etc/imager/models:ro
       - imager_source:/data/source
       - imager_result:/data/result
 
     environment:
       # Единственная env-переменная: путь к каталогу с настройками.
-      # Все остальные настройки — в YAML (setting.yaml / setting-local.yaml).
+      # Все остальные настройки — в YAML (setting.yaml / setting-local.yaml),
+      # включая путь к библиотеке ONNX Runtime (detection.onnx-runtime-lib).
       IMAGER_CONFIG_DIR: /etc/imager
 
     networks:
