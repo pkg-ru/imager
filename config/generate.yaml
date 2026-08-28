@@ -32,11 +32,11 @@
 # не существуют — разрешение определяется только path-policies (deny-by-default).
 ########################################
 policy:
-  # presets — именованные конфигурации обработки (ссылка из URL на пресет).
+  # presets — MAP именованных конфигураций обработки (ссылка из URL на
+  # пресет). КЛЮЧ = имя пресета (обязательное, ≤64 символа, без дефисов "-"
+  # в имени; допустимы буквы, цифры, "_", ".", "@" для суффикса @dpr;
+  # суффиксы @0/@1 запрещены). Уникальность имён обеспечивается самим map.
   # Каждый пресет:
-  #   name (обязательный, ≤64 символов, без дефисов "-" в имени; допустимы
-  #         буквы, цифры, "_", ".", "@" для суффикса @dpr; суффиксы @0/@1
-  #         запрещены);
   #   width, height — размер (0 = не задан, вычисляется пропорционально);
   #   output-formats — МАССИВ допустимых выходных форматов (whitelist:
   #         jpeg | png | webp | gif | avif | heif | apng | jxl); непустой;
@@ -79,7 +79,7 @@ policy:
   presets:
     # пресет "thumb" — маленький resize-центра. dpr НЕ задан: в URL допустимы
     # thumb.webp (dpr=1), thumb@2.webp, thumb@3.webp.
-    - name: "thumb"
+    thumb:
       width: 200
       height: 200
       output-formats: [webp, avif]
@@ -87,7 +87,7 @@ policy:
 
     # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
     # @2 в имени фиксирует dpr=2: в URL допустим ТОЛЬКО thumb@2.webp.
-    - name: "thumb@2"
+    thumb@2:
       width: 400
       height: 400
       output-formats: [webp, avif]
@@ -95,7 +95,7 @@ policy:
 
     # пресет "banner" — анимационный WebP-баннер 1200x400. dpr не задан
     # (wildcard-@dpr из URL).
-    - name: "banner"
+    banner:
       width: 1200        # 0 = не задан (вычисляется пропорционально)
       height: 400
       output-formats: [webp, avif]
@@ -107,7 +107,7 @@ policy:
     # пресет "banner@2" — та же геометрия (ширина 2400 = 1200×2, высота
     # 800 = 400×2) для экранов с DPR 2. @2 в имени фиксирует dpr=2: в URL
     # допустим ТОЛЬКО /banners/.../banner@2.{webp|avif}.
-    - name: "banner@2"
+    banner@2:
       width: 2400
       height: 800
       output-formats: [webp, avif]
@@ -117,33 +117,33 @@ policy:
       loop: true
 
     # Примеры режимов crop/ориентации (раскомментируйте при необходимости):
-    # - name: "avatar"          # центрированный кроп
+    # avatar:                   # центрированный кроп
     #   crop: center
     #   width: 100
     #   height: 100
     #   output-formats: [webp]
     #
-    # - name: "hero"            # умный кроп (smart-crop)
+    # hero:                     # умный кроп (smart-crop)
     #   crop: smart
     #   width: 800
     #   height: 600
     #   output-formats: [webp]
     #
-    # - name: "portrait"        # кроп по лицу + trim
+    # portrait:                 # кроп по лицу + trim
     #   crop: face
     #   trim: true
     #   width: 300
     #   height: 300
     #   output-formats: [jpeg]
     #
-    # - name: "product"         # кроп по объекту + trim
+    # product:                  # кроп по объекту + trim
     #   crop: object
     #   trim: true
     #   width: 500
     #   height: 500
     #   output-formats: [webp]
     #
-    # - name: "exif-strip"      # явная ориентация
+    # exif-strip:               # явная ориентация
     #   width: 0
     #   height: 1200
     #   output-formats: [jpeg]
@@ -226,16 +226,17 @@ policy:
     #       output-formats: [webp]
 
 ########################################
-# watermarks — именованные декларации ватермарок.
+# watermarks — MAP именованных деклараций ватермарок. КЛЮЧ = имя ватермарки
+# (уникальность обеспечивается самим map).
 #
 # Ватермарка описывается ОДИН раз здесь и применяется по имени в пресетах
-# (policy.presets[].watermark), customs (policy.path-policies.*.customs.*.watermark)
-# или по умолчанию (processing.default-watermark).
+# (policy.presets.<name>.watermark), customs
+# (policy.path-policies.*.customs.*.watermark) или по умолчанию
+# (processing.default-watermark).
 #
 # Приоритет применения: пресет/custom -> processing.default-watermark.
 #
 # Поля:
-#   name     (обязательный) — уникальное имя для ссылок;
 #   path     (обязательный) — путь к файлу изображения ватермарки на диске.
 #              Файл должен существовать на старте (иначе — fail-fast).
 #   position — позиция размещения (CSS background-position):
@@ -254,10 +255,10 @@ policy:
 #
 # Секция опциональна: без неё ни одна ватермарка не применяется.
 ########################################
-watermarks: []
+watermarks: {}
 # Пример:
 # watermarks:
-#   - name: water-test
+#   water-test:
 #     path: "/etc/imager/watermarks/test.png"
 #     position: center        # top | bottom | left | right | center
 #     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space

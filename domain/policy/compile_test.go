@@ -8,29 +8,40 @@ import (
 	"github.com/pkg-ru/imager/domain/processing"
 )
 
-// presetCfg — хелпер построения PresetConfig.
+// presetCfg — хелпер построения PresetConfig (имя пресета задаётся КЛЮЧОМ
+// map в Config.Presets, поэтому в саму структуру не входит).
 func presetCfg(name string, width, height uint32, outFmts ...string) PresetConfig {
 	formats := make(dynamic.StringSlice, 0, len(outFmts))
 	for _, f := range outFmts {
 		formats = append(formats, dynamic.String(f))
 	}
 	return PresetConfig{
-		Name:          dynamic.String(name),
 		Width:         dynamic.Uint32(width),
 		Height:        dynamic.Uint32(height),
 		OutputFormats: formats,
 	}
 }
 
+// presetsMap — хелпер построения map пресетов: имя = ключ.
+func presetsMap(pairs ...[2]any) map[string]PresetConfig {
+	m := make(map[string]PresetConfig, len(pairs))
+	for _, p := range pairs {
+		name, _ := p[0].(string)
+		cfg, _ := p[1].(PresetConfig)
+		m[name] = cfg
+	}
+	return m
+}
+
 func TestValidateConfig(t *testing.T) {
 	valid := &Config{
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
-			presetCfg("smart", 120, 80, "webp"),
-			presetCfg("face", 120, 80, "webp"),
-			presetCfg("object", 120, 80, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb":  presetCfg("thumb", 120, 80, "webp"),
+			"smart":  presetCfg("smart", 120, 80, "webp"),
+			"face":   presetCfg("face", 120, 80, "webp"),
+			"object": presetCfg("object", 120, 80, "webp"),
 			// Пустой crop — валиден (кроп не используется).
-			presetCfg("resize", 120, 80, "webp"),
+			"resize": presetCfg("resize", 120, 80, "webp"),
 		},
 		PathPolicies: map[string]PathPolicyConfig{
 			"/": {
@@ -52,25 +63,25 @@ func TestValidateConfigInvalid(t *testing.T) {
 		// Пути.
 		{PathPolicies: map[string]PathPolicyConfig{"": {}}},
 		{PathPolicies: map[string]PathPolicyConfig{"a": {}, "/a/": {}}},
-		// Пресеты.
-		{Presets: []PresetConfig{{Name: dynamic.String(""), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("")}}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{}}}},
+		// Пресеты: пустое имя (пустой ключ map).
+		{Presets: map[string]PresetConfig{"": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("")}}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{}}}},
 		// Недопустимые значения crop.
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("bogus"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("true"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("Center"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a": {Crop: dynamic.String("bogus"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a": {Crop: dynamic.String("true"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a": {Crop: dynamic.String("Center"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
 		// dpr вне [0,3].
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(4))}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(4))}}},
 		// quality вне [0,100].
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Quality: dynamic.Uint32(101)}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Quality: dynamic.Uint32(101)}}},
 		// width/height > MaxDimension.
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Width: dynamic.Uint32(asset.MaxDimension + 1), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a": {Width: dynamic.Uint32(asset.MaxDimension + 1), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
 		// Имя пресета с @0/@1.
-		{Presets: []PresetConfig{{Name: dynamic.String("a@0"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a@1"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a@0": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: map[string]PresetConfig{"a@1": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
 		// Конфликт dpr в имени vs настройки.
-		{Presets: []PresetConfig{{Name: dynamic.String("a@2"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(3))}}},
+		{Presets: map[string]PresetConfig{"a@2": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(3))}}},
 		// Custom: невалидное имя.
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"bogus": presetCfg("", 0, 0, "webp")}}}},
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@0": presetCfg("", 0, 0, "webp")}}}},
@@ -88,18 +99,18 @@ func TestValidateConfigInvalid(t *testing.T) {
 func TestValidateConfigValidNewFields(t *testing.T) {
 	loop := true
 	valid := &Config{
-		Presets: []PresetConfig{
-			{
-				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+		Presets: map[string]PresetConfig{
+			"thumb": {
+				Crop:  dynamic.String("center"),
 				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp"), dynamic.String("avif")},
 				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
 				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
 				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
 			},
-			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Height: dynamic.Uint32(50), OutputFormats: dynamic.StringSlice{dynamic.String("png")}},
-			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(800), Height: dynamic.Uint32(200), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("resize"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"trim":   {Trim: dynamic.Bool(true), Height: dynamic.Uint32(50), OutputFormats: dynamic.StringSlice{dynamic.String("png")}},
+			"both":   {Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(800), Height: dynamic.Uint32(200), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"resize": {Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
@@ -130,6 +141,9 @@ func TestValidateConfigValidPathPolicies(t *testing.T) {
 			"/basket/users/": {
 				Customs: map[string]PresetConfig{"200x": presetCfg("", 0, 0, "webp")},
 			},
+		},
+		Presets: map[string]PresetConfig{
+			"thumb": presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
@@ -167,8 +181,8 @@ func TestCompile(t *testing.T) {
 				},
 			},
 		},
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb": presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -225,17 +239,17 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 
 func TestCompileCropTrimMapping(t *testing.T) {
 	cfg := Config{
-		Presets: []PresetConfig{
-			{Name: dynamic.String("crop"), Crop: dynamic.String("center"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			presetCfg("resize", 120, 80, "webp"),
-			{Name: dynamic.String("smart"), Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("face"), Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("object"), Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("smart-trim"), Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("face-trim"), Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			{Name: dynamic.String("object-trim"), Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+		Presets: map[string]PresetConfig{
+			"crop":        {Crop: dynamic.String("center"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"trim":        {Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"both":        {Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"resize":      presetCfg("resize", 120, 80, "webp"),
+			"smart":       {Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face":        {Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object":      {Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"smart-trim":  {Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face-trim":   {Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object-trim": {Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -296,9 +310,9 @@ func TestTransformFromCropTrim(t *testing.T) {
 func TestCompilePresetOptions(t *testing.T) {
 	loop := true
 	cfg := Config{
-		Presets: []PresetConfig{
-			{
-				Name: dynamic.String("thumb@2"), Crop: dynamic.String("center"),
+		Presets: map[string]PresetConfig{
+			"thumb@2": {
+				Crop:  dynamic.String("center"),
 				Width: dynamic.Uint32(240), Height: dynamic.Uint32(160),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
 				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
@@ -333,23 +347,25 @@ func TestCompilePresetOptions(t *testing.T) {
 }
 
 func TestCompileDuplicatePreset(t *testing.T) {
+	// Дубликаты имён в map невозможны по построению; проверяем, что
+	// одинаковые пресеты с разными ключами компилируются без ошибок.
 	cfg := Config{
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
-			presetCfg("thumb", 120, 80, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb":   presetCfg("thumb", 120, 80, "webp"),
+			"thumb@2": presetCfg("thumb@2", 240, 160, "webp"),
 		},
 	}
-	if _, err := Compile(cfg, nil, nil); err == nil {
-		t.Error("expected duplicate preset error")
+	if _, err := Compile(cfg, nil, nil); err != nil {
+		t.Errorf("expected valid config, got %v", err)
 	}
 }
 
 func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 	// "thumb" и "thumb@2" — разные имена (не дубликаты).
 	cfg := Config{
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
-			presetCfg("thumb@2", 240, 160, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb":   presetCfg("thumb", 120, 80, "webp"),
+			"thumb@2": presetCfg("thumb@2", 240, 160, "webp"),
 		},
 	}
 	if _, err := Compile(cfg, nil, nil); err != nil {
@@ -434,8 +450,8 @@ func TestCompilePresetOrientationInheritsGlobal(t *testing.T) {
 	// Пресет без явных ориентационных полей наследует глобальный дефолт.
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
 	cfg := Config{
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb": presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, def)
@@ -458,9 +474,9 @@ func TestCompilePresetOrientationInheritsGlobal(t *testing.T) {
 func TestCompilePresetOrientationOverridesGlobal(t *testing.T) {
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
 	cfg := Config{
-		Presets: []PresetConfig{
-			{
-				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+		Presets: map[string]PresetConfig{
+			"thumb": {
+				Crop:  dynamic.String("center"),
 				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
 				AutoOrient:    dynamic.NewNullable(dynamic.Bool(false)),
@@ -490,9 +506,9 @@ func TestCompilePresetOrientationNoneDisables(t *testing.T) {
 	// "none" в пресете ЯВНО отключает унаследованный глобальный поворот/отражение.
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
 	cfg := Config{
-		Presets: []PresetConfig{
-			{
-				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+		Presets: map[string]PresetConfig{
+			"thumb": {
+				Crop:  dynamic.String("center"),
 				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
 				Rotate:        dynamic.String("none"),
@@ -520,8 +536,8 @@ func TestCompilePresetOrientationNoneDisables(t *testing.T) {
 func TestCompilePresetOrientationNilDefault(t *testing.T) {
 	// nil defaultOrientation эквивалентен {AutoOrient: true}.
 	cfg := Config{
-		Presets: []PresetConfig{
-			presetCfg("thumb", 120, 80, "webp"),
+		Presets: map[string]PresetConfig{
+			"thumb": presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -543,8 +559,8 @@ func TestCompilePresetOrientationNilDefault(t *testing.T) {
 
 func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
 	invalid := []*Config{
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Rotate: dynamic.String("45")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Flip: dynamic.String("diagonal")}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Rotate: dynamic.String("45")}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Flip: dynamic.String("diagonal")}}},
 	}
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {

@@ -71,11 +71,11 @@
 
 ## Водяные знаки
 
-Водяной знак описывается в секции `watermarks` и применяется по имени. Приоритет: пресет → path-policy → `processing.default-watermark`.
+Водяной знак описывается в секции `watermarks` (map: ключ = имя ватермарки) и применяется по имени. Приоритет: пресет → path-policy → `processing.default-watermark`.
 
 ```yaml
 watermarks:
-  - name: logo
+  logo:
     path: "/etc/imager/watermarks/logo.png"
     position: center        # top | bottom | left | right | center
     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space

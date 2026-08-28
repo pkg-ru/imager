@@ -21,7 +21,7 @@ policy:
     "/":
       presets: [thumb]
   presets:
-    - name: thumb
+    thumb:
       crop: center
       width: 120
       height: 80

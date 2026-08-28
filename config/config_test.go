@@ -10,16 +10,15 @@ import (
 	"github.com/pkg-ru/imager/domain/processing"
 )
 
-func wmDecls(names ...string) []WatermarkConfig {
-	out := make([]WatermarkConfig, 0, len(names))
+func wmDecls(names ...string) map[string]WatermarkConfig {
+	out := make(map[string]WatermarkConfig, len(names))
 	for _, n := range names {
-		out = append(out, WatermarkConfig{
-			Name:     dynamic.String(n),
+		out[n] = WatermarkConfig{
 			Path:     dynamic.String("/w/" + n + ".png"),
 			Position: dynamic.String("center"),
 			Repeat:   dynamic.String("no-repeat"),
 			Size:     dynamic.String("contain"),
-		})
+		}
 	}
 	return out
 }
@@ -27,13 +26,14 @@ func wmDecls(names ...string) []WatermarkConfig {
 func TestCompileWatermarks(t *testing.T) {
 	cfg := &Config{
 		Version: dynamic.String(SupportedVersion),
-		Watermarks: []WatermarkConfig{{
-			Name:     dynamic.String("logo"),
-			Path:     dynamic.String("/w/logo.png"),
-			Position: dynamic.String("bottom"),
-			Repeat:   dynamic.String("repeat-x"),
-			Size:     dynamic.String("200px 50px"),
-		}},
+		Watermarks: map[string]WatermarkConfig{
+			"logo": {
+				Path:     dynamic.String("/w/logo.png"),
+				Position: dynamic.String("bottom"),
+				Repeat:   dynamic.String("repeat-x"),
+				Size:     dynamic.String("200px 50px"),
+			},
+		},
 		Policy: policyConfigForTest(),
 		Processing: ProcessingConfig{
 			DefaultQuality:   dynamic.Int64(80),
@@ -73,35 +73,39 @@ func TestValidateWatermarkErrors(t *testing.T) {
 		mutate func(*Config)
 	}{
 		{
-			name:   "duplicate names",
-			mutate: func(c *Config) { c.Watermarks = append(wmDecls("logo"), wmDecls("logo")...) },
-		},
-		{
 			name: "invalid position",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Position = dynamic.String("middle")
+				w := c.Watermarks["logo"]
+				w.Position = dynamic.String("middle")
+				c.Watermarks["logo"] = w
 			},
 		},
 		{
 			name: "invalid size",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Size = dynamic.String("huge")
+				w := c.Watermarks["logo"]
+				w.Size = dynamic.String("huge")
+				c.Watermarks["logo"] = w
 			},
 		},
 		{
 			name: "empty path",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Watermarks[0].Path = dynamic.String("")
+				w := c.Watermarks["logo"]
+				w.Path = dynamic.String("")
+				c.Watermarks["logo"] = w
 			},
 		},
 		{
 			name: "unknown preset reference",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("other")
-				c.Policy.Presets[0].Watermark = dynamic.String("missing")
+				p := c.Policy.Presets["thumb"]
+				p.Watermark = dynamic.String("missing")
+				c.Policy.Presets["thumb"] = p
 			},
 		},
 		{
@@ -146,14 +150,15 @@ func TestValidateWatermarkErrors(t *testing.T) {
 // policyConfigForTest — минимальная политика с пресетом, custom и path-policy.
 func policyConfigForTest() policy.Config {
 	return policy.Config{
-		Presets: []policy.PresetConfig{{
-			Name:          dynamic.String("thumb"),
-			Width:         dynamic.Uint32(200),
-			Height:        dynamic.Uint32(200),
-			OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
-			Quality:       dynamic.Uint32(85),
-			Watermark:     dynamic.String("logo"),
-		}},
+		Presets: map[string]policy.PresetConfig{
+			"thumb": {
+				Width:         dynamic.Uint32(200),
+				Height:        dynamic.Uint32(200),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+				Quality:       dynamic.Uint32(85),
+				Watermark:     dynamic.String("logo"),
+			},
+		},
 		PathPolicies: map[string]policy.PathPolicyConfig{
 			"/": {
 				Presets: dynamic.StringSlice{dynamic.String("thumb")},

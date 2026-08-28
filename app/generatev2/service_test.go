@@ -43,9 +43,8 @@ func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 				Presets: dynamic.StringSlice{dynamic.String("thumb")},
 			},
 		},
-		Presets: []policy.PresetConfig{
-			{
-				Name:          dynamic.String("thumb"),
+		Presets: map[string]policy.PresetConfig{
+			"thumb": {
 				Crop:          dynamic.String("center"),
 				Width:         dynamic.Uint32(100),
 				Height:        dynamic.Uint32(100),
@@ -543,5 +542,56 @@ func TestBuildPlanTrimDetectionTransforms(t *testing.T) {
 				t.Errorf("buildPlan(%q).Trim = false, want true", c.tr)
 			}
 		})
+	}
+}
+
+// TestBuildPlanCropSingleDimensionDowngradesToResize проверяет, что для
+// размеров с ОДНИМ измерением (x200/200x — вторая сторона вычисляется
+// пропорционально) кроп невозможен: операция понижается до resize. Trim
+// при этом сохраняется.
+func TestBuildPlanCropSingleDimensionDowngradesToResize(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		name string
+		tr   asset.Transform
+		size string
+		trim bool
+	}{
+		{"crop height-only", asset.TransformCrop, "x200", false},
+		{"crop width-only", asset.TransformCrop, "200x", false},
+		{"smart-crop height-only", asset.TransformSmartCrop, "x200", false},
+		{"face-crop width-only", asset.TransformFaceCrop, "200x", false},
+		{"object-crop height-only", asset.TransformObjectCrop, "x200", false},
+		{"crop-trim height-only keeps trim", asset.TransformCropTrim, "x200", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", c.tr, c.size, 1, "webp"))
+			if err != nil {
+				t.Fatalf("buildPlan(%q, %q) error: %v", c.tr, c.size, err)
+			}
+			if plan.Operation != processing.OpResize {
+				t.Errorf("buildPlan(%q, %q).Operation = %q, want %q (crop impossible for single-dimension size)",
+					c.tr, c.size, plan.Operation, processing.OpResize)
+			}
+			if plan.Trim != c.trim {
+				t.Errorf("buildPlan(%q, %q).Trim = %v, want %v", c.tr, c.size, plan.Trim, c.trim)
+			}
+		})
+	}
+}
+
+// TestBuildPlanCropBothDimensionsKept проверяет, что для размеров с ОБОИМИ
+// измерениями (200x200) кроп сохраняется.
+func TestBuildPlanCropBothDimensionsKept(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "200x200", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Operation != processing.OpCrop {
+		t.Errorf("plan.Operation = %q, want %q", plan.Operation, processing.OpCrop)
 	}
 }

@@ -65,7 +65,7 @@
 
 Старый монолитный `setting.yaml`, содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `setting.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог.
 
-> **Исключение — новая policy-грамматика.** Старые ключи `policy.global` (`authorization`, `allowed-presets`, `size-rules`, `limits`), `policy.presets[].size` (вместо `width`/`height`) и строковый `output-formats` больше **не поддерживаются**: strict-декодирование отклоняет их как неизвестные поля. При миграции перепишите policy-секцию по новому формату (см. [policy](#policy)) и перенесите лимиты в `application.limits`.
+> **Исключение — новая policy-грамматика.** Старые ключи `policy.global` (`authorization`, `allowed-presets`, `size-rules`, `limits`), `policy.presets[].size` (вместо `width`/`height`), строковый `output-formats` и slice-формат `presets`/`watermarks` (список с полем `name`; вместо него — map, где имя = ключ) больше **не поддерживаются**: strict-декодирование отклоняет их как неизвестные поля. При миграции перепишите policy-секцию по новому формату (см. [policy](#policy)) и перенесите лимиты в `application.limits`.
 
 ---
 
@@ -178,11 +178,11 @@ Deny-by-default политика. Всё запрещено, кроме явно
 
 ### policy.presets
 
-Именованные конфигурации обработки, на которые ссылаются `path-policies[*].presets` по имени. Пресет становится доступным в URL только после включения его имени в какую-либо path-policy.
+**Map** именованных конфигураций обработки: ключ = имя пресета, значение = настройки. На пресеты ссылаются `path-policies[*].presets` по имени. Пресет становится доступным в URL только после включения его имени в какую-либо path-policy. Уникальность имён обеспечивается самим map; поиск пресета по имени — O(1).
 
 | Поле | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `name` | string | обязателен | ≤64 символа, без дефисов; допустимы буквы, цифры, `_`, `.`, `@`; уникально. Может содержать фиксированный суффикс `@2`/`@3` (например `"banner@2"`); суффиксы `@0`/`@1` запрещены |
+| *(ключ)* | string | обязателен | Имя пресета: ≤64 символа, без дефисов; допустимы буквы, цифры, `_`, `.`, `@`; уникально. Может содержать фиксированный суффикс `@2`/`@3` (например `"banner@2"`); суффиксы `@0`/`@1` запрещены |
 | `width` | uint32 | `0` | Ширина в px; `0` = не задана (вычисляется пропорционально) |
 | `height` | uint32 | `0` | Высота в px; `0` = не задана (вычисляется пропорционально). Оба = `0` → исходный размер (`x`) |
 | `output-formats` | list[string] | обязателен | **Массив** допустимых выходных форматов (whitelist): `jpeg\|png\|webp\|gif\|avif\|heif\|apng\|jxl`. Непустой; формат URL обязан входить в список |
@@ -202,17 +202,17 @@ Deny-by-default политика. Всё запрещено, кроме явно
 
 ```yaml
 presets:
-  - name: "thumb"
+  thumb:
     width: 200
     height: 200
     output-formats: [webp, avif]
     quality: 85
-  - name: "banner@2"
+  banner@2:
     width: 2400
     height: 800
     output-formats: [webp, avif]
     dpr: 2
-  - name: "portrait"
+  portrait:
     crop: face
     trim: true
     width: 300
@@ -275,11 +275,11 @@ path-policies:
 
 ## watermarks
 
-Именованные декларации ватермарок. Секция опциональна.
+**Map** именованных деклараций ватермарок: ключ = имя ватермарки, значение = настройки. Уникальность имён обеспечивается самим map; поиск по имени — O(1). Секция опциональна.
 
 | Поле | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `name` | string | обязателен | Уникальное имя для ссылок |
+| *(ключ)* | string | обязателен | Уникальное имя для ссылок |
 | `path` | string | обязателен | Путь к PNG-файлу на диске; отсутствие файла — ошибка старта |
 | `position` | string | `center` | `top\|bottom\|left\|right\|center` |
 | `repeat` | string | `no-repeat` | `no-repeat\|repeat\|repeat-x\|repeat-y\|round\|space` |
@@ -287,11 +287,11 @@ path-policies:
 
 Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
-Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets[].watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`. Поле `watermark` у path-policy более не существует.
+Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets.<name>.watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`. Поле `watermark` у path-policy более не существует.
 
 ```yaml
 watermarks:
-  - name: logo
+  logo:
     path: "/etc/imager/watermarks/logo.png"
     position: bottom-right   # см. допустимые значения выше
     repeat: no-repeat
@@ -659,17 +659,17 @@ observability:
 ```yaml
 policy:
   presets:
-    - name: "thumb"
+    thumb:
       width: 200
       height: 200
       output-formats: [webp, avif]
       quality: 85
-    - name: "thumb@2"
+    thumb@2:
       width: 400
       height: 400
       output-formats: [webp, avif]
       quality: 85
-    - name: "banner@2"
+    banner@2:
       width: 2400
       height: 800
       output-formats: [webp, avif]

@@ -231,9 +231,8 @@ func safePolicy() *policy.Policy {
 				Presets: dynamic.StringSlice{dynamic.String("thumb")},
 			},
 		},
-		Presets: []policy.PresetConfig{
-			{
-				Name:          dynamic.String("thumb"),
+		Presets: map[string]policy.PresetConfig{
+			"thumb": {
 				Crop:          dynamic.String("center"),
 				Width:         dynamic.Uint32(120),
 				Height:        dynamic.Uint32(80),

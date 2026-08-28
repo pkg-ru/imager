@@ -538,6 +538,13 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	if dh := req.Size().Height(); dh != nil {
 		h = dh.Int() * dpr
 	}
+	// Кроп (и детекторные кропы) требует ОБА измерения: для размеров с
+	// одним измерением (x200/200x — вторая сторона вычисляется
+	// пропорционально) кроп невозможен, поэтому операция понижается до
+	// resize. Trim при этом сохраняется (trim-only остаётся trim-only).
+	if (w == 0 || h == 0) && isCropOperation(op) {
+		op = processing.OpResize
+	}
 	plan, err := processing.NewProcessingPlan(
 		op, srcFmt, outFmt,
 		processing.Size{Width: w, Height: h},
@@ -577,6 +584,18 @@ func (s *Service) resolveTrim() *processing.TrimSpec {
 //	"fct"→ face-crop,   trim=true
 //	"oc" → object-crop, trim=false
 //	"oct"→ object-crop, trim=true
+//
+// isCropOperation сообщает, является ли операция кропом (требует оба
+// измерения целевого размера). Resize — не кроп.
+func isCropOperation(op processing.Operation) bool {
+	switch op {
+	case processing.OpCrop, processing.OpSmartCrop, processing.OpFaceCrop, processing.OpObjectCrop:
+		return true
+	default:
+		return false
+	}
+}
+
 func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
 	switch t {
 	case asset.TransformCrop:

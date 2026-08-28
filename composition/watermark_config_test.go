@@ -17,7 +17,7 @@ func TestParseRuntimeConfigWatermarks(t *testing.T) {
 	yaml := `
 version: "1"
 watermarks:
-  - name: logo
+  logo:
     path: ` + wmFile + `
     position: bottom
     repeat: repeat-x
@@ -27,7 +27,7 @@ policy:
     "/":
       presets: [thumb]
   presets:
-    - name: thumb
+    thumb:
       width: 200
       height: 200
       output-formats: [webp]

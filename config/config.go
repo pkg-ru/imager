@@ -34,19 +34,18 @@ type Config struct {
 	// Version — версия конфигурации (должна быть "1").
 	Version dynamic.String `yaml:"version"`
 	// Watermarks — именованные декларации ватермарок. На них ссылаются
-	// пресеты и path-policies по имени (watermark: <name>).
-	Watermarks []WatermarkConfig `yaml:"watermarks"`
+	// пресеты и path-policies по имени (watermark: <name>). Имя задаётся
+	// КЛЮЧОМ map (поля name нет); поиск по имени — O(1).
+	Watermarks map[string]WatermarkConfig `yaml:"watermarks"`
 	// Policy — конфигурация политики.
 	Policy policy.Config `yaml:"policy"`
 	// Processing — конфигурация обработки.
 	Processing ProcessingConfig `yaml:"processing"`
 }
 
-// WatermarkConfig — декларация ватермарки в конфигурации.
+// WatermarkConfig — декларация ватермарки в конфигурации. Имя ватермарки
+// задаётся ключом map в секции watermarks.
 type WatermarkConfig struct {
-	// Name — уникальное имя ватермарки (по нему ссылаются пресеты и
-	// path-policies).
-	Name dynamic.String `yaml:"name"`
 	// Path — путь к файлу изображения ватермарки на диске.
 	Path dynamic.String `yaml:"path"`
 	// Position — позиция размещения:
@@ -144,28 +143,21 @@ func (c *Config) Validate() error {
 	if a := c.Processing.DefaultVideoAttempts; a != 0 && a < 1 {
 		return fmt.Errorf("config: default-video-attempts must be >= 1, got %d", a)
 	}
-	// Ватермарки: валидность каждой декларации, уникальность имён.
-	for i, w := range c.Watermarks {
-		if _, err := processing.NewWatermarkSpec(w.Name.Unwrap(), w.Path.Unwrap(),
+	// Ватермарки: валидность каждой декларации (имя = ключ map,
+	// уникальность обеспечивается самим map).
+	for name, w := range c.Watermarks {
+		if _, err := processing.NewWatermarkSpec(name, w.Path.Unwrap(),
 			processing.WatermarkPosition(w.Position.Unwrap()),
 			processing.WatermarkRepeat(w.Repeat.Unwrap()), w.Size.Unwrap()); err != nil {
-			return fmt.Errorf("config: watermarks[%d]: %w", i, err)
+			return fmt.Errorf("config: watermarks.%s: %w", name, err)
 		}
-	}
-	seenWM := make(map[string]bool, len(c.Watermarks))
-	for _, w := range c.Watermarks {
-		name := w.Name.Unwrap()
-		if seenWM[name] {
-			return fmt.Errorf("config: watermarks: duplicate name %q", name)
-		}
-		seenWM[name] = true
 	}
 	// Ссылки на ватермарки: default-watermark, пресеты, customs.
 	checkRef := func(name, what string) error {
 		if name == "" {
 			return nil
 		}
-		if !seenWM[name] {
+		if _, ok := c.Watermarks[name]; !ok {
 			return fmt.Errorf("config: %s: unknown watermark %q", what, name)
 		}
 		return nil
@@ -173,8 +165,8 @@ func (c *Config) Validate() error {
 	if err := checkRef(c.Processing.DefaultWatermark.Unwrap(), "processing.default-watermark"); err != nil {
 		return err
 	}
-	for i, p := range c.Policy.Presets {
-		if err := checkRef(p.Watermark.Unwrap(), fmt.Sprintf("policy.presets[%d] (%s).watermark", i, p.Name.Unwrap())); err != nil {
+	for pname, p := range c.Policy.Presets {
+		if err := checkRef(p.Watermark.Unwrap(), fmt.Sprintf("policy.presets.%s.watermark", pname)); err != nil {
 			return err
 		}
 	}
@@ -196,8 +188,8 @@ func (c *Config) Validate() error {
 // имена уникальны).
 func (c *Config) watermarkRegistry() map[string]*processing.WatermarkSpec {
 	reg := make(map[string]*processing.WatermarkSpec, len(c.Watermarks))
-	for _, w := range c.Watermarks {
-		spec, err := processing.NewWatermarkSpec(w.Name.Unwrap(), w.Path.Unwrap(),
+	for name, w := range c.Watermarks {
+		spec, err := processing.NewWatermarkSpec(name, w.Path.Unwrap(),
 			processing.WatermarkPosition(w.Position.Unwrap()),
 			processing.WatermarkRepeat(w.Repeat.Unwrap()), w.Size.Unwrap())
 		if err != nil {

@@ -189,8 +189,8 @@ type RuntimeConfigFile struct {
 	Version dynamic.String `yaml:"version"`
 	// Watermarks — именованные декларации ватермарок (пробрасываются в
 	// config.Config; ссылки из пресетов/path-policies разрешаются при
-	// компиляции).
-	Watermarks []config.WatermarkConfig `yaml:"watermarks"`
+	// компиляции). Имя ватермарки = ключ map.
+	Watermarks map[string]config.WatermarkConfig `yaml:"watermarks"`
 	// Server — конфигурация HTTP-сервера.
 	Server ServerYAML `yaml:"server"`
 	// Admin — конфигурация административных эндпоинтов.
@@ -587,12 +587,12 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	// Собираем config.Config из сырых секций.
 	cfg := &config.Config{Version: raw.Version, Watermarks: raw.Watermarks}
 	// Fail-fast: файлы ватермарок должны существовать на старте.
-	for i, w := range raw.Watermarks {
+	for name, w := range raw.Watermarks {
 		if w.Path.Unwrap() == "" {
 			continue // пустой path отклонится в config.Validate
 		}
 		if _, err := os.Stat(w.Path.Unwrap()); err != nil {
-			return nil, fmt.Errorf("composition: watermarks[%d] (%s): %w", i, w.Name.Unwrap(), err)
+			return nil, fmt.Errorf("composition: watermarks.%s: %w", name, err)
 		}
 	}
 	if raw.Policy != nil {

@@ -290,7 +290,7 @@ func TestParseRuntimeConfigPathPolicies(t *testing.T) {
 version: "1"
 policy:
    presets:
-     - name: thumb
+     thumb:
        crop: center
        width: 120
        height: 80
@@ -348,27 +348,27 @@ func TestParseRuntimeConfigPathPolicyCropModes(t *testing.T) {
 version: "1"
 policy:
    presets:
-     - name: center
+     center:
        crop: center
        width: 120
        height: 80
        output-formats: [webp]
-     - name: smart
+     smart:
        crop: smart
        width: 120
        height: 80
        output-formats: [webp]
-     - name: face
+     face:
        crop: face
        width: 120
        height: 80
        output-formats: [webp]
-     - name: object
+     object:
        crop: object
        width: 120
        height: 80
        output-formats: [webp]
-     - name: resize
+     resize:
        width: 120
        height: 80
        output-formats: [webp]
@@ -416,7 +416,7 @@ func TestParseRuntimeConfigPathPolicyCropInvalid(t *testing.T) {
 version: "1"
 policy:
    presets:
-     - name: thumb
+     thumb:
        crop: bogus
        width: 120
        height: 80
@@ -435,7 +435,7 @@ func TestParseRuntimeConfigOrientationKeys(t *testing.T) {
 version: "1"
 policy:
    presets:
-     - name: thumb
+     thumb:
        crop: center
        width: 120
        height: 80
@@ -485,7 +485,7 @@ func TestParseRuntimeConfigTrimKeys(t *testing.T) {
 version: "1"
 policy:
    presets:
-     - name: thumb
+     thumb:
        crop: center
        width: 120
        height: 80
@@ -533,7 +533,7 @@ policy:
      "/":
        presets: ["thumb"]
    presets:
-     - name: thumb
+     thumb:
        width: 200
        height: 200
        output-formats: [webp]
@@ -755,7 +755,7 @@ policy:
      "/":
        presets: ["thumb"]
    presets:
-     - name: thumb
+     thumb:
        width: 200
        height: 200
        output-formats: [webp]

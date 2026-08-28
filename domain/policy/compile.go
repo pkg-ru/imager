@@ -14,9 +14,12 @@ import (
 // PathPolicies — map: ключ = путь (префикс), значение = настройки пути.
 // "/" — fallback, применяется ко всем путям, если нет более специфичного
 // совпадения (longest-prefix match).
+//
+// Presets — map: ключ = имя пресета (уникальность обеспечивается самим
+// map), значение = настройки пресета. Поиск пресета по имени — O(1).
 type Config struct {
 	PathPolicies map[string]PathPolicyConfig `yaml:"path-policies"`
-	Presets      []PresetConfig              `yaml:"presets"`
+	Presets      map[string]PresetConfig     `yaml:"presets"`
 }
 
 // PathPolicyConfig — конфигурация path-policy (политики пути).
@@ -35,8 +38,9 @@ type PathPolicyConfig struct {
 // Preset не содержит source-format: исходный формат определяется URL
 // ({source_name}-{source_format}/{segment}.{output_format}).
 //
-// Имя пресета может содержать фиксированный @dpr-суффикс (например
-// "banner@2"). Поле dpr (если задано) имеет приоритет над @dpr в имени.
+// Имя пресета задаётся КЛЮЧОМ map в policy.presets (поля name нет).
+// Имя может содержать фиксированный @dpr-суффикс (например "banner@2").
+// Поле dpr (если задано) имеет приоритет над @dpr в имени.
 //
 // DPR — dynamic.Nullable[dynamic.Uint32]: Set=true означает «ключ dpr
 // присутствует» (даже 0/1), Set=false — «ключ отсутствует». Это различает
@@ -55,7 +59,6 @@ type PathPolicyConfig struct {
 // при trim=true — "t"/"ct"/"sct"/"fct"/"oct", иначе — ""/"c"/"sc"/"fc"/"oc".
 // Фактическое применение — сначала trim, затем кроп.
 type PresetConfig struct {
-	Name          dynamic.String                   `yaml:"name"`
 	Width         dynamic.Uint32                   `yaml:"width"`
 	Height        dynamic.Uint32                   `yaml:"height"`
 	OutputFormats dynamic.StringSlice              `yaml:"output-formats"`
@@ -105,7 +108,7 @@ func (e ValidationErrors) Error() string {
 // Если ошибок нет, возвращается nil.
 //
 // Проверяются:
-//   - уникальность имён пресетов;
+//   - непустые имена пресетов (уникальность обеспечивается map);
 //   - валидность путей (нормализация "/prefix", "/" допустим, без дубликатов);
 //   - валидность custom-имён (размер-грамматика x/x200/200x/200x200,
 //     опционально с @2/@3);
@@ -137,11 +140,17 @@ func ValidateConfig(cfg *Config) error {
 		seen[norm] = true
 	}
 
-	// Presets.
-	presetNames := map[string]bool{}
-	for i, p := range cfg.Presets {
-		base := fmt.Sprintf("presets[%d]", i)
-		validatePresetConfig(&errs, base, p, presetNames)
+	// Presets: имя = ключ map. Обход в отсортированном порядке —
+	// детерминированный список ошибок валидации. Непустой map имён
+	// включает проверки имени (пустое имя, @0/@1, конфликт dpr).
+	presetKeys := make([]string, 0, len(cfg.Presets))
+	for name := range cfg.Presets {
+		presetKeys = append(presetKeys, name)
+	}
+	sortStrings(presetKeys)
+	for _, name := range presetKeys {
+		base := "presets." + name
+		validatePresetConfig(&errs, base, name, cfg.Presets[name], map[string]bool{})
 	}
 
 	// Customs (в path-policies): имя = ключ, размер-грамматика.
@@ -174,7 +183,7 @@ func ValidateConfig(cfg *Config) error {
 					Reason: fmt.Sprintf("dpr %d conflicts with dpr %d in custom name %q", cc.DPR.Value.Unwrap(), nameDPR.Int(), cname),
 				})
 			}
-			validatePresetConfig(&errs, cb, cc, nil)
+			validatePresetConfig(&errs, cb, cname, cc, nil)
 		}
 	}
 
@@ -185,9 +194,9 @@ func ValidateConfig(cfg *Config) error {
 }
 
 // validatePresetConfig валидирует общие поля пресета/custom.
-// presetNames — карта уже встреченных имён пресетов (nil для customs).
-func validatePresetConfig(errs *ValidationErrors, base string, p PresetConfig, presetNames map[string]bool) {
-	name := p.Name.Unwrap()
+// name — имя пресета/custom (ключ map). presetNames — карта уже
+// встреченных имён пресетов (nil для customs).
+func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetConfig, presetNames map[string]bool) {
 	crop := p.Crop.Unwrap()
 	rotate := p.Rotate.Unwrap()
 	flip := p.Flip.Unwrap()
@@ -316,12 +325,19 @@ func Compile(cfg Config, watermarks map[string]*processing.WatermarkSpec, defaul
 		return wm, nil
 	}
 
-	// Глобальные пресеты.
+	// Глобальные пресеты: имя = ключ map (поиск по имени — O(1) в
+	// PresetSet). Обход в отсортированном порядке — детерминированные
+	// ошибки компиляции.
+	presetKeys := make([]string, 0, len(cfg.Presets))
+	for name := range cfg.Presets {
+		presetKeys = append(presetKeys, name)
+	}
+	sortStrings(presetKeys)
 	presets := make([]*asset.Preset, 0, len(cfg.Presets))
-	for i, p := range cfg.Presets {
-		preset, err := compilePreset(p.Name.Unwrap(), p, resolveWM, defaultOrientation)
+	for _, name := range presetKeys {
+		preset, err := compilePreset(name, cfg.Presets[name], resolveWM, defaultOrientation)
 		if err != nil {
-			return nil, fmt.Errorf("policy: presets[%d] (%s): %w", i, p.Name.Unwrap(), err)
+			return nil, fmt.Errorf("policy: presets.%s: %w", name, err)
 		}
 		presets = append(presets, preset)
 	}
