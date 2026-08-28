@@ -23,13 +23,14 @@ watermarks:
     repeat: repeat-x
     size: 200px 50px
 policy:
-  global:
-    authorization: safe
-    allowed-presets: [thumb]
+  path-policies:
+    "/":
+      presets: [thumb]
   presets:
     - name: thumb
-      size: 200x200
-      output-format: webp
+      width: 200
+      height: 200
+      output-formats: [webp]
       watermark: logo
 `
 	if _, err := ParseRuntimeConfig([]byte(yaml)); err != nil {

@@ -1,14 +1,9 @@
-// Package routing реализует маршрутизацию между процессорами:
-// libvips (основной, in-process через govips) и ImageMagick (опциональный
-// fallback для сборок без тега "libvips").
+// Package routing реализует маршрутизацию к процессору libvips.
 //
 // Выбор движка происходит на основе плана обработки (ProcessingPlan):
-//   - если формат ИЛИ операция покрываются основным процессором — он
-//     используется;
-//   - если формат не покрывается primary и fallback настроен — используется
-//     fallback;
-//   - если формат не покрывается ни одним движком — возвращается
-//     типизированная ошибка ErrEngineUnavailable.
+//   - если формат ИЛИ операция покрываются процессором — он используется;
+//   - если формат не покрывается — возвращается типизированная ошибка
+//     ErrEngineUnavailable.
 //
 // Пакет изолирован от cgo: он живёт через абстрактный порт
 // processor.Processor и не зависит от govips/libvips напрямую.
@@ -25,8 +20,8 @@ import (
 )
 
 // ErrEngineUnavailable — сигнал, что для запрошенного формата/операции нет
-// доступного движка. Возвращается, когда формат не покрывается ни primary,
-// ни fallback (например, сборка без тега "libvips" и без ImageMagick).
+// доступного движка. Возвращается, когда формат не покрывается процессором
+// (например, сборка без тега "libvips").
 var ErrEngineUnavailable = errors.New("routing: engine unavailable for requested format")
 
 // UnsupportedError описывает неподдерживаемый формат/операцию.
@@ -34,11 +29,11 @@ type UnsupportedError struct {
 	Format    processing.Format
 	Operation string
 	Reason    string
-	Missing   string // имя требуемого движка (например "imagemagick")
+	Missing   string // имя требуемого движка (например "libvips")
 }
 
 func (e *UnsupportedError) Error() string {
-	return fmt.Sprintf("routing: format %q not supported by primary engine%s; requires %s",
+	return fmt.Sprintf("routing: format %q not supported by engine%s; requires %s",
 		e.Format, e.Reason, e.Missing)
 }
 
@@ -59,23 +54,18 @@ func IsEngineUnavailable(err error) bool {
 type Capability struct {
 	// Formats — набор поддерживаемых форматов (нижний регистр).
 	Formats map[processing.Format]bool
-	// Name — имя движка ("libvips", "imagemagick").
+	// Name — имя движка ("libvips").
 	Name string
 }
 
-// Processor — маршрутизатор между основным и fallback процессорами.
+// Processor — маршрутизатор к процессору.
 var _ processor.RGBPreparer = (*Processor)(nil)
 
-// Основной (primary) процессор обрабатывает подавляющее большинство
-// операций. Fallback-процессор используется ТОЛЬКО для форматов, которые
-// основной не покрывает (например, когда primary — ImageMagick, а формат
-// требует libvips). Если fallback не настроен (nil), форматы вне покрытия
-// primary вызывают ErrEngineUnavailable.
+// Processor обрабатывает операции на единственном движке. Форматы вне
+// покрытия primary вызывают ErrEngineUnavailable.
 type Processor struct {
-	primary      processor.Processor
-	primaryCaps  Capability
-	fallback     processor.Processor
-	fallbackCaps Capability
+	primary     processor.Processor
+	primaryCaps Capability
 }
 
 // Options — параметры маршрутизатора.
@@ -84,11 +74,6 @@ type Options struct {
 	Primary processor.Processor
 	// PrimaryCaps — покрытие основного движка (обязательный).
 	PrimaryCaps Capability
-	// Fallback — опциональный fallback-процессор (может быть nil).
-	Fallback processor.Processor
-	// FallbackCaps — покрытие fallback-движка (игнорируется, если
-	// Fallback nil).
-	FallbackCaps Capability
 }
 
 // New создает маршрутизатор. Валидирует обязательные поля.
@@ -100,37 +85,35 @@ func New(opts Options) (*Processor, error) {
 		return nil, errors.New("routing: primary capabilities are required")
 	}
 	return &Processor{
-		primary:      opts.Primary,
-		primaryCaps:  opts.PrimaryCaps,
-		fallback:     opts.Fallback,
-		fallbackCaps: opts.FallbackCaps,
+		primary:     opts.Primary,
+		primaryCaps: opts.PrimaryCaps,
 	}, nil
 }
 
-// Process выполняет обработку на выбранном движке.
+// Process выполняет обработку на движке.
 //
-// Выбор движка:
-//  1. Если план покрывается primary — primary.
-//  2. Если формат (source или output) не покрывается primary и покрывается
-//     fallback — fallback.
-//  3. Иначе — UnsupportedError/ErrEngineUnavailable.
+// Если формат (source или output) не покрывается primary — возвращается
+// UnsupportedError/ErrEngineUnavailable.
 func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writer) (*processor.Result, error) {
 	if in.Plan == nil {
 		return nil, errors.New("routing: nil plan")
 	}
-	engine, err := p.engineFor(in.Plan)
-	if err != nil {
-		return nil, err
+	if !p.primaryCovered(in.Plan) {
+		return nil, &UnsupportedError{
+			Format:    in.Plan.OutputFormats,
+			Operation: string(in.Plan.Operation),
+			Reason:    " (engine does not support this format)",
+			Missing:   p.primaryCaps.Name,
+		}
 	}
-	return engine.Process(ctx, in, out)
+	return p.primary.Process(ctx, in, out)
 }
 
-// PrepareRGB делегирует подготовку RGB-пикселей выбранному движку.
+// PrepareRGB делегирует подготовку RGB-пикселей движку.
 // Реализует processor.RGBPreparer (извлечение RGB для детекции на уровне
-// приложения, ensureDetections). Если выбранный движок не поддерживает
-// подготовку RGB — возвращается ошибка (деградация к self-detection).
+// приложения, ensureDetections). Если движок не поддерживает подготовку
+// RGB — возвращается ошибка (деградация к self-detection).
 func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*processor.RGBFrame, error) {
-	// RGBPreparer не зависит от плана — используем primary-движок.
 	prep, ok := p.primary.(processor.RGBPreparer)
 	if !ok {
 		return nil, errors.New("routing: primary processor does not implement RGBPreparer")
@@ -138,55 +121,12 @@ func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*process
 	return prep.PrepareRGB(ctx, src)
 }
 
-// engineFor выбирает процессор для плана.
-func (p *Processor) engineFor(plan *processing.ProcessingPlan) (processor.Processor, error) {
-	// Покрытие primary: оба формата (source и output) должны быть в списке.
-	if p.primaryCovered(plan) {
-		return p.primary, nil
-	}
-
-	// Пытаемся переключить на fallback, если формат не покрыт primary.
-	if p.fallback != nil {
-		if p.fallbackCovered(plan) {
-			return p.fallback, nil
-		}
-		return nil, &UnsupportedError{
-			Format:    plan.OutputFormat,
-			Operation: string(plan.Operation),
-			Reason:    " (not covered by fallback either)",
-			Missing:   p.fallbackCaps.Name,
-		}
-	}
-
-	// Fallback отсутствует — ошибка недоступного движка.
-	var missing string
-	if p.fallback != nil {
-		missing = p.fallbackCaps.Name
-	} else {
-		missing = "imagemagick"
-	}
-	return nil, &UnsupportedError{
-		Format:    plan.OutputFormat,
-		Operation: string(plan.Operation),
-		Reason:    " (primary engine does not support this format)",
-		Missing:   missing,
-	}
-}
-
 // primaryCovered проверяет, что оба формата плана покрыты primary-движком.
 func (p *Processor) primaryCovered(plan *processing.ProcessingPlan) bool {
-	return p.coverAll(p.primaryCaps, plan)
-}
-
-func (p *Processor) fallbackCovered(plan *processing.ProcessingPlan) bool {
-	return p.coverAll(p.fallbackCaps, plan)
-}
-
-func (p *Processor) coverAll(caps Capability, plan *processing.ProcessingPlan) bool {
-	if _, ok := caps.Formats[plan.SourceFormat]; !ok {
+	if _, ok := p.primaryCaps.Formats[plan.SourceFormat]; !ok {
 		return false
 	}
-	if _, ok := caps.Formats[plan.OutputFormat]; !ok {
+	if _, ok := p.primaryCaps.Formats[plan.OutputFormats]; !ok {
 		return false
 	}
 	return true

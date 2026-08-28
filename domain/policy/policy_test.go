@@ -3,6 +3,7 @@ package policy
 import (
 	"testing"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/domain/asset"
 )
 
@@ -15,16 +16,44 @@ func mustReq(t *testing.T, url string) *asset.Request {
 	return req
 }
 
+// mustPolicy компилирует политику из конфигурации.
+func mustPolicy(t *testing.T, cfg Config) *Policy {
+	t.Helper()
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	return compiled.Policy
+}
+
+// baseCfg — базовая конфигурация: "/" с пресетом banner и customs.
+func baseCfg() Config {
+	return Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("banner")},
+				Customs: map[string]PresetConfig{
+					"200x200": presetCfg("", 0, 0, "webp"),
+					"x":       presetCfg("", 0, 0, "webp"),
+				},
+			},
+		},
+		Presets: []PresetConfig{
+			presetCfg("banner", 200, 0, "webp", "avif"),
+		},
+	}
+}
+
 func TestDenyByDefault(t *testing.T) {
-	// Пустая политика (без unsafe и без правил) отклоняет всё.
+	// Пустая политика (без path-policies) отклоняет всё.
 	p := &Policy{}
-	req := mustReq(t, "/photos/photo-1-jpg/c-120x80@2.webp")
+	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
 	d := p.Authorize(req)
 	if d.Allowed {
 		t.Errorf("expected deny-by-default, got allowed: %+v", d)
 	}
-	if d.Reason != ReasonDenyByDefault {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDenyByDefault)
+	if d.Reason != ReasonPathNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonPathNotAllowed)
 	}
 }
 
@@ -39,111 +68,326 @@ func TestNilRequest(t *testing.T) {
 	}
 }
 
-func TestUnsafeAllowsCanonical(t *testing.T) {
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthUnsafe}}
-	req := mustReq(t, "/photos/photo-1-jpg/c-120x80@2.webp")
-	d := p.Authorize(req)
-	if !d.Allowed {
-		t.Errorf("expected allowed in unsafe mode, got %+v", d)
-	}
-	if d.Reason != ReasonAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonAllowed)
-	}
-}
-
-func TestSafeSizeRule(t *testing.T) {
-	rule, err := ParseSizeRule("120-300x80-90")
-	if err != nil {
-		t.Fatalf("ParseSizeRule error: %v", err)
-	}
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthSafe, SizeRules: []SizeRule{rule}}}
-
-	allowed := []string{
-		"/photos/photo-1-jpg/c-120x80@2.webp",
-		"/photos/photo-1-jpg/c-200x85@2.webp",
-	}
-	for _, u := range allowed {
-		d := p.Authorize(mustReq(t, u))
-		if !d.Allowed {
-			t.Errorf("expected allowed for %q, got %+v", u, d)
-		}
-	}
-
-	denied := []string{
-		"/photos/photo-1-jpg/c-100x80@2.webp", // width below range
-		"/photos/photo-1-jpg/c-301x80@2.webp", // width above range
-		"/photos/photo-1-jpg/c-200x79@2.webp", // height below range
-	}
-	for _, u := range denied {
-		d := p.Authorize(mustReq(t, u))
-		if d.Allowed {
-			t.Errorf("expected denied for %q, got %+v", u, d)
-		}
-		if d.Reason != ReasonSizeNotAllowed {
-			t.Errorf("Reason = %q, want %q", d.Reason, ReasonSizeNotAllowed)
-		}
-	}
-}
-
-func TestSafeNoRulesDeny(t *testing.T) {
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthSafe}}
-	req := mustReq(t, "/photos/photo-1-jpg/c-120x80@2.webp")
+func TestPathNotAllowed(t *testing.T) {
+	// Нет "/" и нет совпадений → path_not_allowed.
+	p := mustPolicy(t, Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/users": {
+				Presets: dynamic.StringSlice{dynamic.String("banner")},
+			},
+		},
+		Presets: []PresetConfig{presetCfg("banner", 200, 0, "webp")},
+	})
+	req := mustReq(t, "/products/photo-1-jpg/banner.webp")
 	d := p.Authorize(req)
 	if d.Allowed {
-		t.Error("expected deny when safe mode has no rules")
+		t.Errorf("expected deny, got %+v", d)
 	}
-	if d.Reason != ReasonDenyByDefault {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDenyByDefault)
+	if d.Reason != ReasonPathNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonPathNotAllowed)
+	}
+}
+
+func TestSegmentNotAllowed(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/other.webp")
+	d := p.Authorize(req)
+	if d.Allowed {
+		t.Errorf("expected deny, got %+v", d)
+	}
+	if d.Reason != ReasonSegmentNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonSegmentNotAllowed)
 	}
 }
 
 func TestPresetAllowed(t *testing.T) {
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthSafe, AllowedPresets: []string{"thumb"}}}
-	req := mustReq(t, "/photos/photo-1-jpg/thumb.webp")
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
 	d := p.Authorize(req)
 	if !d.Allowed {
 		t.Errorf("expected allowed preset, got %+v", d)
 	}
 }
 
-func TestPresetAllowedWithDPRSuffix(t *testing.T) {
-	// Имя пресета с @dpr-суффиксом распознаётся целиком: allowed-presets
-	// должен содержать "thumb@2".
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthSafe, AllowedPresets: []string{"thumb@2"}}}
-	req := mustReq(t, "/photos/photo-1-jpg/thumb@2.webp")
+func TestPresetAllowedWithDPR(t *testing.T) {
+	// Пресет banner без dpr в настройках: @2 в URL допустим.
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/banner@2.webp")
 	d := p.Authorize(req)
 	if !d.Allowed {
-		t.Errorf("expected allowed preset thumb@2, got %+v", d)
-	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Errorf("PresetName = %q, want thumb@2", req.PresetName())
+		t.Errorf("expected allowed preset with dpr, got %+v", d)
 	}
 }
 
-func TestPresetNotAllowed(t *testing.T) {
-	p := &Policy{Global: GlobalPolicy{Authorization: AuthSafe, AllowedPresets: []string{"thumb"}}}
-	req := mustReq(t, "/photos/photo-1-jpg/other.webp")
+func TestPresetDPRSetDeniesSuffix(t *testing.T) {
+	// Пресет banner с dpr: 2 в настройках: @2 в URL запрещён.
+	cfg := baseCfg()
+	cfg.Presets[0].DPR = dynamic.NewNullable(dynamic.Uint32(2))
+	p := mustPolicy(t, cfg)
+	// Без суффикса — допустимо, итоговый dpr=2.
+	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
+	d := p.Authorize(req)
+	if !d.Allowed {
+		t.Errorf("expected allowed without suffix, got %+v", d)
+	}
+	// С суффиксом @2 — запрещено.
+	req2 := mustReq(t, "/photos/photo-1-jpg/banner@2.webp")
+	d2 := p.Authorize(req2)
+	if d2.Allowed {
+		t.Errorf("expected deny for @2 when dpr set, got %+v", d2)
+	}
+	if d2.Reason != ReasonDPRNotAllowed {
+		t.Errorf("Reason = %q, want %q", d2.Reason, ReasonDPRNotAllowed)
+	}
+}
+
+func TestPresetNameWithDPR(t *testing.T) {
+	// Пресет "banner@2": в URL допустим ТОЛЬКО banner@2.
+	cfg := baseCfg()
+	cfg.Presets = []PresetConfig{presetCfg("banner@2", 200, 0, "webp")}
+	pp := cfg.PathPolicies["/"]
+	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
+	cfg.PathPolicies["/"] = pp
+	p := mustPolicy(t, cfg)
+	// banner@2 — допустимо.
+	req := mustReq(t, "/photos/photo-1-jpg/banner@2.webp")
+	d := p.Authorize(req)
+	if !d.Allowed {
+		t.Errorf("expected allowed banner@2, got %+v", d)
+	}
+	// banner (без суффикса) — не найдено (нет пресета "banner").
+	req2 := mustReq(t, "/photos/photo-1-jpg/banner.webp")
+	d2 := p.Authorize(req2)
+	if d2.Allowed {
+		t.Errorf("expected deny for banner without suffix, got %+v", d2)
+	}
+	if d2.Reason != ReasonSegmentNotAllowed {
+		t.Errorf("Reason = %q, want %q", d2.Reason, ReasonSegmentNotAllowed)
+	}
+}
+
+func TestPresetNameWithDPRConflict(t *testing.T) {
+	// Пресет "banner@2" с dpr: 3 в настройках — ошибка конфига.
+	cfg := baseCfg()
+	cfg.Presets = []PresetConfig{{
+		Name: dynamic.String("banner@2"), Width: dynamic.Uint32(200),
+		OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+		DPR:           dynamic.NewNullable(dynamic.Uint32(3)),
+	}}
+	if _, err := Compile(cfg, nil, nil); err == nil {
+		t.Error("expected config error for dpr conflict in name vs settings")
+	}
+}
+
+func TestCustomAllowed(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/200x200.webp")
+	d := p.Authorize(req)
+	if !d.Allowed {
+		t.Errorf("expected allowed custom, got %+v", d)
+	}
+}
+
+func TestCustomWithDPRWildcard(t *testing.T) {
+	// Custom 200x200 без dpr в настройках: @2 в URL допустим (wildcard-dpr).
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/200x200@2.webp")
+	d := p.Authorize(req)
+	if !d.Allowed {
+		t.Errorf("expected allowed custom with dpr, got %+v", d)
+	}
+}
+
+func TestCustomDPRSetDeniesSuffix(t *testing.T) {
+	// Custom 200x200 с dpr: 2 в настройках: @2 в URL запрещён.
+	cfg := baseCfg()
+	cfg.PathPolicies["/"].Customs["200x200"] = PresetConfig{
+		Width: dynamic.Uint32(200), Height: dynamic.Uint32(200),
+		OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+		DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
+	}
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/200x200@2.webp")
 	d := p.Authorize(req)
 	if d.Allowed {
-		t.Error("expected denied preset")
+		t.Errorf("expected deny for @2 when custom dpr set, got %+v", d)
 	}
-	if d.Reason != ReasonPresetNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonPresetNotAllowed)
+	if d.Reason != ReasonDPRNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDPRNotAllowed)
+	}
+	// Без суффикса — допустимо.
+	req2 := mustReq(t, "/photos/photo-1-jpg/200x200.webp")
+	if d2 := p.Authorize(req2); !d2.Allowed {
+		t.Errorf("expected allowed without suffix, got %+v", d2)
+	}
+}
+
+func TestCustomExactNameWithDPR(t *testing.T) {
+	// Точный custom "200x100@2": URL 200x100@2 матчится точным именем.
+	cfg := baseCfg()
+	cfg.PathPolicies["/"].Customs["200x100@2"] = presetCfg("", 0, 0, "webp", "avif")
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/200x100@2.webp")
+	d := p.Authorize(req)
+	if !d.Allowed {
+		t.Errorf("expected allowed exact custom 200x100@2, got %+v", d)
+	}
+	// URL 200x100 без суффикса НЕ матчится точным custom с @dpr в имени.
+	req2 := mustReq(t, "/photos/photo-1-jpg/200x100.webp")
+	d2 := p.Authorize(req2)
+	if d2.Allowed {
+		t.Errorf("expected deny for 200x100 without suffix, got %+v", d2)
+	}
+}
+
+func TestFormatNotAllowed(t *testing.T) {
+	// Пресет banner: output-formats [webp, avif]. png — запрещён.
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/banner.png")
+	d := p.Authorize(req)
+	if d.Allowed {
+		t.Errorf("expected deny for png, got %+v", d)
+	}
+	if d.Reason != ReasonFormatNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonFormatNotAllowed)
+	}
+}
+
+func TestCustomPriorityOverPreset(t *testing.T) {
+	// Имя есть и в customs, и в presets — побеждает custom.
+	cfg := baseCfg()
+	cfg.PathPolicies["/"].Customs["200x200"] = presetCfg("", 300, 100, "webp")
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/200x200.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if got := resolved.Size().String(); got != "300x100" {
+		t.Errorf("resolved size = %q, want 300x100 (custom priority)", got)
+	}
+}
+
+func TestResolveAppliesSettings(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if !resolved.IsResolved() {
+		t.Error("expected resolved request")
+	}
+	if got := resolved.Size().String(); got != "200x" {
+		t.Errorf("resolved size = %q, want 200x", got)
+	}
+	if got := resolved.DPR().Int(); got != asset.DefaultDPR {
+		t.Errorf("resolved DPR = %d, want 1", got)
+	}
+	if got := resolved.Transform(); got != "" {
+		t.Errorf("resolved transform = %q, want empty (resize)", got)
+	}
+}
+
+func TestResolveCustomSize(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/200x200.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if got := resolved.Size().String(); got != "200x200" {
+		t.Errorf("resolved size = %q, want 200x200", got)
+	}
+}
+
+func TestResolveCustomX(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/x.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if !resolved.Size().IsOriginal() {
+		t.Errorf("resolved size = %q, want original (x)", resolved.Size().String())
+	}
+}
+
+func TestResolveDPRFromURL(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	req := mustReq(t, "/photos/photo-1-jpg/banner@2.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if got := resolved.DPR().Int(); got != 2 {
+		t.Errorf("resolved DPR = %d, want 2", got)
+	}
+}
+
+func TestResolveDPRFromSettings(t *testing.T) {
+	// Пресет banner с dpr: 2: URL без суффикса → итоговый dpr=2.
+	cfg := baseCfg()
+	cfg.Presets[0].DPR = dynamic.NewNullable(dynamic.Uint32(2))
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if got := resolved.DPR().Int(); got != 2 {
+		t.Errorf("resolved DPR = %d, want 2", got)
+	}
+}
+
+func TestResolveDPRFromName(t *testing.T) {
+	// Пресет "banner@2": URL banner@2 → dpr=2 из имени.
+	cfg := baseCfg()
+	cfg.Presets = []PresetConfig{presetCfg("banner@2", 200, 0, "webp")}
+	pp := cfg.PathPolicies["/"]
+	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
+	cfg.PathPolicies["/"] = pp
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/banner@2.webp")
+	resolved, d := p.Resolve(req)
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got %+v", d)
+	}
+	if got := resolved.DPR().Int(); got != 2 {
+		t.Errorf("resolved DPR = %d, want 2", got)
+	}
+}
+
+func TestResolveDPRConflict(t *testing.T) {
+	// Пресет "banner@2": URL banner@3 → конфликт dpr.
+	cfg := baseCfg()
+	cfg.Presets = []PresetConfig{presetCfg("banner@2", 200, 0, "webp")}
+	pp := cfg.PathPolicies["/"]
+	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
+	cfg.PathPolicies["/"] = pp
+	p := mustPolicy(t, cfg)
+	req := mustReq(t, "/photos/photo-1-jpg/banner@3.webp")
+	_, d := p.Resolve(req)
+	if d.Allowed {
+		t.Fatalf("expected deny, got %+v", d)
+	}
+	if d.Reason != ReasonDPRNotAllowed {
+		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDPRNotAllowed)
 	}
 }
 
 // TestPathIndexLongestPrefixMatch проверяет выбор path-policy по правилу
 // longest prefix match на всех примерах из ТЗ (пункт 3).
 func TestPathIndexLongestPrefixMatch(t *testing.T) {
-	p := &Policy{
-		PathPolicies: []PathPolicy{
-			{Path: "/"},
-			{Path: "/users"},
-			{Path: "/basket/users"},
-			{Path: "/basket/products"},
-			{Path: "/users/gift"},
+	p := mustPolicy(t, Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/":                {},
+			"/users":           {},
+			"/basket/users":    {},
+			"/basket/products": {},
+			"/users/gift":      {},
 		},
-	}
+	})
 	tests := []struct {
 		path string
 		want string
@@ -165,13 +409,13 @@ func TestPathIndexLongestPrefixMatch(t *testing.T) {
 		{"users/other", "/users"},
 	}
 	for _, tt := range tests {
-		idx := p.pathIndex(tt.path)
-		if idx < 0 {
-			t.Errorf("pathIndex(%q) = -1, want %q", tt.path, tt.want)
+		pp := p.matchPath(tt.path)
+		if pp == nil {
+			t.Errorf("matchPath(%q) = nil, want %q", tt.path, tt.want)
 			continue
 		}
-		if got := p.PathPolicies[idx].Path; got != tt.want {
-			t.Errorf("pathIndex(%q) = %q, want %q", tt.path, got, tt.want)
+		if got := pp.Path; got != tt.want {
+			t.Errorf("matchPath(%q) = %q, want %q", tt.path, got, tt.want)
 		}
 	}
 }
@@ -179,497 +423,52 @@ func TestPathIndexLongestPrefixMatch(t *testing.T) {
 // TestPathIndexFallbackRoot проверяет, что "/" — fallback, применяется когда
 // ни один другой префикс не совпал.
 func TestPathIndexFallbackRoot(t *testing.T) {
-	p := &Policy{
-		PathPolicies: []PathPolicy{
-			{Path: "/users"},
-			{Path: "/"},
+	p := mustPolicy(t, Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/users": {},
+			"/":      {},
 		},
-	}
+	})
 	// "/" в списке, но для "products" совпадает только "/".
-	idx := p.pathIndex("products")
-	if idx < 0 || p.PathPolicies[idx].Path != "/" {
-		t.Errorf("pathIndex(products) = %d (%q), want /", idx, p.PathPolicies[idx].Path)
+	pp := p.matchPath("products")
+	if pp == nil || pp.Path != "/" {
+		t.Errorf("matchPath(products) = %v, want /", pp)
 	}
 	// Для "users" — более специфичный "/users".
-	idx = p.pathIndex("users")
-	if idx < 0 || p.PathPolicies[idx].Path != "/users" {
-		t.Errorf("pathIndex(users) = %d (%q), want /users", idx, p.PathPolicies[idx].Path)
+	pp = p.matchPath("users")
+	if pp == nil || pp.Path != "/users" {
+		t.Errorf("matchPath(users) = %v, want /users", pp)
 	}
 }
 
 // TestPathIndexNoMatch проверяет, что при отсутствии "/" и совпадений
-// возвращается -1 (path-policy не применяется).
+// возвращается nil (path-policy не применяется).
 func TestPathIndexNoMatch(t *testing.T) {
-	p := &Policy{
-		PathPolicies: []PathPolicy{
-			{Path: "/users"},
+	p := mustPolicy(t, Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/users": {},
 		},
-	}
-	if idx := p.pathIndex("products"); idx != -1 {
-		t.Errorf("pathIndex(products) = %d, want -1", idx)
-	}
-}
-
-// TestAuthorizePathDPR проверяет ограничение dpr для канонических URL.
-func TestAuthorizePathDPR(t *testing.T) {
-	dpr01 := Range{Min: 0, Max: 1}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/", DPR: &dpr01},
-		},
-	}
-	// dpr=1 (без суффикса) — разрешён.
-	d := p.Authorize(mustReq(t, "/products/users-png/c-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for dpr=1, got %+v", d)
-	}
-	// dpr=2 — отклонён.
-	d = p.Authorize(mustReq(t, "/products/users-png/c-280x280@2.webp"))
-	if d.Allowed {
-		t.Error("expected denied for dpr=2")
-	}
-	if d.Reason != ReasonDPRNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDPRNotAllowed)
-	}
-	// dpr=3 — отклонён.
-	d = p.Authorize(mustReq(t, "/products/users-png/c-280x280@3.webp"))
-	if d.Allowed {
-		t.Error("expected denied for dpr=3")
-	}
-	if d.Reason != ReasonDPRNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDPRNotAllowed)
-	}
-}
-
-// TestAuthorizePathDPRRange23 проверяет диапазон "2-3".
-func TestAuthorizePathDPRRange23(t *testing.T) {
-	dpr23 := Range{Min: 2, Max: 3}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users", DPR: &dpr23},
-		},
-	}
-	// dpr=2 — разрешён.
-	d := p.Authorize(mustReq(t, "/users/users-png/c-280x280@2.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for dpr=2, got %+v", d)
-	}
-	// dpr=3 — разрешён.
-	d = p.Authorize(mustReq(t, "/users/users-png/c-280x280@3.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for dpr=3, got %+v", d)
-	}
-	// dpr=1 — отклонён.
-	d = p.Authorize(mustReq(t, "/users/users-png/c-280x280.webp"))
-	if d.Allowed {
-		t.Error("expected denied for dpr=1")
-	}
-	if d.Reason != ReasonDPRNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonDPRNotAllowed)
-	}
-}
-
-// TestAuthorizePathCrop проверяет ограничение crop (crop=true → белый список
-// {c, ct}).
-func TestAuthorizePathCrop(t *testing.T) {
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users", Crop: NewCropAllowList(asset.TransformCrop, asset.TransformCropTrim)},
-		},
-	}
-	// transform "c" — crop присутствует, разрешён.
-	d := p.Authorize(mustReq(t, "/users/users-png/c-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for crop, got %+v", d)
-	}
-	// transform "ct" — crop присутствует, разрешён.
-	d = p.Authorize(mustReq(t, "/users/users-png/ct-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for crop+trim, got %+v", d)
-	}
-	// transform "" (resize) — crop отсутствует, отклонён.
-	d = p.Authorize(mustReq(t, "/users/users-png/280x280.webp"))
-	if d.Allowed {
-		t.Error("expected denied when crop missing")
-	}
-	if d.Reason != ReasonCropNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonCropNotAllowed)
-	}
-	// transform "t" — crop отсутствует, отклонён.
-	d = p.Authorize(mustReq(t, "/users/users-png/t-280x280.webp"))
-	if d.Allowed {
-		t.Error("expected denied when crop missing (trim only)")
-	}
-	if d.Reason != ReasonCropNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonCropNotAllowed)
-	}
-}
-
-// TestAuthorizePathCropFalse проверяет запрет crop (crop=false → чёрный
-// список {c, ct}).
-func TestAuthorizePathCropFalse(t *testing.T) {
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/", Crop: NewCropDenyList(asset.TransformCrop, asset.TransformCropTrim)},
-		},
-	}
-	// transform "" — crop отсутствует, разрешён.
-	d := p.Authorize(mustReq(t, "/products/users-png/280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed without crop, got %+v", d)
-	}
-	// transform "c" — crop запрещён, отклонён.
-	d = p.Authorize(mustReq(t, "/products/users-png/c-280x280.webp"))
-	if d.Allowed {
-		t.Error("expected denied when crop present")
-	}
-	if d.Reason != ReasonCropNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonCropNotAllowed)
-	}
-}
-
-// TestAuthorizePathCropModes проверяет строковые crop-режимы path-policy:
-// разрешён только указанный режим (и его trim-вариант), остальные transform
-// отклоняются с ReasonCropNotAllowed.
-func TestAuthorizePathCropModes(t *testing.T) {
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users", Crop: NewCropAllowList(
-				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
-			)},
-		},
-	}
-	allowed := []string{
-		"/users/users-png/sc-280x280.webp",
-		"/users/users-png/sct-280x280.webp",
-	}
-	for _, u := range allowed {
-		d := p.Authorize(mustReq(t, u))
-		if !d.Allowed {
-			t.Errorf("expected allowed for %q, got %+v", u, d)
-		}
-	}
-	denied := []string{
-		"/users/users-png/c-280x280.webp",
-		"/users/users-png/ct-280x280.webp",
-		"/users/users-png/fc-280x280.webp",
-		"/users/users-png/oc-280x280.webp",
-		"/users/users-png/280x280.webp", // resize — crop отсутствует
-		"/users/users-png/t-280x280.webp",
-	}
-	for _, u := range denied {
-		d := p.Authorize(mustReq(t, u))
-		if d.Allowed {
-			t.Errorf("expected denied for %q", u)
-			continue
-		}
-		if d.Reason != ReasonCropNotAllowed {
-			t.Errorf("Reason = %q, want %q for %q", d.Reason, ReasonCropNotAllowed, u)
-		}
-	}
-}
-
-// TestAuthorizePathCropModeList проверяет список разрешённых режимов:
-// crop: [smart, face] пропускает sc/sct/fc/fct и отклоняет остальные.
-func TestAuthorizePathCropModeList(t *testing.T) {
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/", Crop: NewCropAllowList(
-				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
-				asset.TransformFaceCrop, asset.TransformFaceCropTrim,
-			)},
-		},
-	}
-	allowed := []string{
-		"/products/users-png/sc-280x280.webp",
-		"/products/users-png/sct-280x280.webp",
-		"/products/users-png/fc-280x280.webp",
-		"/products/users-png/fct-280x280.webp",
-	}
-	for _, u := range allowed {
-		d := p.Authorize(mustReq(t, u))
-		if !d.Allowed {
-			t.Errorf("expected allowed for %q, got %+v", u, d)
-		}
-	}
-	denied := []string{
-		"/products/users-png/c-280x280.webp",
-		"/products/users-png/oc-280x280.webp",
-		"/products/users-png/280x280.webp",
-	}
-	for _, u := range denied {
-		d := p.Authorize(mustReq(t, u))
-		if d.Allowed {
-			t.Errorf("expected denied for %q", u)
-		}
-	}
-}
-
-// TestAuthorizePathCropNoneDeniesAllModes проверяет deny-форму "none":
-// запрещены все crop-режимы, но resize и trim-only разрешены.
-func TestAuthorizePathCropNoneDeniesAllModes(t *testing.T) {
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/", Crop: NewCropDenyList(
-				asset.TransformCrop, asset.TransformCropTrim,
-				asset.TransformSmartCrop, asset.TransformSmartCropTrim,
-				asset.TransformFaceCrop, asset.TransformFaceCropTrim,
-				asset.TransformObjectCrop, asset.TransformObjectCropTrim,
-			)},
-		},
-	}
-	allowed := []string{
-		"/products/users-png/280x280.webp",
-		"/products/users-png/t-280x280.webp",
-	}
-	for _, u := range allowed {
-		d := p.Authorize(mustReq(t, u))
-		if !d.Allowed {
-			t.Errorf("expected allowed for %q, got %+v", u, d)
-		}
-	}
-	denied := []string{
-		"/products/users-png/c-280x280.webp",
-		"/products/users-png/ct-280x280.webp",
-		"/products/users-png/sc-280x280.webp",
-		"/products/users-png/sct-280x280.webp",
-		"/products/users-png/fc-280x280.webp",
-		"/products/users-png/fct-280x280.webp",
-		"/products/users-png/oc-280x280.webp",
-		"/products/users-png/oct-280x280.webp",
-	}
-	for _, u := range denied {
-		d := p.Authorize(mustReq(t, u))
-		if d.Allowed {
-			t.Errorf("expected denied for %q", u)
-			continue
-		}
-		if d.Reason != ReasonCropNotAllowed {
-			t.Errorf("Reason = %q, want %q for %q", d.Reason, ReasonCropNotAllowed, u)
-		}
-	}
-}
-
-// TestAuthorizePathTrimWithSmartCropTrim проверяет, что trim-требование
-// учитывает все trim-варианты (включая sct/fct/oct), а не только t/ct.
-func TestAuthorizePathTrimWithSmartCropTrim(t *testing.T) {
-	trimTrue := true
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users/gift", Trim: &trimTrue},
-		},
-	}
-	// sct/fct/oct содержат trim — разрешены.
-	for _, u := range []string{
-		"/users/gift/users-png/sct-280x280.webp",
-		"/users/gift/users-png/fct-280x280.webp",
-		"/users/gift/users-png/oct-280x280.webp",
-	} {
-		d := p.Authorize(mustReq(t, u))
-		if !d.Allowed {
-			t.Errorf("expected allowed for %q (has trim), got %+v", u, d)
-		}
-	}
-}
-
-// TestCropRuleNilAllowsEverything проверяет, что nil-правило не ограничивает.
-func TestCropRuleNilAllowsEverything(t *testing.T) {
-	var r *CropRule
-	for _, tr := range []asset.Transform{"", "c", "t", "ct", "sc", "fc", "oc", "sct", "fct", "oct"} {
-		if !r.Allows(tr) {
-			t.Errorf("nil rule must allow %q", tr)
-		}
-	}
-}
-
-// TestCropRuleString проверяет человекочитаемое описание правил.
-func TestCropRuleString(t *testing.T) {
-	if got := (*CropRule)(nil).String(); got != "any transform" {
-		t.Errorf("nil String = %q", got)
-	}
-	allow := NewCropAllowList(asset.TransformCrop, asset.TransformCropTrim)
-	if s := allow.String(); s == "" {
-		t.Error("allow rule String must not be empty")
-	}
-	deny := NewCropDenyList(asset.TransformCrop)
-	if s := deny.String(); s == "" {
-		t.Error("deny rule String must not be empty")
-	}
-}
-
-// TestAuthorizePathTrim проверяет ограничение trim.
-func TestAuthorizePathTrim(t *testing.T) {
-	trimTrue := true
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users/gift", Trim: &trimTrue},
-		},
-	}
-	// transform "t" — trim присутствует, разрешён.
-	d := p.Authorize(mustReq(t, "/users/gift/users-png/t-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for trim, got %+v", d)
-	}
-	// transform "ct" — trim присутствует, разрешён.
-	d = p.Authorize(mustReq(t, "/users/gift/users-png/ct-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed for crop+trim, got %+v", d)
-	}
-	// transform "c" — trim отсутствует, отклонён.
-	d = p.Authorize(mustReq(t, "/users/gift/users-png/c-280x280.webp"))
-	if d.Allowed {
-		t.Error("expected denied when trim missing")
-	}
-	if d.Reason != ReasonTrimNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonTrimNotAllowed)
-	}
-}
-
-// TestAuthorizePathLongestPrefix проверяет, что path-policy применяется по
-// самому длинному совпадающему префиксу (примеры из ТЗ пункт 3).
-func TestAuthorizePathLongestPrefix(t *testing.T) {
-	dpr01 := Range{Min: 0, Max: 1}
-	dpr23 := Range{Min: 2, Max: 3}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/", DPR: &dpr01},
-			{Path: "/users", DPR: &dpr23},
-			{Path: "/users/gift", DPR: &dpr01},
-			{Path: "/basket/products", DPR: &dpr01},
-		},
-	}
-	tests := []struct {
-		url     string
-		allowed bool
-	}{
-		// "/" — dpr 0-1: dpr=1 разрешён, dpr=2 отклонён.
-		{"/products/users-png/c-280x280.webp", true},
-		{"/products/users-png/c-280x280@2.webp", false},
-		// "/users" — dpr 2-3: dpr=2 разрешён, dpr=1 отклонён.
-		{"/users/users-png/c-280x280@2.webp", true},
-		{"/users/users-png/c-280x280.webp", false},
-		// "/users/gift" — dpr 0-1 (НЕ "/users"): dpr=1 разрешён, dpr=2 отклонён.
-		{"/users/gift/users-png/c-280x280.webp", true},
-		{"/users/gift/users-png/c-280x280@2.webp", false},
-		// "/basket" — нет совпадения кроме "/": dpr=1 разрешён, dpr=2 отклонён.
-		{"/basket/users-png/c-280x280.webp", true},
-		{"/basket/users-png/c-280x280@2.webp", false},
-		// "/basket/products" — dpr 0-1: dpr=1 разрешён, dpr=2 отклонён.
-		{"/basket/products/users-png/c-280x280.webp", true},
-		{"/basket/products/users-png/c-280x280@2.webp", false},
-	}
-	for _, tt := range tests {
-		d := p.Authorize(mustReq(t, tt.url))
-		if d.Allowed != tt.allowed {
-			t.Errorf("Authorize(%q) allowed = %v, want %v (reason %q)", tt.url, d.Allowed, tt.allowed, d.Reason)
-		}
-	}
-}
-
-// TestAuthorizePathNotAppliedToPreset проверяет, что path-policy не
-// применяется к preset-запросам.
-func TestAuthorizePathNotAppliedToPreset(t *testing.T) {
-	dpr23 := Range{Min: 2, Max: 3}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users", DPR: &dpr23},
-		},
-	}
-	// Preset-запрос с dpr=1 в "/users" — path-policy не применяется, разрешён.
-	d := p.Authorize(mustReq(t, "/users/bugoga-gif/thumb.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed preset (path-policy not applied), got %+v", d)
-	}
-}
-
-// TestAuthorizePathNoMatchAllowed проверяет, что при отсутствии совпадений
-// (нет "/") запрос разрешается без ограничений.
-func TestAuthorizePathNoMatchAllowed(t *testing.T) {
-	dpr23 := Range{Min: 2, Max: 3}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthUnsafe},
-		PathPolicies: []PathPolicy{
-			{Path: "/users", DPR: &dpr23},
-		},
-	}
-	// Путь "products" не совпадает ни с одним префиксом — разрешён.
-	d := p.Authorize(mustReq(t, "/products/users-png/c-280x280.webp"))
-	if !d.Allowed {
-		t.Errorf("expected allowed when no path-policy matches, got %+v", d)
-	}
-}
-
-// TestAuthorizePathDoesNotExpandRights проверяет, что path-policy не
-// расширяет права: если глобальная политика запретила, path-policy не
-// разрешает.
-func TestAuthorizePathDoesNotExpandRights(t *testing.T) {
-	rule, _ := ParseSizeRule("10x10")
-	dpr01 := Range{Min: 0, Max: 1}
-	p := &Policy{
-		Global: GlobalPolicy{Authorization: AuthSafe, SizeRules: []SizeRule{rule}},
-		PathPolicies: []PathPolicy{
-			{Path: "/", DPR: &dpr01},
-		},
-	}
-	// Размер 999x999 не покрыт глобальным правилом — отклонён даже если
-	// path-policy разрешила бы dpr.
-	d := p.Authorize(mustReq(t, "/products/users-png/c-999x999.webp"))
-	if d.Allowed {
-		t.Error("expected denied by global size rule")
-	}
-	if d.Reason != ReasonSizeNotAllowed {
-		t.Errorf("Reason = %q, want %q", d.Reason, ReasonSizeNotAllowed)
-	}
-}
-
-func TestCheckLimits(t *testing.T) {
-	p := &Policy{Global: GlobalPolicy{Limits: Limits{Width: 100}}}
-	r := p.CheckLimits("photos", 0, 200, 0, 1, 1, 0, 0)
-	if !r.Exceeded() || r.ExceededLimit != "width" {
-		t.Errorf("expected width exceed, got %+v", r)
+	})
+	if pp := p.matchPath("products"); pp != nil {
+		t.Errorf("matchPath(products) = %v, want nil", pp)
 	}
 }
 
 func TestValidatePolicy(t *testing.T) {
-	valid := &Policy{Global: GlobalPolicy{Authorization: AuthSafe}}
+	valid := mustPolicy(t, baseCfg())
 	if err := valid.Validate(); err != nil {
 		t.Errorf("expected valid policy, got %v", err)
-	}
-
-	invalid := []*Policy{
-		{Global: GlobalPolicy{Authorization: "bogus"}},
-		{PathPolicies: []PathPolicy{{Path: ""}}},
-		{PathPolicies: []PathPolicy{{Path: "a"}, {Path: "a"}}},
-		{PathPolicies: []PathPolicy{{Path: "a"}, {Path: "/a/"}}},
-		{PathPolicies: []PathPolicy{{Path: "/", DPR: &Range{Min: 0, Max: 4}}}},
-		{Global: GlobalPolicy{Limits: Limits{Width: -1}}},
-	}
-	for _, p := range invalid {
-		if err := p.Validate(); err == nil {
-			t.Errorf("Validate(%+v) expected error", p)
-		}
 	}
 }
 
 func TestPathNames(t *testing.T) {
-	p := &Policy{
-		PathPolicies: []PathPolicy{
-			{Path: "/users"},
-			{Path: "/"},
-			{Path: "/basket/products"},
+	p := mustPolicy(t, Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/users":           {},
+			"/":                {},
+			"/basket/products": {},
 		},
-	}
+	})
 	got := p.PathNames()
 	want := []string{"/", "/basket/products", "/users"}
 	if len(got) != len(want) {
@@ -679,5 +478,15 @@ func TestPathNames(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("PathNames[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestPresetsAccessor(t *testing.T) {
+	p := mustPolicy(t, baseCfg())
+	if p.Presets() == nil {
+		t.Fatal("expected non-nil presets")
+	}
+	if _, ok := p.Presets().Get("banner"); !ok {
+		t.Error("expected preset banner in global set")
 	}
 }

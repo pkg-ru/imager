@@ -82,8 +82,8 @@ func TestPresetResolveDPRInName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Fatalf("PresetName = %q, want thumb@2", req.PresetName())
+	if req.SegmentName().String() != "thumb" {
+		t.Fatalf("SegmentName = %q, want thumb", req.SegmentName())
 	}
 	resolved, err := set.Resolve(req)
 	if err != nil {
@@ -91,24 +91,6 @@ func TestPresetResolveDPRInName(t *testing.T) {
 	}
 	if got := resolved.DPR().Int(); got != 2 {
 		t.Errorf("Resolve DPR = %d, want 2", got)
-	}
-	// URL с тем же @dpr — допустимо.
-	req2, err := Parse("/photos/photo-1-jpg/thumb@2@2.webp")
-	if err != nil {
-		t.Fatalf("Parse(thumb@2@2): %v", err)
-	}
-	if req2.PresetName().String() != "thumb@2" {
-		t.Fatalf("PresetName = %q, want thumb@2", req2.PresetName())
-	}
-	if got := req2.DPR().Int(); got != 2 {
-		t.Fatalf("URL DPR = %d, want 2", got)
-	}
-	resolved2, err := set.Resolve(req2)
-	if err != nil {
-		t.Fatalf("Resolve(thumb@2@2): %v", err)
-	}
-	if got := resolved2.DPR().Int(); got != 2 {
-		t.Errorf("Resolve(thumb@2@2) DPR = %d, want 2", got)
 	}
 }
 
@@ -121,7 +103,7 @@ func TestPresetResolveDPRConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
 	}
-	req, err := Parse("/photos/photo-1-jpg/thumb@2@3.webp")
+	req, err := Parse("/photos/photo-1-jpg/thumb@3.webp")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -134,7 +116,7 @@ func TestPresetResolveDPRConflict(t *testing.T) {
 // пресета имеет приоритет над @dpr в имени.
 func TestPresetResolveDPRFieldPriority(t *testing.T) {
 	// Пресет "thumb@2" с полем dpr=3: применяется dpr=3.
-	p, err := NewPreset("thumb@2", TransformCrop, mustSize(t, "240x160"), mustFormat(t, "webp"), DPR(3), 0, 0, 0, nil)
+	p, err := NewPreset("thumb@2", TransformCrop, mustSize(t, "240x160"), []Format{mustFormat(t, "webp")}, DPR(3), true, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -159,7 +141,7 @@ func TestPresetResolveDPRFieldPriority(t *testing.T) {
 // пресета пробрасываются в результирующий запрос.
 func TestPresetResolveProcessingOptions(t *testing.T) {
 	loop := true
-	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), mustFormat(t, "webp"), 0, 80, 10, 5000, &loop)
+	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 80, 10, 5000, &loop)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -189,27 +171,37 @@ func TestPresetResolveProcessingOptions(t *testing.T) {
 	}
 }
 
-// TestPresetResolveOutputFormatMismatch проверяет, что URL output format,
-// отличающийся от preset output format, отклоняется при разрешении.
-func TestPresetResolveOutputFormatMismatch(t *testing.T) {
+// TestPresetResolveOutputFormatList проверяет, что output-formats — список
+// допустимых форматов: URL формат должен входить в список.
+func TestPresetResolveOutputFormatList(t *testing.T) {
 	set, err := NewPresetSet([]*Preset{
-		mustNewPreset(t, "thumb", TransformCrop, "120x80", "webp"),
+		mustNewPresetFormats(t, "thumb", TransformCrop, "120x80", "webp", "avif"),
 	})
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
 	}
-	// preset output format = webp, URL использует png → ошибка.
+	// Форматы из списка — допустимы.
+	for _, out := range []string{"webp", "avif"} {
+		req, err := Parse("/photos/photo-1-jpg/thumb." + out)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if _, err := set.Resolve(req); err != nil {
+			t.Errorf("Resolve(%s): unexpected error: %v", out, err)
+		}
+	}
+	// Формат вне списка — ошибка.
 	req, err := Parse("/photos/photo-1-jpg/thumb.png")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if _, err := set.Resolve(req); err == nil {
-		t.Fatal("expected output format mismatch error")
+		t.Fatal("expected output format not allowed error")
 	}
 }
 
 // TestPresetResolveNonPresetRejected проверяет, что Resolve отклоняет
-// канонический (не preset) запрос.
+// канонический (не segment) запрос.
 func TestPresetResolveNonPresetRejected(t *testing.T) {
 	set, err := NewPresetSet([]*Preset{
 		mustNewPreset(t, "thumb", TransformCrop, "120x80", "webp"),
@@ -217,12 +209,12 @@ func TestPresetResolveNonPresetRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
 	}
-	req, err := Parse("/photos/photo-1-jpg/c-120x80@2.webp")
+	req, err := NewRequest("photos", mustSourceName(t, "photo-1"), mustFormat(t, "jpg"), TransformCrop, mustSize(t, "120x80"), DPR(2), mustFormat(t, "webp"))
 	if err != nil {
-		t.Fatalf("Parse: %v", err)
+		t.Fatalf("NewRequest: %v", err)
 	}
 	if _, err := set.Resolve(req); err == nil {
-		t.Fatal("expected error for non-preset request")
+		t.Fatal("expected error for non-segment request")
 	}
 }
 
@@ -238,6 +230,7 @@ func TestSplitPresetNameDPR(t *testing.T) {
 		{"thumb@1", "thumb", 1, true}, // @1 эквивалентен отсутствию
 		{"thumb@2", "thumb", 2, true},
 		{"thumb@3", "thumb", 3, true},
+		{"200x100@2", "200x100", 2, true},
 		{"thumb@0", "", 0, false}, // @0 недопустим
 		{"thumb@4", "", 0, false}, // @4 вне диапазона
 		{"thumb@x", "", 0, false}, // нечисловой
@@ -266,7 +259,17 @@ func TestSplitPresetNameDPR(t *testing.T) {
 // mustNewPreset — вспомогательный конструктор для тестов.
 func mustNewPreset(t *testing.T, name string, tr Transform, size string, outFmt string) *Preset {
 	t.Helper()
-	p, err := NewPreset(name, tr, mustSize(t, size), mustFormat(t, outFmt), 0, 0, 0, 0, nil)
+	return mustNewPresetFormats(t, name, tr, size, outFmt)
+}
+
+// mustNewPresetFormats — конструктор с несколькими выходными форматами.
+func mustNewPresetFormats(t *testing.T, name string, tr Transform, size string, outFmts ...string) *Preset {
+	t.Helper()
+	formats := make([]Format, 0, len(outFmts))
+	for _, f := range outFmts {
+		formats = append(formats, mustFormat(t, f))
+	}
+	p, err := NewPreset(name, tr, mustSize(t, size), formats, 0, false, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -289,6 +292,15 @@ func mustFormat(t *testing.T, outFmt string) Format {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
 	return f
+}
+
+func mustSourceName(t *testing.T, name string) SourceName {
+	t.Helper()
+	n, err := NewSourceName(name)
+	if err != nil {
+		t.Fatalf("NewSourceName(%q): %v", name, err)
+	}
+	return n
 }
 
 // TestPresetWithOrientation проверяет, что WithOrientation сохраняет
@@ -353,5 +365,33 @@ func TestPresetResolveNoOrientation(t *testing.T) {
 	}
 	if got := resolved.Orientation(); got != nil {
 		t.Errorf("resolved Orientation() = %v, want nil", got)
+	}
+}
+
+// TestPresetDPRSet проверяет различение «dpr не задан» от «dpr: 0/1».
+func TestPresetDPRSet(t *testing.T) {
+	// dpr не задан: DPRSet=false, DPR=0.
+	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("NewPreset: %v", err)
+	}
+	if p.DPRSet() || p.DPR() != 0 {
+		t.Errorf("expected dpr not set, got DPRSet=%v DPR=%d", p.DPRSet(), p.DPR())
+	}
+	// dpr: 0 задан явно: DPRSet=true, DPR=0.
+	p2, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, true, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("NewPreset: %v", err)
+	}
+	if !p2.DPRSet() || p2.DPR() != 0 {
+		t.Errorf("expected dpr set to 0, got DPRSet=%v DPR=%d", p2.DPRSet(), p2.DPR())
+	}
+	// dpr: 2 задан явно.
+	p3, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 2, true, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("NewPreset: %v", err)
+	}
+	if !p3.DPRSet() || p3.DPR() != 2 {
+		t.Errorf("expected dpr set to 2, got DPRSet=%v DPR=%d", p3.DPRSet(), p3.DPR())
 	}
 }

@@ -40,7 +40,7 @@ docker run -d \
 | Dropped capabilities | `cap_drop: ALL`, `cap_add: []` |
 | no-new-privileges | `security_opt: no-new-privileges:true` |
 | Права доступа | Бинарь `0755`, конфиг `0640`, каталоги данных `0750` |
-| Pinned образы | `golang:1.25.0-alpine3.21` / `alpine:3.21`, pinned версии пакетов |
+| Pinned образы | `golang:1.27.0-alpine3.23` / `alpine:3.23`, pinned версии пакетов |
 | Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
 
 ## Ресурсы
@@ -50,7 +50,6 @@ Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 512M`; r
 Подбирайте под нагрузку:
 
 - `libvips.limits.concurrency` (рекомендуется 2–4) и `threads` (число логических ядер);
-- `imagemagick.limits.concurrency` для fallback-сборок;
 - `application.buffer-max-bytes` — бюджет памяти spillable-буферов;
 - `http.max-concurrent-requests` — admission control при перегрузке.
 

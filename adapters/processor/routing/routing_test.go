@@ -57,13 +57,10 @@ func caps(name string, formats ...processing.Format) Capability {
 
 func TestRoutingUsesPrimary(t *testing.T) {
 	primary := &recProcessor{name: "primary"}
-	fallback := &recProcessor{name: "fallback"}
 
 	r, err := New(Options{
-		Primary:      primary,
-		PrimaryCaps:  caps("libvips", processing.FormatJPEG, processing.FormatPNG),
-		Fallback:     fallback,
-		FallbackCaps: caps("imagemagick", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
+		Primary:     primary,
+		PrimaryCaps: caps("libvips", processing.FormatJPEG, processing.FormatPNG),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -77,8 +74,8 @@ func TestRoutingUsesPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if primary.calls != 1 || fallback.calls != 0 {
-		t.Fatalf("primary.calls=%d fallback.calls=%d, want 1/0", primary.calls, fallback.calls)
+	if primary.calls != 1 {
+		t.Fatalf("primary.calls=%d, want 1", primary.calls)
 	}
 	if out.String() != "DATA" {
 		t.Fatalf("out = %q", out.String())
@@ -87,13 +84,10 @@ func TestRoutingUsesPrimary(t *testing.T) {
 
 func TestRoutingAPNGUsesPrimary(t *testing.T) {
 	primary := &recProcessor{name: "primary"}
-	fallback := &recProcessor{name: "fallback"}
 
 	r, err := New(Options{
-		Primary:      primary,
-		PrimaryCaps:  caps("libvips", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
-		Fallback:     fallback,
-		FallbackCaps: caps("imagemagick", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
+		Primary:     primary,
+		PrimaryCaps: caps("libvips", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -107,13 +101,13 @@ func TestRoutingAPNGUsesPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	// APNG покрывается primary (libvips ≥ 8.13) — fallback не вызывается.
-	if primary.calls != 1 || fallback.calls != 0 {
-		t.Fatalf("primary.calls=%d fallback.calls=%d, want 1/0", primary.calls, fallback.calls)
+	// APNG покрывается primary (libvips ≥ 8.13).
+	if primary.calls != 1 {
+		t.Fatalf("primary.calls=%d, want 1", primary.calls)
 	}
 }
 
-func TestRoutingEngineUnavailableWithoutFallback(t *testing.T) {
+func TestRoutingEngineUnavailable(t *testing.T) {
 	primary := &recProcessor{name: "primary"}
 
 	r, err := New(Options{
@@ -124,7 +118,7 @@ func TestRoutingEngineUnavailableWithoutFallback(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Формат вне покрытия primary и без fallback → engine-unavailable.
+	// Формат вне покрытия primary → engine-unavailable.
 	_, err = r.Process(context.Background(), processor.Input{
 		Source: strings.NewReader("DATA"),
 		Plan:   plan(t, processing.FormatGIF, processing.FormatAPNG, processing.OpResize),
@@ -142,35 +136,8 @@ func TestRoutingEngineUnavailableWithoutFallback(t *testing.T) {
 	if ue.Missing == "" {
 		t.Fatal("UnsupportedError.Missing must be set")
 	}
-}
-
-func TestRoutingFallbackNotCovered(t *testing.T) {
-	primary := &recProcessor{name: "primary"}
-	fallback := &recProcessor{name: "fallback"}
-
-	r, err := New(Options{
-		Primary:      primary,
-		PrimaryCaps:  caps("libvips", processing.FormatJPEG, processing.FormatPNG),
-		Fallback:     fallback,
-		FallbackCaps: caps("imagemagick", processing.FormatJPEG, processing.FormatPNG, processing.FormatAPNG),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	// SourceFormat не покрыт ни одним движком → UnsupportedError.
-	_, err = r.Process(context.Background(), processor.Input{
-		Source: strings.NewReader("DATA"),
-		Plan:   plan(t, processing.FormatGIF, processing.FormatAPNG, processing.OpResize),
-	}, io.Discard)
-	if err == nil {
-		t.Fatal("Process: want UnsupportedError")
-	}
-	if !IsEngineUnavailable(err) {
-		t.Fatalf("err = %v, want IsEngineUnavailable", err)
-	}
-	if primary.calls != 0 || fallback.calls != 0 {
-		t.Fatalf("primary.calls=%d fallback.calls=%d, want 0/0", primary.calls, fallback.calls)
+	if primary.calls != 0 {
+		t.Fatalf("primary.calls=%d, want 0", primary.calls)
 	}
 }
 
@@ -211,7 +178,7 @@ func TestIsEngineUnavailable(t *testing.T) {
 	if !IsEngineUnavailable(ErrEngineUnavailable) {
 		t.Fatal("ErrEngineUnavailable must be detected")
 	}
-	if !IsEngineUnavailable(&UnsupportedError{Format: processing.FormatAPNG, Missing: "imagemagick"}) {
+	if !IsEngineUnavailable(&UnsupportedError{Format: processing.FormatAPNG, Missing: "libvips"}) {
 		t.Fatal("*UnsupportedError must be detected")
 	}
 }

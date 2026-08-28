@@ -8,17 +8,17 @@ import (
 // всегда даёт идемпотентную каноническую форму.
 func FuzzParse(f *testing.F) {
 	seeds := []string{
-		"/photos/photo-1-jpg/c-120x80@2.webp",
-		"/logo-png/t-x50@3.png",
-		"/img-jpg/ct-180x@2.avif",
-		"/a/b/c/name-gif/c-10x10@3.gif",
+		"/photos/photo-1-jpg/banner.webp",
+		"/photos/photo-1-jpg/banner@2.webp",
+		"/banners/photo-jpg/200x200.webp",
+		"/banners/photo-jpg/200x100@2.webp",
+		"/a/b/c/name-gif/200x200@3.gif",
 		"/photos/photo-1-jpg/thumb.webp",
-		"/photos/photo-1-jpg/trumb@2.webp",
 		"/photos/photo-1-jpg/x.webp",
 		"",
-		"/../../etc/passwd-jpg/c-120x80@2.webp",
-		"/a%2fb/photo-jpg/c-120x80@2.webp",
-		"/photo-jpg/c-99999999999999999999x80@2.webp",
+		"/../../etc/passwd-jpg/banner@2.webp",
+		"/a%2fb/photo-jpg/banner@2.webp",
+		"/photo-jpg/banner@2.webp",
 	}
 	for _, s := range seeds {
 		f.Add(s)

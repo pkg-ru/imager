@@ -246,7 +246,7 @@ func TestResolveShrinkOnLoadAnimations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plan := mustPlanShrink(t, func(p *processing.ProcessingPlan) {
 				p.SourceFormat = tc.format
-				p.OutputFormat = tc.format
+				p.OutputFormats = tc.format
 				p.Frames = tc.frames
 			})
 			got := resolveShrinkOnLoad(plan, animSrc, 1, true)

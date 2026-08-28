@@ -1,122 +1,12 @@
 ########################################
 # Imager — слой FAILBACK (резервные/необязательные механизмы).
 #
-# ImageMagick как резервный процессор, not-found fallback (pixel/image/
-# page/redirect), source-fallback. Меняется почти никогда.
+# not-found fallback (pixel/image/page/redirect), source-fallback.
+# Меняется почти никогда.
 #
 # Файл ОПЦИОНАЛЕН. Переопределение: failback-local.yaml поверх этого файла.
 ########################################
 # version: "1"
-
-########################################
-# imagemagick — настройки ImageMagick (ОПЦИОНАЛЬНЫЙ fallback).
-#
-# ImageMagick НЕ обязателен: libvips — основной движок и покрывает все
-# форматы, включая APNG (≥ 8.13). ImageMagick используется ТОЛЬКО как
-# fallback для сборок без тега "libvips". В обычном сценарии (libvips
-# работает) ImageMagick не создаётся и не запускается вовсе.
-#
-# Процессор запускает бинарник ImageMagick как subprocess для каждой
-# операции. Лимиты применяются ТРЕМЯ слоями:
-#   1) -limit аргументы командной строки (limits ниже);
-#   2) сгенерированный policy.xml (policy ниже) через MAGICK_CONFIGURE_PATH;
-#   3) application-level ограничения: bounded writer (output-bytes) и
-#      context deadline (timeout) — не полагаются только на policy.
-########################################
-imagemagick:
-  # binary — имя или путь к исполняемому файлу ImageMagick.
-  # Тип: string. Дефолт в коде: "magick" (ImageMagick 7); для версии 6
-  # укажите "convert". Должен быть в PATH или абсолютным путём.
-  binary: "magick"
-
-  # policy — настройки генерации deny-by-default policy.xml.
-  # При enabled=true генерируется политика:
-  #   - запрет всех coders/delegates по умолчанию, разрешает лишь безопасный
-  #     whitelist (JPEG/JPG/PNG/WEBP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/
-  #     PNM/TIFF/BMP/ICO);
-  #   - явный запрет network- и scripting-coders (URL/HTTPS/HTTP/FTP/MSL/MVG/
-  #     LABEL/TEXT/PLASMA/WPG/PS/PDF/SVG и др.) и delegates (curl, wget, ssh,
-  #     rsvg, inkscape...);
-  #   - resource limits (0 = не задавать соответствующую директиву).
-  policy:
-    # enabled — включать генерацию policy.xml.
-    # Тип: *bool. Дефолт: true. false = полагаться на системную policy.
-    enabled: true
-
-    # dir — каталог, куда пишется policy.xml.
-    # Тип: string. Пусто = временный каталог (os.MkdirTemp), удаляемый
-    # при закрытии Processor. Файл пишется атомарно (tmp + rename, права 0600,
-    # защита каталога 0700). При указании каталога он НЕ удаляется.
-    dir: ""            # пусто = временный каталог
-
-    # resource-политики (0 = не задавать; значения дублируют лимиты ниже,
-    # но применяются ImageMagick на уровне policy ДО -limit):
-    max-memory-bytes: 1073741824                 # 1 GiB
-    max-map-bytes: 2147483648                    # 2 GiB
-    max-disk-bytes: 1073741824                   # 1 GiB
-    max-threads: 4
-    max-time-seconds: 30
-    max-width: 32768
-    max-height: 32768
-    max-pixels: 268435456                        # 256 MP (защита от decompression bomb)
-    max-frames: 100
-
-    # disable-network — отключать network-capable delegates (URL, HTTPS,
-    # FTP, MSL, MVG, /...) в policy.xml.
-    # Тип: *bool. Дефолт: true. НЕ отключайте в production (риск SSRF).
-    disable-network: true
-
-    # disabled-coders — ДОПОЛНИТЕЛЬНЫЕ coders для явного запрета
-    # (помимо встроенного опасного списка).
-    # Тип: list[string]. Дефолт: пусто.
-    # Пример: disabled-coders: ["PALM", "SUN", "SGI"]
-    disabled-coders: []
-
-    # disabled-delegates — дополнительные delegates для явного запрета.
-    # Тип: list[string]. Дефолт: пусто.
-    disabled-delegates: []
-
-  # limits — resource limits для subprocess ImageMagick.
-  # Значение 0 поля = без ограничения. Лимиты: через -limit для 6/7.
-  limits:
-    # timeout — application-level context deadline на один subprocess.
-    # Тип: duration-строка (например "30s"). Превышение → убийство процесса
-    # через context и LimitError. НЕ полагается только на policy.xml.
-    timeout: "30s"
-
-    # output-bytes — application-level лимит размера ВЫХОДНОГО файла (bytes).
-    # Реализуется boundedWriter'ом на stdout subprocess; при превышении —
-    # подпроцесс отменяется (отмена ctx). Защита от гигантских результатов.
-    output-bytes: 10485760                       # 10 MiB
-
-    # resource limits (bytes) через -limit memory/map/disk (0 = не задавать):
-    memory-bytes: 1073741824                     # 1 GiB
-    map-bytes: 2147483648                        # 2 GiB
-    disk-bytes: 1073741824                       # 1 GiB
-    # threads — число потоков (0 = авто).
-    threads: 4
-    # time-seconds — лимит времени выполнения (сек).
-    time-seconds: 30
-    # width / height / pixels — защита от decompression bomb:
-    width: 32768
-    height: 32768
-    pixels: 268435456                            # 256 MP (area = w*h)
-    # frames — лимит кадров анимации (лимит list-length в policy).
-    frames: 100
-
-    # concurrency — максимальное число ОДНОВРЕМЕННО работающих ImageMagick
-    # subprocess (реальная защита CPU/RAM от перегрузки при параллельных
-    # запросах). 0 = в коде применяется 16 (по умолчанию). Рекомендуется
-    # задавать явное разумное значение (например 2-4) под ваши ресурсы.
-    concurrency: 2
-
-    # webp-method — метод сжатия WebP (0-6). 0 = умолчание ImageMagick;
-    # 4 = баланс скорость/размер. 6 = максимальное сжатие (медленнее).
-    webp-method: 4
-
-    # png-compression-level — уровень сжатия PNG (0-9, обычно 6).
-    # 0 = умолчание ImageMagick; больше = меньше размер, медленнее.
-    png-compression-level: 6
 
 ########################################
 # http — только fallback-подсекции (остальной http — в setting.yaml).
@@ -147,7 +37,7 @@ http:
     # page — путь к СТАТИЧЕСКОМУ HTML-файлу, отдаваемому с HTTP 404.
     # Тип: string (путь к файлу). Дефолт: пусто.
     # Раскомментируйте и укажите путь до HTML.
-    # page: "example/not-found.html"
+    # page: "not-found.html"
 
     # redirect — URL для 301-редиректа при not-found.
     # Тип: string (URL). Дефолт: пусто.
@@ -159,7 +49,8 @@ http:
   # исходный файл с его оригинальными Content-Type/именем/форматом.
   # Выключено по умолчанию (текущее поведение).
   source-fallback:
-    # enabled — включать ли source fallback.
+    # enabled — включать ли канонический source fallback (URL вида
+    # name-format.ext).
     # Тип: bool. Дефолт: false.
     enabled: false
 

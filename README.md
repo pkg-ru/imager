@@ -32,13 +32,11 @@ GET /photos/city-skyline-jpg/300x@2.webp
   пиксели, кадры, длительность).
 - **Бэкенды хранилища** — `fs`, `s3`, `sftp`, `ftp`/`ftps` (источник и результат
   независимо друг от друга), read-only источники `http`.
-- **Резервная обработка** — ImageMagick как fallback-движок при сборке без
-  libvips.
 - **Наблюдаемость** — структурированное JSON-логирование, метрики Prometheus на
   `/metrics`, health-check эндпоинты (`/healthz`, `/readyz`).
 - **Безопасность по умолчанию** — строгая YAML-схема (`UnmarshalStrict`),
-  ограниченные тела запросов, admission control, генерация `policy.xml` для
-  ImageMagick, защищённые от symlink операции с файлами.
+  ограниченные тела запросов, admission control, защищённые от symlink операции
+  с файлами.
 
 ## Быстрый старт
 
@@ -88,7 +86,6 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 | libvips ≥ 8.13 + заголовки | Основной движок обработки (все форматы, включая APNG) | Рекомендуется |
 | C-компилятор, `pkg-config` | CGO-сборка govips (`-tags libvips`) | При `-tags libvips` |
 | Кодеки: libheif, libde265, libjxl, librsvg, poppler, libraw | HEIF/AVIF, JPEG XL, SVG, PDF, RAW | Для соответствующих форматов |
-| ImageMagick 7 (`magick`) или 6 (`convert`) | Fallback-движок без `-tags libvips` | Опционально |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов (преобразования `fc`/`oc`) | Опционально (`-tags onnx`) |
 | ffmpeg | Извлечение кадров видео | Опционально |
 
@@ -103,7 +100,7 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 |------|-------|------------|
 | setting | `setting.yaml` + `setting-local.yaml` | Сервер, хранилище, наблюдаемость, admin (обязательный базовый файл) |
 | generate | `generate.yaml` + `generate-local.yaml` | Пресеты, политика, энкодеры, водяные знаки, детекция |
-| failback | `failback.yaml` + `failback-local.yaml` | Fallback на ImageMagick, обработка not-found |
+| failback | `failback.yaml` + `failback-local.yaml` | Обработка not-found, source-fallback |
 
 Секреты хранятся в файлах `*-local.yaml` (не коммитятся). Полный справочник —
 в [docs/CONFIGURATION.md](docs/CONFIGURATION.md), примеры с комментариями —
@@ -118,7 +115,6 @@ adapters/
   httpapi/             HTTP transport, config loading, runtime wiring
   processor/
     libvips/           libvips engine (build tag: libvips)
-    imagemagick/       ImageMagick fallback engine
     detection/         ONNX face/object detection (build tag: onnx)
     routing/           Processor selection
   storage/             fs, s3, sftp, ftp/ftps, http adapters

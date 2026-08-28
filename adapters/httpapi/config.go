@@ -53,6 +53,26 @@ const DefaultSourceFallbackStatus = http.StatusNotFound
 // DefaultSourceFallbackCacheControl — Cache-Control source fallback по умолчанию.
 const DefaultSourceFallbackCacheControl = "no-store"
 
+// ServeOriginalConfig — конфигурация отдачи исходников по «простым» URL вида
+// /path/name.ext (ОТДЕЛЬНАЯ фича, не относящаяся к source-fallback).
+//
+// Канонический URL ассета имеет форму
+// /{path}/{source_name}-{source_format}/{size|preset}.{ext}; URL без дефиса
+// в имени исходника (например /test/my.png) не является валидным asset URL.
+// При Enabled=true такие «простые» URL трактуются как прямой путь к исходнику
+// в хранилище, и исходный файл отдаётся со статусом http.StatusOK.
+type ServeOriginalConfig struct {
+	// Enabled — включать ли отдачу исходников по «простым» URL. Дефолт false
+	// (нулевое значение): «простые» URL обрабатываются как раньше
+	// (ошибка 400 "missing source format").
+	Enabled bool
+	// CacheControl — значение Cache-Control для ответа. Дефолт "no-store".
+	CacheControl string
+}
+
+// DefaultServeOriginalCacheControl — Cache-Control serve-original по умолчанию.
+const DefaultServeOriginalCacheControl = "no-store"
+
 // AssetErrorConfig — конфигурация observability ошибок asset URL.
 type AssetErrorConfig struct {
 	// Enabled — включать ли учёт ошибок asset URL (счётчики, top-paths,
@@ -143,6 +163,11 @@ type Config struct {
 	// ассета (несуществующий пресет, неканонический URL, запрещённая
 	// политика). Выключено по умолчанию.
 	SourceFallback SourceFallbackConfig
+
+	// ServeOriginal — конфигурация отдачи исходников по «простым» URL вида
+	// /path/name.ext (отдельная фича, не относящаяся к source-fallback).
+	// Выключено по умолчанию.
+	ServeOriginal ServeOriginalConfig
 
 	// Sources — хранилище исходников для source fallback. nil = фича
 	// недоступна (fallback не выполняется).
@@ -278,6 +303,10 @@ func (c *Config) normalize() {
 	}
 	if c.SourceFallback.CacheControl == "" {
 		c.SourceFallback.CacheControl = DefaultSourceFallbackCacheControl
+	}
+	// Serve original умолчания.
+	if c.ServeOriginal.CacheControl == "" {
+		c.ServeOriginal.CacheControl = DefaultServeOriginalCacheControl
 	}
 	// Asset errors умолчания.
 	if c.AssetErrors.LogLevel == "" {

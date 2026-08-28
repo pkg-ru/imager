@@ -308,8 +308,13 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 		}
 		urls, err = enumerateAssets(ref, s.policy, s.presets)
 		if err != nil {
-			// Ошибка перечисления (например, unsafe authorization без
-			// size-rules) — это невалидный запрос → HTTP 400.
+			// Ошибка перечисления — это невалидный запрос → HTTP 400.
+			return nil, ErrInvalidRequest
+		}
+		if len(urls) == 0 {
+			// Политика не разрешает ни одного ассета для исходника
+			// (deny-by-default без path-policy/пресетов) — нечего
+			// генерировать → HTTP 400.
 			return nil, ErrInvalidRequest
 		}
 	} else {

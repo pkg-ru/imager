@@ -57,14 +57,16 @@ func assetPrefix(ref *SourceRef) string {
 // enumerateAssets перечисляет канонические URL всех ассетов исходника по
 // правилам политики и пресетам:
 //
-//   - пресеты: каждый пресет (имя × его output-format) → preset request →
+//   - глобальные пресеты: каждый пресет (имя × его output-formats) → preset
+//     request → policy.Authorize → canonical URL;
+//   - path-policy пресеты: для каждой path-policy, совпадающей с путём
+//     исходника, её пресеты (имя × output-formats) → preset request →
 //     policy.Authorize → canonical URL;
-//   - канонические размеры: точные размеры из size-rules (диапазоны не
-//     перечисляются) × допустимые output-форматы × dpr (1,2,3) × transform
-//     (resize + crop-коды) → request → policy.Authorize → canonical URL.
+//   - custom-сегменты path-policy: имя custom (размер-грамматика, опционально
+//     с @dpr) × output-formats из whitelist → segment request → canonical URL.
 //
-// Если политика допускает произвольные размеры (unsafe authorization без
-// size-rules) — возвращается ошибка «cannot enumerate» (→ HTTP 400).
+// Канонические размеры (size-rules) в новой архитектуре отсутствуют —
+// произвольные размеры задаются только через custom-сегменты path-policy.
 func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSet) ([]string, error) {
 	if ref == nil || pol == nil || presets == nil {
 		return nil, ErrInvalidRequest
@@ -78,7 +80,9 @@ func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSe
 		}
 	}
 
-	// 1) Пресеты: имя × output-format (у пресета фиксирован output format).
+	// 1) Глобальные пресеты: имя × output-formats (у пресета фиксирован
+	// output format). Authorize отфильтрует пресеты, не разрешённые на пути
+	// исходника (path-policy).
 	for _, name := range presets.Names() {
 		p, ok := presets.Get(name)
 		if !ok {
@@ -88,61 +92,54 @@ func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSe
 		if dpr == 0 {
 			dpr = asset.DefaultDPR
 		}
-		req, err := asset.NewPresetRequest(
-			ref.Path,
-			asset.SourceName(ref.SourceName),
-			asset.Format(ref.SourceFormat),
-			asset.PresetName(name),
-			dpr,
-			p.OutputFormat(),
-		)
-		if err != nil {
-			continue
+		for _, out := range p.OutputFormats() {
+			req, err := asset.NewPresetRequest(
+				ref.Path,
+				asset.SourceName(ref.SourceName),
+				asset.Format(ref.SourceFormat),
+				asset.PresetName(name),
+				dpr,
+				out,
+			)
+			if err != nil {
+				continue
+			}
+			if !pol.Authorize(req).Allowed {
+				continue
+			}
+			u, err := req.Build()
+			if err != nil {
+				continue
+			}
+			add(u)
 		}
-		if !pol.Authorize(req).Allowed {
-			continue
-		}
-		u, err := req.Build()
-		if err != nil {
-			continue
-		}
-		add(u)
 	}
 
-	// 2) Канонические размеры, покрытые size-rules.
-	if pol.Global.Authorization == policy.AuthUnsafe {
-		return nil, errors.New("cannot enumerate assets: unsafe authorization without size rules")
-	}
-	for _, rule := range pol.Global.SizeRules {
-		// Точные размеры: только если измерение задано как single value
-		// (Min == Max). Диапазоны не перечисляются.
-		var w, h *asset.Dimension
-		if rule.Width != nil && rule.Width.Min == rule.Width.Max {
-			d := asset.Dimension(rule.Width.Min)
-			w = &d
-		}
-		if rule.Height != nil && rule.Height.Min == rule.Height.Max {
-			d := asset.Dimension(rule.Height.Min)
-			h = &d
-		}
-		if w == nil && h == nil {
-			continue
-		}
-		size, err := asset.NewSize(w, h)
-		if err != nil {
-			continue
-		}
-		for _, out := range outputFormats {
-			for _, dpr := range []asset.DPR{1, 2, 3} {
-				for _, tr := range transforms {
-					req, err := asset.NewRequest(
+	// 2) Path-policy пресеты и custom-сегменты для путей, совпадающих с
+	// путём исходника. Path-policy пресеты — подмножество глобальных по
+	// именам; custom-сегменты — произвольные размеры пути (размер-грамматика,
+	// опционально с @dpr).
+	pp := pol.MatchPath(ref.Path)
+	if pp != nil {
+		// 2a) Пресеты path-policy (подмножество глобальных).
+		if pp.Presets != nil {
+			for _, name := range pp.Presets.Names() {
+				p, ok := pp.Presets.Get(name)
+				if !ok {
+					continue
+				}
+				dpr := p.DPR()
+				if dpr == 0 {
+					dpr = asset.DefaultDPR
+				}
+				for _, out := range p.OutputFormats() {
+					req, err := asset.NewPresetRequest(
 						ref.Path,
 						asset.SourceName(ref.SourceName),
 						asset.Format(ref.SourceFormat),
-						tr,
-						size,
+						asset.PresetName(name),
 						dpr,
-						asset.Format(out),
+						out,
 					)
 					if err != nil {
 						continue
@@ -158,26 +155,36 @@ func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSe
 				}
 			}
 		}
+		// 2b) Custom-сегменты: имя (размер-грамматика, опционально с @dpr)
+		// × output-formats из whitelist пресета.
+		for cname, c := range pp.Customs {
+			dpr := c.DPR()
+			if dpr == 0 {
+				dpr = asset.DefaultDPR
+			}
+			for _, out := range c.OutputFormats() {
+				req, err := asset.NewPresetRequest(
+					ref.Path,
+					asset.SourceName(ref.SourceName),
+					asset.Format(ref.SourceFormat),
+					asset.PresetName(cname),
+					dpr,
+					out,
+				)
+				if err != nil {
+					continue
+				}
+				if !pol.Authorize(req).Allowed {
+					continue
+				}
+				u, err := req.Build()
+				if err != nil {
+					continue
+				}
+				add(u)
+			}
+		}
 	}
 
 	return urls, nil
-}
-
-// outputFormats — допустимые выходные форматы для канонических ассетов при
-// перечислении.
-var outputFormats = []string{"jpeg", "png", "webp", "gif", "avif", "heif", "apng"}
-
-// transforms — transform-коды, перебираемые при перечислении канонических
-// ассетов (resize + все crop/trim-коды; политика отфильтрует неразрешённые).
-var transforms = []asset.Transform{
-	"",
-	asset.TransformCrop,
-	asset.TransformTrim,
-	asset.TransformCropTrim,
-	asset.TransformSmartCrop,
-	asset.TransformFaceCrop,
-	asset.TransformObjectCrop,
-	asset.TransformSmartCropTrim,
-	asset.TransformFaceCropTrim,
-	asset.TransformObjectCropTrim,
 }

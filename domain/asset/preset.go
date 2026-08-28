@@ -12,35 +12,42 @@ import (
 // Preset — immutable именованный набор параметров обработки.
 //
 // Preset НЕ содержит source format: исходный формат определяется URL
-// ({source_name}-{source_format}/{preset_name}.{output_format}) и передаётся
-// при разрешении. Также preset фиксирует output format: URL обязан
-// использовать тот же output format, иначе разрешение завершается ошибкой.
+// ({source_name}-{source_format}/{segment}.{output_format}) и передаётся
+// при разрешении. OutputFormats — СПИСОК допустимых выходных форматов
+// (whitelist): формат в URL обязан входить в список, иначе разрешение
+// завершается ошибкой.
 //
 // Имя пресета может содержать фиксированный суффикс @dpr (например
-// "thumb@2"): при разрешении такого пресета dpr=2 применяется всегда.
+// "banner@2"): при разрешении такого пресета dpr=2 применяется всегда.
 // Поле dpr (если задано) имеет приоритет над @dpr в имени.
 type Preset struct {
 	name         string
 	transform    Transform
 	size         Size
-	outputFormat Format
+	outputFormat []Format
 	dpr          DPR
-	quality      int
-	frames       int
-	duration     int
-	loop         *bool
-	watermark    *processing.WatermarkSpec
-	orientation  *processing.OrientationSpec
+	// dprSet — true, если dpr задан ЯВНО в настройках (даже 0/1). Отличает
+	// «ключ dpr отсутствует» от «dpr: 0»: при dprSet=true @dpr-суффикс в URL
+	// запрещён (кроме случая, когда имя пресета содержит тот же @dpr).
+	dprSet      bool
+	quality     int
+	frames      int
+	duration    int
+	loop        *bool
+	watermark   *processing.WatermarkSpec
+	orientation *processing.OrientationSpec
 }
 
 // NewPreset создаёт Preset с валидацией.
 //
 // dpr — фиксированный DPR пресета (0 = не задан, берётся из имени/URL).
+// dprSet — true, если ключ dpr присутствовал в конфигурации (даже со
+// значением 0/1): в этом случае @dpr-суффикс в URL запрещён.
 // quality — качество сжатия (0 = default-quality из processing).
 // frames — максимальное число кадров анимации (0 = без ограничения).
 // duration — максимальная длительность анимации в мс (0 = без ограничения).
 // loop — зацикливание анимации (nil = default-loop из processing).
-func NewPreset(name string, transform Transform, size Size, outputFormat Format, dpr DPR, quality, frames, duration int, loop *bool) (*Preset, error) {
+func NewPreset(name string, transform Transform, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool) (*Preset, error) {
 	if name == "" {
 		return nil, fmt.Errorf("preset: empty name")
 	}
@@ -52,11 +59,16 @@ func NewPreset(name string, transform Transform, size Size, outputFormat Format,
 	if size.IsEmpty() {
 		return nil, fmt.Errorf("preset %q: empty size", name)
 	}
-	if outputFormat == "" {
-		return nil, fmt.Errorf("preset %q: empty output format", name)
+	if len(outputFormat) == 0 {
+		return nil, fmt.Errorf("preset %q: empty output format list", name)
+	}
+	for _, f := range outputFormat {
+		if f == "" {
+			return nil, fmt.Errorf("preset %q: empty output format in list", name)
+		}
 	}
 	// Если фиксированный dpr не задан (0), берём его из @dpr-суффикса имени
-	// (например "thumb@2" → dpr=2). Поле dpr имеет приоритет над именем.
+	// (например "banner@2" → dpr=2). Поле dpr имеет приоритет над именем.
 	if dpr == 0 {
 		if _, nameDPR, err := SplitPresetNameDPR(name); err != nil {
 			return nil, fmt.Errorf("preset %q: %w", name, err)
@@ -80,8 +92,9 @@ func NewPreset(name string, transform Transform, size Size, outputFormat Format,
 		name:         name,
 		transform:    transform,
 		size:         size,
-		outputFormat: outputFormat,
+		outputFormat: append([]Format(nil), outputFormat...),
 		dpr:          dpr,
+		dprSet:       dprSet,
 		quality:      quality,
 		frames:       frames,
 		duration:     duration,
@@ -130,11 +143,24 @@ func (p *Preset) Transform() Transform { return p.transform }
 // Size возвращает размер.
 func (p *Preset) Size() Size { return p.size }
 
-// OutputFormat возвращает выходной формат.
-func (p *Preset) OutputFormat() Format { return p.outputFormat }
+// OutputFormats возвращает список допустимых выходных форматов.
+func (p *Preset) OutputFormats() []Format { return append([]Format(nil), p.outputFormat...) }
+
+// AllowsOutputFormat сообщает, входит ли формат в список допустимых.
+func (p *Preset) AllowsOutputFormat(f Format) bool {
+	for _, of := range p.outputFormat {
+		if of == f {
+			return true
+		}
+	}
+	return false
+}
 
 // DPR возвращает фиксированный DPR пресета (0 = не задан).
 func (p *Preset) DPR() DPR { return p.dpr }
+
+// DPRSet сообщает, задан ли dpr ЯВНО в настройках пресета (даже 0/1).
+func (p *Preset) DPRSet() bool { return p.dprSet }
 
 // Quality возвращает качество сжатия (0 = default-quality).
 func (p *Preset) Quality() int { return p.quality }
@@ -184,21 +210,23 @@ func (s *PresetSet) Names() []string {
 	return names
 }
 
-// ResolveError описывает ошибку разрешения preset URL в канонический запрос.
+// ResolveError описывает ошибку разрешения segment URL в канонический запрос.
 type ResolveError struct {
+	SegmentName string
+	// PresetName — алиас SegmentName (обратная совместимость с httpapi).
 	PresetName string
 	Reason     string
 }
 
 func (e *ResolveError) Error() string {
-	return fmt.Sprintf("cannot resolve preset %q: %s", e.PresetName, e.Reason)
+	return fmt.Sprintf("cannot resolve segment %q: %s", e.SegmentName, e.Reason)
 }
 
-// Resolve превращает preset Request в канонический Request.
+// Resolve превращает segment Request в канонический Request.
 //
 // Source format берётся из URL (req.SourceFormat), а transform/size — из
-// пресета. Output format в URL обязан совпадать с output format пресета,
-// иначе возвращается ошибка.
+// пресета. Output format в URL обязан входить в список допустимых форматов
+// пресета, иначе возвращается ошибка.
 //
 // DPR определяется так:
 //   - если пресет имеет фиксированный dpr (поле dpr или суффикс @dpr в
@@ -213,71 +241,121 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 		return nil, &ResolveError{Reason: "nil request"}
 	}
 	if !req.IsPreset() {
-		return nil, &ResolveError{Reason: "request is not a preset url"}
+		return nil, &ResolveError{Reason: "request is not a segment url"}
 	}
 	if req.sourceFormat == "" {
 		return nil, &ResolveError{
-			PresetName: req.presetName.String(),
-			Reason:     "missing source format in url",
+			SegmentName: req.segmentName.String(),
+			PresetName:  req.segmentName.String(),
+			Reason:      "missing source format in url",
 		}
 	}
-	if req.transform != "" || !req.size.IsEmpty() {
+	if req.resolved {
 		return nil, &ResolveError{
-			PresetName: req.presetName.String(),
-			Reason:     "preset cannot be partially overridden",
+			SegmentName: req.segmentName.String(),
+			PresetName:  req.segmentName.String(),
+			Reason:      "request is already resolved",
 		}
 	}
-	// Имя пресета из URL: сначала ищем полное имя (в т.ч. с @dpr-суффиксом,
-	// например "thumb@2"). Если полное имя не найдено, но оно разбивается на
-	// base + @dpr, ищем base и применяем DPR-суффикс к имени пресета.
-	presetName := req.presetName.String()
-	p, ok := s.byName[presetName]
+	// Имя сегмента из URL. Парсер отделяет последний "@" как @dpr URL,
+	// поэтому segmentName — базовое имя без @dpr (например "thumb" для
+	// "thumb@2.webp"), а req.dpr — @dpr URL (0 = отсутствует).
+	//
+	// Поиск пресета:
+	//  1. Точное имя segmentName ("thumb").
+	//  2. Точное полное имя "segmentName@req.dpr" — пресет с фиксированным
+	//     @dpr в имени (например "thumb@2" для URL "thumb@2.webp").
+	//  3. Пресет с @dpr в имени, базовое имя которого == segmentName, но
+	//     @dpr URL отличен — конфликт dpr.
+	segmentName := req.segmentName.String()
+	var p *Preset
 	var nameDPR DPR
-	if !ok {
-		if base, dprSuffix, err := SplitPresetNameDPR(presetName); err == nil && base != presetName {
-			if bp, exists := s.byName[base]; exists {
-				p = bp
-				ok = true
-				nameDPR = dprSuffix
+	var exactFull bool
+	if pr, ok := s.byName[segmentName]; ok {
+		p = pr
+	} else if req.dpr != 0 {
+		if pr, ok := s.byName[segmentName+"@"+strconv.Itoa(req.dpr.Int())]; ok {
+			p = pr
+			nameDPR = req.dpr
+			exactFull = true
+		}
+	}
+	if p == nil {
+		for name, pr := range s.byName {
+			base, suffix, err := SplitPresetNameDPR(name)
+			if err != nil || base != segmentName || suffix == 0 {
+				continue
 			}
+			// Пресет имеет фиксированный @dpr в имени.
+			if req.dpr == suffix {
+				p = pr
+				nameDPR = suffix
+			} else if req.dpr != 0 {
+				// URL @dpr не совпадает с @dpr пресета — конфликт.
+				return nil, &ResolveError{
+					SegmentName: segmentName,
+					PresetName:  segmentName,
+					Reason: fmt.Sprintf(
+						"dpr %d in url conflicts with preset dpr %d",
+						req.dpr.Int(), suffix.Int(),
+					),
+				}
+			}
+			// req.dpr == 0 (URL без @dpr): пресет с @dpr в имени не матчится.
+			break
 		}
 	}
-	if !ok {
+	if p == nil {
 		return nil, &ResolveError{
-			PresetName: presetName,
-			Reason:     "preset not found",
+			SegmentName: segmentName,
+			PresetName:  segmentName,
+			Reason:      "preset not found",
 		}
 	}
-	if req.outputFormat != p.outputFormat {
+	if !p.AllowsOutputFormat(req.outputFormat) {
 		return nil, &ResolveError{
-			PresetName: presetName,
+			SegmentName: segmentName,
+			PresetName:  segmentName,
 			Reason: fmt.Sprintf(
-				"output format %q does not match preset output format %q",
-				req.outputFormat, p.outputFormat,
+				"output format %q is not allowed (allowed: %s)",
+				req.outputFormat, formatListString(p.outputFormat),
 			),
 		}
 	}
 
 	// DPR: фиксированный dpr пресета (поле dpr имеет приоритет над @dpr
-	// имени) либо @dpr из суффикса имени (при fallback на base-пресет).
-	// Явный @dpr в URL, отличный от фиксированного, — ошибка. Если
+	// имени). Для точного полного имени "@dpr URL" совпадает с @dpr имени:
+	// конфликт невозможен, применяется фиксированное значение. Для остальных
+	// случаев явный @dpr в URL, отличный от фиксированного, — ошибка. Если
 	// фиксированного dpr нет, dpr берётся из URL (default 1).
 	fixed := p.dpr
 	if fixed == 0 {
 		fixed = nameDPR
 	}
-	dpr := req.dpr
-	if fixed != 0 {
-		if req.dpr != DefaultDPR && req.dpr != fixed {
+	var dpr DPR
+	if exactFull {
+		dpr = fixed
+		if dpr == 0 {
+			dpr = DefaultDPR
+		}
+	} else {
+		dpr = req.dpr
+		if dpr == 0 {
+			dpr = DefaultDPR
+		}
+		if fixed != 0 && dpr != fixed {
 			return nil, &ResolveError{
-				PresetName: presetName,
+				SegmentName: segmentName,
+				PresetName:  segmentName,
 				Reason: fmt.Sprintf(
 					"dpr %d in url conflicts with preset dpr %d",
-					req.dpr.Int(), fixed.Int(),
+					dpr.Int(), fixed.Int(),
 				),
 			}
 		}
-		dpr = fixed
+		if fixed != 0 {
+			dpr = fixed
+		}
 	}
 
 	resolved, err := NewRequest(
@@ -291,8 +369,9 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 	)
 	if err != nil {
 		return nil, &ResolveError{
-			PresetName: req.presetName.String(),
-			Reason:     err.Error(),
+			SegmentName: req.segmentName.String(),
+			PresetName:  req.segmentName.String(),
+			Reason:      err.Error(),
 		}
 	}
 	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark)
@@ -302,16 +381,25 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 	return resolved, nil
 }
 
+// formatListString форматирует список форматов для сообщений об ошибках.
+func formatListString(formats []Format) string {
+	parts := make([]string, 0, len(formats))
+	for _, f := range formats {
+		parts = append(parts, f.String())
+	}
+	return strings.Join(parts, ", ")
+}
+
 // SplitPresetNameDPR отделяет фиксированный @dpr-суффикс от имени пресета.
 //
 // Возвращает имя без суффикса и DPR (0, если суффикса нет). Примеры:
 //
-//	"thumb"   → ("thumb", 0)
-//	"thumb@1" → ("thumb", 1)   // dpr=1 эквивалентен отсутствию
-//	"thumb@2" → ("thumb", 2)
-//	"thumb@3" → ("thumb", 3)
+//	"banner"   → ("banner", 0)
+//	"banner@1" → ("banner", 1)   // dpr=1 эквивалентен отсутствию
+//	"banner@2" → ("banner", 2)
+//	"banner@3" → ("banner", 3)
 //
-// Суффикс вне [1,3] (например @0/@4) или нечисловой (например "thumb@x")
+// Суффикс вне [1,3] (например @0/@4) или нечисловой (например "banner@x")
 // отклоняется.
 func SplitPresetNameDPR(name string) (string, DPR, error) {
 	at := strings.LastIndex(name, "@")

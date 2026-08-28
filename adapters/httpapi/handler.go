@@ -198,6 +198,11 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 		if !noise {
 			h.recordAssetError(observability.AssetErrParse, path, "", err.Error())
 		}
+		// Serve original: отдельная фича — отдача исходника по «простому»
+		// URL /path/name.ext со статусом 200 (если включена).
+		if h.serveOriginal(w, r, path) {
+			return
+		}
 		// Source fallback: если исходник существует, отдаём его вместо
 		// ошибки (неканонический URL).
 		if h.serveSourceFallback(w, r, path) {
@@ -320,8 +325,8 @@ func (h *Handler) mapError(w http.ResponseWriter, r *http.Request, err error, ra
 		h.writeError(w, r, http.StatusGatewayTimeout, "canceled", "request canceled")
 		return
 	}
-	// Недоступный движок (например APNG без установленного ImageMagick):
-	// routed EngineUnavailable/UnsupportedError → 501 Not Implemented с
+	// Недоступный движок (формат вне покрытия libvips): routed
+	// EngineUnavailable/UnsupportedError → 501 Not Implemented с
 	// понятным сообщением. Обрабатывается до маппинга OutcomeError, т.к.
 	// generatev2 оборачивает ошибку процессора в OutcomeProcessing.
 	if routing.IsEngineUnavailable(err) {
@@ -476,26 +481,93 @@ func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file
 	_, _ = io.CopyBuffer(w, f, make([]byte, 64*1024))
 }
 
+// serveOriginal — отдельная фича: отдача исходника по «простому» URL вида
+// /path/name.ext (не относящаяся к source-fallback). Работает только при
+// ServeOriginal.Enabled == true; исходник отдаётся со статусом http.StatusOK
+// и Cache-Control из ServeOriginal.CacheControl.
+//
+// Возвращает true, если ответ записан; false — если фича выключена, URL не
+// является «простым» путём к исходнику или исходник не найден (обычная
+// обработка ошибки продолжается).
+func (h *Handler) serveOriginal(w http.ResponseWriter, r *http.Request, rawURL string) bool {
+	if !h.cfg.ServeOriginal.Enabled || h.cfg.Sources == nil {
+		return false
+	}
+	key, fileName, ok := h.simpleSourceKey(rawURL)
+	if !ok {
+		return false
+	}
+	return h.serveSourceObject(w, r, key, fileName, "", http.StatusOK, h.cfg.ServeOriginal.CacheControl)
+}
+
 // serveSourceFallback пытается отдать исходный файл вместо ошибки ассета.
 //
 // Возвращает true, если fallback выполнен (ответ записан). Логика:
-//   - фича выключена (SourceFallback.Enabled == false) → false;
 //   - ExtractSourceBestEffort не смог безопасно извлечь исходник → false;
 //   - исходник не найден в хранилище → false;
 //   - иначе отдаём исходный файл с его оригинальными заголовками.
+//
+// Канонический source-fallback (URL вида name-format.ext): требует
+// SourceFallback.Enabled == true (существующее поведение). «Простые» URL
+// /path/name.ext обрабатываются отдельной фичей serveOriginal.
 func (h *Handler) serveSourceFallback(w http.ResponseWriter, r *http.Request, rawURL string) bool {
 	sf := h.cfg.SourceFallback
-	if !sf.Enabled {
-		return false
-	}
 	if h.cfg.Sources == nil {
 		return false
 	}
 	ref := asset.ExtractSourceBestEffort(rawURL)
 	if ref == nil {
+		// SourceRef не извлекается: «простые» URL обрабатываются отдельной
+		// фичей serveOriginal (см. handleAsset), здесь — не fallback.
 		return false
 	}
-	key := object.ObjectKey(ref.Key())
+	// Канонический source-fallback: требует явного включения.
+	if !sf.Enabled {
+		return false
+	}
+	return h.serveSourceObject(w, r, object.ObjectKey(ref.Key()), ref.SourceFileName(), ref.SourceFormat, sf.Status, sf.CacheControl)
+}
+
+// simpleSourceKey строит безопасный ключ хранилища из «простого» URL вида
+// "/path/name.ext": rejectUnsafe + CanonicalPath (те же проверки, что в
+// Parse/ExtractSourceBestEffort). Возвращает ключ без ведущего "/"
+// ("path/name.ext"), имя файла и ok.
+func (h *Handler) simpleSourceKey(rawURL string) (object.ObjectKey, string, bool) {
+	if rawURL == "" || len(rawURL) > asset.MaxURLLen {
+		return "", "", false
+	}
+	if err := asset.RejectUnsafe(rawURL); err != nil {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(rawURL, "/")
+	// Последняя точка отделяет расширение; без неё ключ не строим.
+	lastDot := strings.LastIndex(rest, ".")
+	if lastDot < 0 || lastDot == len(rest)-1 {
+		return "", "", false
+	}
+	// Имя файла — последний сегмент; без него ключ не строим.
+	lastSlash := strings.LastIndex(rest, "/")
+	fileName := rest[lastSlash+1:]
+	if fileName == "" {
+		return "", "", false
+	}
+	canon, err := asset.NewCanonicalizer().CanonicalPath(rest)
+	if err != nil {
+		return "", "", false
+	}
+	if canon == "" {
+		return "", "", false
+	}
+	return object.ObjectKey(canon), fileName, true
+}
+
+// serveSourceObject открывает исходник из хранилища по ключу и отдаёт его
+// с оригинальными заголовками (Content-Type, Content-Disposition, ETag) и
+// заданными статусом и Cache-Control. sourceFormat используется для
+// определения Content-Type по расширению, если его нет в метаданных.
+// Возвращает true, если ответ записан; false — если исходник не найден или
+// хранилище недоступно (обычная обработка ошибки продолжается).
+func (h *Handler) serveSourceObject(w http.ResponseWriter, r *http.Request, key object.ObjectKey, fileName, sourceFormat string, status int, cacheControl string) bool {
 	art, err := h.cfg.Sources.Open(r.Context(), key)
 	if err != nil {
 		if object.IsNotFound(err) {
@@ -509,9 +581,15 @@ func (h *Handler) serveSourceFallback(w http.ResponseWriter, r *http.Request, ra
 
 	meta := art.Metadata()
 	// Content-Type: из метаданных, иначе по расширению, иначе octet-stream.
+	// Если sourceFormat пуст («простая» ветка serve-original), формат
+	// выводится из расширения fileName.
 	ct := meta.ContentType
 	if ct == "" {
-		ct = mime.TypeByExtension("." + ref.SourceFormat)
+		ext := sourceFormat
+		if ext == "" {
+			ext = strings.TrimPrefix(strings.ToLower(extOf(fileName)), ".")
+		}
+		ct = mime.TypeByExtension("." + ext)
 	}
 	if ct == "" {
 		ct = "application/octet-stream"
@@ -521,13 +599,12 @@ func (h *Handler) serveSourceFallback(w http.ResponseWriter, r *http.Request, ra
 		w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	}
 	// Content-Disposition: inline; filename="name.ext".
-	w.Header().Set("Content-Disposition", `inline; filename="`+ref.SourceFileName()+`"`)
-	w.Header().Set("Cache-Control", sf.CacheControl)
+	w.Header().Set("Content-Disposition", `inline; filename="`+fileName+`"`)
+	w.Header().Set("Cache-Control", cacheControl)
 	if meta.ETag != "" {
 		w.Header().Set("ETag", `"`+strings.Trim(meta.ETag, `"`)+`"`)
 	}
 
-	status := sf.Status
 	if status == 0 {
 		status = DefaultSourceFallbackStatus
 	}

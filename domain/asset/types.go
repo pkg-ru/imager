@@ -1,21 +1,22 @@
 // Package asset реализует доменный слой канонических asset URL и связанных
 // immutable value objects.
 //
-// Пакет не зависит от HTTP, файловой системы, ImageMagick, кэша и загрузчика
-// конфигурации. Все value objects неизменяемы (immutable): их поля приватны,
+// Пакет не зависит от HTTP, файловой системы, движка обработки, кэша и
+// загрузчика конфигурации. Все value objects неизменяемы (immutable): их
+// поля приватны,
 // а значения создаются только через конструкторы, выполняющие валидацию.
 //
 // URL-грамматика:
 //
-//	/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
-//	/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+//	/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
 //
-// transform — один из кодов: "c" (crop), "t" (trim), "ct" (trim затем crop),
-// "sc" (smart-crop), "fc" (face-crop), "oc" (object-crop), а также их
-// trim-варианты "sct", "fct", "oct" (сначала trim, затем соответсвующий
-// crop), либо отсутствует (тогда применяется resize). dpr — множитель
+// segment — имя пресета ИЛИ custom-имя (размер-грамматика: "x", "x200",
+// "200x", "200x200"), опционально с @dpr-суффиксом. Transform-коды в URL
+// отсутствуют: операция (resize/crop/smart-crop/face-crop/object-crop)
+// определяется ТОЛЬКО полем crop в пресете/custom. dpr — множитель
 // плотности пикселей: отсутствие суффикса означает 1, явно допустимы только
-// 2 или 3. size "x" означает сохранение исходного размера изображения.
+// 2 или 3. Имя пресета/custom может содержать фиксированный @dpr-суффикс
+// (например "banner@2" или "200x100@2").
 //
 // Пакет гарантирует безопасную canonicalization: запрещены traversal-сегменты
 // ("..", "."), encoded-разделители ("%2f", "%2F"), control-символы, а также
@@ -38,7 +39,7 @@ const (
 	MaxSourceNameLen = 128
 	// MaxFormatLen — максимальная длина формата (source/output).
 	MaxFormatLen = 16
-	// MaxPresetNameLen — максимальная длина имени пресета.
+	// MaxPresetNameLen — максимальная длина имени пресета/сегмента.
 	MaxPresetNameLen = 64
 	// MaxURLLen — максимальная общая длина канонического URL.
 	MaxURLLen = 1024
@@ -55,24 +56,23 @@ const (
 
 // Допустимые символы компонентов.
 const (
-	// presetNameChars — символы, допустимые в имени пресета. Дефисы
-	// запрещены, чтобы имя пресета в URL
-	// {source_name}-{source_format}/{preset_name}.{output_format} можно было
+	// segmentNameChars — символы, допустимые в имени сегмента (пресета или
+	// custom). Дефисы запрещены, чтобы имя сегмента в URL
+	// {source_name}-{source_format}/{segment}.{output_format} можно было
 	// однозначно отделить от source_format последним дефисом. "@" допустим:
-	// имя пресета может содержать фиксированный суффикс @dpr (например
-	// "thumb@2"), который отделяется от @dpr-суффикса URL последним "@".
-	presetNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@."
+	// имя может содержать фиксированный суффикс @dpr (например "banner@2"
+	// или "200x100@2").
+	segmentNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@."
 	// formatChars — символы, допустимые в формате.
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
-// Transform определяет режим кропа (и наличие trim) в URL-грамматике.
+// Transform определяет режим кропа (и наличие trim) в обработке.
 //
 // Кроп и trim — НЕЗАВИСИМЫЕ фильтры: кроп выбирает режим обработки
-// (center/smart/face/object), trim — обрезка однотонных полей. В
-// каноническом URL они сериализуются одним кодом: trim-код "t" всегда
-// стоит ПОСЛЕДНИМ в коде ("c", "t", "ct", "sc", "sct", ...), при этом
-// фактическое применение всегда сначала trim, затем crop.
+// (center/smart/face/object), trim — обрезка однотонных полей. Transform
+// НЕ является частью URL-грамматики: он вычисляется из поля crop пресета/
+// custom при компиляции конфигурации.
 type Transform string
 
 const (
@@ -146,20 +146,31 @@ func NewFormat(s string) (Format, error) {
 // String возвращает строковое представление.
 func (f Format) String() string { return string(f) }
 
-// PresetName — имя пресета.
-type PresetName string
+// SegmentName — имя сегмента URL: имя пресета ИЛИ custom-имя (размер).
+//
+// Имя может содержать фиксированный @dpr-суффикс (например "banner@2" или
+// "200x100@2"). Валидность самого суффикса проверяется SplitPresetNameDPR
+// при создании пресета; здесь проверяется только набор символов и длина.
+type SegmentName string
 
-// NewPresetName создаёт PresetName с валидацией длины и символов.
-// Дефисы в имени пресета запрещены (см. presetNameChars).
-func NewPresetName(s string) (PresetName, error) {
-	if err := validateComponent("preset name", s, presetNameChars, MaxPresetNameLen); err != nil {
+// NewSegmentName создаёт SegmentName с валидацией длины и символов.
+// Дефисы в имени сегмента запрещены (см. segmentNameChars).
+func NewSegmentName(s string) (SegmentName, error) {
+	if err := validateComponent("segment name", s, segmentNameChars, MaxPresetNameLen); err != nil {
 		return "", err
 	}
-	return PresetName(s), nil
+	return SegmentName(s), nil
 }
 
 // String возвращает строковое представление.
-func (n PresetName) String() string { return string(n) }
+func (n SegmentName) String() string { return string(n) }
+
+// PresetName — обратно-совместимый алиас SegmentName (старое имя поля
+// preset-запроса). Сохранён для совместимости публичного API.
+type PresetName = SegmentName
+
+// NewPresetName создаёт PresetName (алиас NewSegmentName).
+func NewPresetName(s string) (PresetName, error) { return NewSegmentName(s) }
 
 // Dimension — значение измерения (ширина/высота) в пикселях.
 type Dimension int

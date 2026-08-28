@@ -32,7 +32,7 @@ type importPlan struct {
 // resolveImportPlan вычисляет import-параметры для плана.
 func resolveImportPlan(plan *processing.ProcessingPlan) importPlan {
 	p := importPlan{}
-	if plan.OutputFormat.Animated() || plan.SourceFormat.Animated() {
+	if plan.OutputFormats.Animated() || plan.SourceFormat.Animated() {
 		n := -1 // все кадры
 		if plan.Frames > 0 {
 			n = plan.Frames

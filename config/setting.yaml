@@ -142,6 +142,22 @@ http:
   # 0 = без ограничения.
   max-concurrent-requests: 4
 
+  # serve-original — ОТДЕЛЬНАЯ фича (не относится к source-fallback): при
+  # enabled: true сервер отдаёт исходный файл по «простым» URL вида
+  # /path/name.ext (без канонического формата name-format.ext) со СТАТУСОМ
+  # 200. Путь проверяется теми же проверками безопасности (traversal,
+  # encoded-разделители, control-символы, canonicalization); если исходник
+  # не найден — обычная обработка ошибки (400).
+  serve-original:
+    # enabled — включать ли отдачу исходников по «простым» URL.
+    # Тип: bool. Дефолт: false (текущее поведение — ошибка 400
+    # "missing source format").
+    enabled: false
+
+    # cache-control — Cache-Control для ответа serve-original.
+    # Тип: string. Дефолт: "no-store".
+    cache-control: "no-store"
+
 ########################################
 # source / result — хранилища исходников и результатов.
 #
@@ -258,7 +274,7 @@ result:
 # (cgo, govips) и работает in-process, без subprocess. Сборка с поддержкой
 # libvips: go build -tags libvips (требуются libvips-dev и компилятор C).
 # Если бинарь собран БЕЗ тега libvips — процессор недоступен, и сервис
-# использует ImageMagick как primary.
+# не сможет обрабатывать изображения (соберите с -tags libvips).
 #
 # В слое SETTING — только РЕСУРСНАЯ инфраструктура движка (одна на процесс):
 #   limits, operation-cache, metrics-interval.
@@ -446,7 +462,7 @@ processing:
   # пресете или запросе quality не задано или = 0).
   # Тип: int 0-100. Вне диапазона [0,100] — ошибка валидации на старте.
   # Применяется к lossy-форматам (jpeg/webp). На PNG влияет не quality,
-  # а png-compression-level (см. imagemagick.limits / libvips.encoders).
+  # а png-compression-level (см. libvips.encoders).
   default-quality: 85
 
   # default-loop — зацикливание анимаций ПО УМОЛЧАНИЮ.
@@ -591,15 +607,51 @@ detection:
   margin: 0.1
 
 ########################################
-# application.output-limit — лимит размера сгенерированного выхода.
+# application — прикладные лимиты генерации ассетов.
+#
+# Лимиты ПЕРЕНЕСЕНЫ сюда из policy.global.limits (policy больше не содержит
+# лимитов). 0 = соответствующий лимит не ограничен (unlimited).
 ########################################
 application:
-  # output-limit — максимальный размер ВЫХОДНОГО файла, который будет
-  # сохранён (0 = без лимита).
-  # Тип: int64 (байт). Дефолт: 0 (= нет). При превышении — генерация
-  # прерывается; результат не сохраняется.
-  # Рекомендуется задавать явно, например 10485760 (10 MiB).
-  output-limit: 10485760 # 10 MiB
+  # limits — application-level лимиты запроса/генерации (применяются к
+  # ЛЮБОМУ запросу, независимо от политики).
+  limits:
+    # source-bytes — максимум размера ИСХОДНОГО файла (байт).
+    # Тип: int64. 0 = без лимита.
+    source-bytes: 10485760                # 10 MiB
+
+    # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
+    # Тип: int64. 0 = без лимита. При превышении — генерация прерывается;
+    # результат не сохраняется.
+    output-bytes: 10485760                # 10 MiB
+
+    # width — максимум ширины запрошенного изображения (px).
+    # Тип: uint32. 0 = без лимита.
+    width: 2000
+
+    # height — максимум высоты запрошенного изображения (px).
+    # Тип: uint32. 0 = без лимита.
+    height: 2000
+
+    # pixels — максимум пикселей запрошенного изображения (width×height).
+    # Тип: int64. 0 = без лимита.
+    pixels: 4000000                       # 4 MP
+
+    # dpr — максимум значения dpr в запросе (допустимы 1/2/3).
+    # Тип: uint32. 0 = без лимита.
+    dpr: 3
+
+    # frames — максимум кадров анимации (для GIF/WebP).
+    # Тип: uint32. 0 = без лимита.
+    frames: 150
+
+    # duration — максимум длительности анимации (мс).
+    # Тип: uint32. 0 = без лимита.
+    duration: 60000                       # 60 000 мс = 60 c
+
+    # concurrency — максимум одновременных операций обработки от одного
+    # клиента. Тип: uint32. 0 = без лимита.
+    concurrency: 10
 
   # buffer-max-bytes — общий бюджет памяти для спиллабл-буфера (source и
   # result вместе). При исчерпании — спул на диск (временный файл) даже
@@ -657,8 +709,8 @@ observability:
   # структурные логи.
   asset-errors:
     # enabled — включать ли учёт ошибок asset URL.
-    # Тип: bool. Дефолт: true.
-    enabled: true
+    # Тип: bool. Дефолт: false.
+    enabled: false
 
     # log-level — уровень структурного лога ошибки asset URL.
     # Тип: string. Дефолт: "warn". Допустимо: debug|info|warn|error.
@@ -668,7 +720,7 @@ observability:
     # Тип: секция. Дефолт: выключен.
     top-paths:
       # enabled — включать ли учёт top-paths. Тип: bool. Дефолт: false.
-      enabled: true
+      enabled: false
       # max-entries — максимальное число отслеживаемых путей (LRU).
       # Тип: int. Дефолт: 1024.
       max-entries: 1024

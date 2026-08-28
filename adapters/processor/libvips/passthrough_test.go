@@ -117,7 +117,7 @@ func TestPassthroughEligibleNegative(t *testing.T) {
 		{
 			name: "format differs",
 			plan: mustPlanFull(t, func(p *processing.ProcessingPlan) {
-				p.OutputFormat = processing.FormatJPEG
+				p.OutputFormats = processing.FormatJPEG
 			}),
 			src: staticSource(),
 		},

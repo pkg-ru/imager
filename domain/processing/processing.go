@@ -3,11 +3,11 @@
 //
 // Пакет определяет закрытые (closed) enum-ы операций и форматов, а также
 // валидируемый immutable ProcessingPlan. План описывает ЧТО нужно сделать
-// (операции, форматы, размеры), но НЕ КАК (без ImageMagick-специфичных
-// аргументов). Исполнитель (ImageMagick и т.п.) отвечает за маппинг плана
+// (операции, форматы, размеры), но НЕ КАК (без движок-специфичных
+// аргументов). Исполнитель (libvips и т.п.) отвечает за маппинг плана
 // в конкретные команды.
 //
-// Пакет не зависит от HTTP, файловой системы, ImageMagick и загрузчика
+// Пакет не зависит от HTTP, файловой системы, движка обработки и загрузчика
 // конфигурации.
 package processing
 
@@ -209,8 +209,8 @@ func isHexColor(s string) bool {
 
 // ProcessingPlan — immutable валидируемый план обработки.
 //
-// План не содержит ImageMagick-специфичных аргументов: только доменные
-// операции, форматы и размеры. Исполнитель маппит план в команды.
+// План не содержит движок-специфичных аргументов: только доменные операции,
+// форматы и размеры. Исполнитель маппит план в команды.
 type ProcessingPlan struct {
 	// Operation — операция обработки кропа/ресайза (без trim).
 	Operation Operation
@@ -223,8 +223,8 @@ type ProcessingPlan struct {
 	TrimSpec *TrimSpec
 	// SourceFormat — формат исходного файла.
 	SourceFormat Format
-	// OutputFormat — результирующий формат.
-	OutputFormat Format
+	// OutputFormats — результирующий формат.
+	OutputFormats Format
 	// Size — целевой размер.
 	Size Size
 	// DPR — множитель плотности пикселей (0 = 1).
@@ -277,15 +277,15 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 		return nil, fmt.Errorf("processing plan: duration must be non-negative, got %d", duration)
 	}
 	return &ProcessingPlan{
-		Operation:    op,
-		SourceFormat: sourceFormat,
-		OutputFormat: outputFormat,
-		Size:         size,
-		DPR:          dpr,
-		Quality:      quality,
-		Loop:         loop,
-		Frames:       frames,
-		Duration:     duration,
+		Operation:     op,
+		SourceFormat:  sourceFormat,
+		OutputFormats: outputFormat,
+		Size:          size,
+		DPR:           dpr,
+		Quality:       quality,
+		Loop:          loop,
+		Frames:        frames,
+		Duration:      duration,
 	}, nil
 }
 
@@ -300,8 +300,8 @@ func (p *ProcessingPlan) Validate() error {
 	if !ValidFormat(p.SourceFormat) {
 		return fmt.Errorf("processing plan: invalid source format %q", p.SourceFormat)
 	}
-	if !ValidFormat(p.OutputFormat) {
-		return fmt.Errorf("processing plan: invalid output format %q", p.OutputFormat)
+	if !ValidFormat(p.OutputFormats) {
+		return fmt.Errorf("processing plan: invalid output format %q", p.OutputFormats)
 	}
 	if err := p.Size.Valid(); err != nil {
 		return fmt.Errorf("processing plan: %w", err)

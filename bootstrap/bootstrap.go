@@ -2,10 +2,9 @@
 // общую для cmd/imager и публичного фасада package imager.
 //
 // Здесь вынесены:
-//   - BuildProcessor — сборка маршрутизатора процессоров (libvips primary,
-//     ImageMagick fallback) с детектором;
+//   - BuildProcessor — сборка процессора (libvips) с детектором;
 //   - SlogLevel — разбор уровня логов из строки;
-//   - capabilities libvips/ImageMagick для routing;
+//   - capabilities libvips для routing;
 //   - Fatal — корректная печать фатальной ошибки до создания логгера.
 //
 // Пакет живёт на верхнем уровне репозитория и переиспользуется тонким
@@ -19,7 +18,6 @@ import (
 	"os"
 
 	"github.com/pkg-ru/imager/adapters/processor/detection"
-	"github.com/pkg-ru/imager/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/adapters/processor/routing"
 	"github.com/pkg-ru/imager/composition"
@@ -48,17 +46,13 @@ type ProcessorBuild struct {
 	Detector detector.Detector
 }
 
-// BuildProcessor собирает маршрутизатор процессоров:
+// BuildProcessor собирает процессор:
 //
-//   - primary: libvips (если скомпилирован с тэком "libvips"). libvips
-//     покрывает все форматы, включая APNG (≥ 8.13).
-//   - fallback: ImageMagick — создаётся ЛЕНИВО, только если libvips
-//     недоступен (не скомпилирован или Startup завершился ошибкой). В
-//     обычном сценарии (libvips работает) ImageMagick не создаётся и не
-//     запускается вовсе.
+//   - primary: libvips (govips, in-process). libvips покрывает все форматы,
+//     включая APNG (≥ 8.13). Требует сборки с тэком "libvips".
 //
 // Возвращает процессор, реализующий processor.Processor и Close, закрывающий
-// все созданные движки, а также детектор для sidecar-кэша моделей.
+// созданный движок, а также детектор для sidecar-кэша моделей.
 func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBuild, error) {
 	var closers []io.Closer
 
@@ -96,54 +90,23 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 		Detector:            det,
 		DetectorMargin:      rc.Detection.Margin,
 	})
-
-	if libvips.Compiled() && lvErr == nil {
-		// Основной сценарий: libvips — primary, ImageMagick не нужен.
-		if lvProc != nil {
-			closers = append(closers, lvProc)
-		}
-		logger.Infof("imager: processor: primary=libvips (all formats, incl. APNG)")
-		r, err := routing.New(routing.Options{
-			Primary:      lvProc,
-			PrimaryCaps:  LibvipsCaps(),
-			Fallback:     nil,
-			FallbackCaps: routing.Capability{Name: "imagemagick"},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("libvips routing: %w", err)
-		}
-		return &ProcessorBuild{Processor: &closedProcessor{Processor: r, closers: closers}, Detector: portDet}, nil
-	}
-
-	// libvips недоступен: warning и fallback на ImageMagick как primary.
 	if lvErr != nil {
-		logger.Warnf("imager: libvips unavailable: %v; using ImageMagick as primary", lvErr)
-	} else {
-		logger.Warnf("imager: libvips not compiled in (build with -tags libvips); using ImageMagick as primary")
+		return nil, fmt.Errorf("no processor available: libvips: %w", lvErr)
 	}
-	imProc, imErr := imagemagick.New(imagemagick.Options{
-		Binary: rc.ImageMagick.Binary,
-		Limits: rc.ImageMagick.Limits,
-		Policy: rc.ImageMagick.Policy,
-	})
-	if imErr != nil {
-		return nil, fmt.Errorf("no processor available: libvips: %v; imagemagick: %v", lvErr, imErr)
-	}
-	closers = append(closers, imProc)
+	closers = append(closers, lvProc)
+	logger.Infof("imager: processor: primary=libvips (all formats, incl. APNG)")
 	r, err := routing.New(routing.Options{
-		Primary:      imProc,
-		PrimaryCaps:  ImageMagickCaps(),
-		Fallback:     nil,
-		FallbackCaps: routing.Capability{Name: "imagemagick"},
+		Primary:     lvProc,
+		PrimaryCaps: LibvipsCaps(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("imagemagick routing: %w", err)
+		return nil, fmt.Errorf("libvips routing: %w", err)
 	}
 	return &ProcessorBuild{Processor: &closedProcessor{Processor: r, closers: closers}, Detector: portDet}, nil
 }
 
-// closedProcessor — обёртка над processor.Processor, закрывающая все
-// созданные движки (libvips, imagemagick) при Close. Реализует io.Closer.
+// closedProcessor — обёртка над processor.Processor, закрывающая созданный
+// движок (libvips) при Close. Реализует io.Closer.
 type closedProcessor struct {
 	processor.Processor
 	closers []io.Closer
@@ -161,29 +124,10 @@ func (c *closedProcessor) Close() error {
 
 // LibvipsCaps — покрытие форматов libvips (primary). Включает все форматы,
 // в том числе APNG (libvips ≥ 8.13 поддерживает чтение и запись APNG как
-// multi-page PNG). ImageMagick остаётся опциональным fallback-ом для сборок
-// без тега "libvips".
+// multi-page PNG).
 func LibvipsCaps() routing.Capability {
 	return routing.Capability{
 		Name: "libvips",
-		Formats: map[processing.Format]bool{
-			processing.FormatJPEG:   true,
-			processing.FormatPNG:    true,
-			processing.FormatWebP:   true,
-			processing.FormatGIF:    true,
-			processing.FormatAVIF:   true,
-			processing.FormatHEIF:   true,
-			processing.FormatAPNG:   true,
-			processing.FormatJPEGXL: true,
-		},
-	}
-}
-
-// ImageMagickCaps — покрытие форматов ImageMagick (fallback): все текущие
-// форматы, включая APNG.
-func ImageMagickCaps() routing.Capability {
-	return routing.Capability{
-		Name: "imagemagick",
 		Formats: map[processing.Format]bool{
 			processing.FormatJPEG:   true,
 			processing.FormatPNG:    true,

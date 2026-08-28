@@ -90,8 +90,8 @@ func TestNewProcessingPlan(t *testing.T) {
 	if plan.Operation != OpCrop {
 		t.Errorf("Operation = %q, want crop", plan.Operation)
 	}
-	if plan.SourceFormat != FormatJPEG || plan.OutputFormat != FormatWebP {
-		t.Errorf("formats = %q/%q, want jpeg/webp", plan.SourceFormat, plan.OutputFormat)
+	if plan.SourceFormat != FormatJPEG || plan.OutputFormats != FormatWebP {
+		t.Errorf("formats = %q/%q, want jpeg/webp", plan.SourceFormat, plan.OutputFormats)
 	}
 	if plan.Frames != 10 {
 		t.Errorf("Frames = %d, want 10", plan.Frames)

@@ -60,7 +60,7 @@ func (panicGenerator) Generate(context.Context, *asset.Request) (*generatev2.Res
 func TestHandlerPanicReturns500(t *testing.T) {
 	h := newTestHandler(t, panicGenerator{}, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -80,7 +80,7 @@ func TestHandlerGenerateTimeout(t *testing.T) {
 	gen.block = make(chan struct{})
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -93,11 +93,11 @@ func TestHandlerGenerateTimeout(t *testing.T) {
 // повторных запросов).
 func TestETagCached(t *testing.T) {
 	gen := newFakeGenerator()
-	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
+	gen.addResult("img-png/thumb.png", []byte("PNGDATA"), 7)
 
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	etag1 := rec.Header().Get("ETag")
@@ -106,7 +106,7 @@ func TestETagCached(t *testing.T) {
 	}
 
 	// Повторный запрос — тот же ETag (кэш).
-	req2 := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, req2)
 	etag2 := rec2.Header().Get("ETag")

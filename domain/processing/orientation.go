@@ -12,8 +12,8 @@ import (
 )
 
 // Rotation — угол поворота по часовой стрелке. Закрытый enum: только
-// ортогональные углы, поддерживаемые обоими движками (libvips Rotate и
-// ImageMagick -rotate без расширения холста).
+// ортогональные углы, поддерживаемые движком libvips (Rotate без расширения
+// холста).
 type Rotation int
 
 const (
@@ -70,9 +70,9 @@ type FlipMode string
 const (
 	// FlipNone — без отражения.
 	FlipNone FlipMode = ""
-	// FlipHorizontal — зеркало слева-направо (ImageMagick -flop).
+	// FlipHorizontal — зеркало слева-направо.
 	FlipHorizontal FlipMode = "horizontal"
-	// FlipVertical — отражение сверху-вниз (ImageMagick -flip).
+	// FlipVertical — отражение сверху-вниз.
 	FlipVertical FlipMode = "vertical"
 )
 

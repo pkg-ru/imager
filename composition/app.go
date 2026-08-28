@@ -37,8 +37,7 @@ type AppOptions struct {
 	// FTPS). Пустой Kind = FS fallback на ResultDir.
 	ResultStorage RemoteStorageConfig
 
-	// Processor — абстрактный процессор. Если nil, используется
-	// ImageMagick-адаптер (требует установленного binary).
+	// Processor — абстрактный процессор (обязательный).
 	Processor processor.Processor
 	// Sources — кастомный SourceStore (для тестов). Если задан, имеет
 	// приоритет над SourceStorage/SourceDir.
@@ -47,8 +46,9 @@ type AppOptions struct {
 	// приоритет над ResultStorage/ResultDir.
 	Results storage.ResultStore
 
-	// OutputLimit — максимальный размер выходного файла (0 = без лимита).
-	OutputLimit int64
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения.
+	Limits generatev2.Limits
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
@@ -121,7 +121,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	// Процессор.
 	proc := opt.Processor
 	if proc == nil {
-		return nil, fmt.Errorf("composition: build: processor is required (ImageMagick adapter or fake)")
+		return nil, fmt.Errorf("composition: build: processor is required")
 	}
 
 	// Sidecar-кэш метаданных
@@ -165,7 +165,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Policy:                   compiled.Policy,
 		Presets:                  compiled.Presets,
 		Buffers:                  buffers,
-		OutputLimit:              opt.OutputLimit,
+		Limits:                   &opt.Limits,
 		Quality:                  int(compiled.DefaultQuality),
 		DefaultWatermark:         compiled.DefaultWatermark,
 		DefaultOrientation:       compiled.DefaultOrientation,

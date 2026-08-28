@@ -14,9 +14,9 @@
 
 | Слой | Файлы | Назначение | Частота изменений |
 |------|-------|-----------|-------------------|
-| **setting** (фундамент) | `setting.yaml` + `setting-local.yaml` | Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, подключения к стораджам, observability/logging, безопасность, admin | Редко |
+| **setting** (фундамент) | `setting.yaml` + `setting-local.yaml` | Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, подключения к стораджам, observability/logging, serve-original, безопасность, admin | Редко |
 | **generate** (генерация) | `generate.yaml` + `generate-local.yaml` | Настройки генерации ассетов: пресеты, policy, форматы/энкодеры, ресайз, watermark, orientation, trim, color, detection | Часто |
-| **failback** (резервы) | `failback.yaml` + `failback-local.yaml` | Резервные/необязательные fallback-механизмы: ImageMagick, not-found, source-fallback | Почти никогда |
+| **failback** (резервы) | `failback.yaml` + `failback-local.yaml` | Резервные/необязательные fallback-механизмы: not-found, source-fallback | Почти никогда |
 
 ### Порядок загрузки и переопределения
 
@@ -43,28 +43,29 @@
 | `version` | setting | `setting.yaml` |
 | `server` | setting | `setting.yaml` |
 | `http.allowed-origins`, `allow-credentials`, `cache-control`, `referrer-policy`, `csp`, `max-url-len`, `generate-timeout`, `max-concurrent-requests` | setting | `setting.yaml` |
-| `http.not-found`, `not-found-cache-control`, `source-fallback` | failback | `failback.yaml` |
+| `http.not-found`, `not-found-cache-control`, `source-fallback`, `serve-original` | failback | `failback.yaml` |
 | `source`, `result` | setting | `setting.yaml` |
 | `libvips.limits`, `libvips.operation-cache`, `libvips.metrics-interval` | setting | `setting.yaml` |
 | `libvips.encoders`, `shrink-on-load`, `color`, `watermark-cache`, `detection` | generate | `generate.yaml` |
 | `metadata` | setting | `setting.yaml` |
 | `application.buffer-max-bytes` | setting | `setting.yaml` |
-| `application.output-limit` | generate | `generate.yaml` |
+| `application.limits` | setting + generate | `setting.yaml` (дефолт для всех слоёв) / `generate.yaml` (переопределение) |
 | `observability` | setting | `setting.yaml` |
 | `admin` | setting | `setting.yaml` |
-| `policy` (global, presets, path-policies) | generate | `generate.yaml` |
+| `policy` (presets, path-policies) | generate | `generate.yaml` |
 | `watermarks` | generate | `generate.yaml` |
 | `processing` | generate | `generate.yaml` |
 | `detection` | generate | `generate.yaml` |
-| `imagemagick` | failback | `failback.yaml` |
 
-> Секция `http` — единственная, чьи подсекции расходятся по слоям: транспортные/security-ключи живут в `setting.yaml`, а fallback-подсекции (`not-found`, `not-found-cache-control`, `source-fallback`) — в `failback.yaml`. Благодаря deep merge подсекции одного top-level ключа из разных файлов корректно объединяются.
+> Секция `http` — единственная, чьи подсекции расходятся по слоям: транспортные/security-ключи живут в `setting.yaml`, а fallback-подсекции (`not-found`, `not-found-cache-control`, `source-fallback`, `serve-original`) — в `failback.yaml`. Благодаря deep merge подсекции одного top-level ключа из разных файлов корректно объединяются.
 
 Полные самодокументированные примеры — [`config/setting.yaml`](../config/setting.yaml), [`config/generate.yaml`](../config/generate.yaml), [`config/failback.yaml`](../config/failback.yaml); локальные переопределения — [`config/setting-local.yaml`](../config/setting-local.yaml), [`config/generate-local.yaml`](../config/generate-local.yaml), [`config/failback-local.yaml`](../config/failback-local.yaml).
 
 ## Обратная совместимость
 
-Старый монолитный `setting.yaml`, содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать без изменений: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `setting.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог. Миграция сводится к механическому переносу секций между файлами согласно таблице выше.
+Старый монолитный `setting.yaml`, содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `setting.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог.
+
+> **Исключение — новая policy-грамматика.** Старые ключи `policy.global` (`authorization`, `allowed-presets`, `size-rules`, `limits`), `policy.presets[].size` (вместо `width`/`height`) и строковый `output-formats` больше **не поддерживаются**: strict-декодирование отклоняет их как неизвестные поля. При миграции перепишите policy-секцию по новому формату (см. [policy](#policy)) и перенесите лимиты в `application.limits`.
 
 ---
 
@@ -123,7 +124,7 @@ Fallback на **исходный файл** при ошибке ассета, к
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `enabled` | bool | `false` | Включать ли source fallback. Выключен по умолчанию (текущее поведение). |
+| `enabled` | bool | `false` | Включать ли канонический source fallback (URL вида `name-format.ext`). Выключен по умолчанию (текущее поведение). |
 | `status` | int | `404` | HTTP-статус ответа: `200` или `404` (0 → `404`). |
 | `cache-control` | string | `"no-store"` | `Cache-Control` для source fallback-ответа. |
 
@@ -144,96 +145,133 @@ http:
     cache-control: "no-store"
 ```
 
-## policy
+### http.serve-original
 
-Deny-by-default политика. Всё запрещено, кроме явно разрешённого. Подробности семантики — [SECURITY.md](SECURITY.md).
+**Отдельная фича** (не относится к `source-fallback`): отдача исходного файла по «простым» URL вида `/path/name.ext` со **статусом 200**.
 
-### policy.global
+Канонический URL ассета имеет форму `/{path}/{source_name}-{source_format}/{segment}@{dpr}.{out}`, где `segment` — имя пресета **или** custom-имя (размер-грамматика: `x`, `x200`, `200x`, `200x200`), а `@dpr` — необязательный суффикс плотности пикселей (без суффикса = 1; в URL явно допустимы только 2 и 3). Transform-коды в URL отсутствуют: операция (resize/crop/smart-crop/face-crop/object-crop) определяется **только** полем `crop` пресета/custom. URL без дефиса в имени исходника (например `/test/my.png`) не является валидным asset URL и по умолчанию даёт ошибку 400 `missing source format`. При `enabled: true` такие URL трактуются как прямой путь к исходнику: сервер проверяет путь теми же проверками безопасности (traversal, encoded-разделители, control-символы, canonicalization) и, если файл `test/my.png` существует в source-хранилище, отдаёт его со статусом `200` и заголовками `Content-Type`/`Content-Disposition`/`Cache-Control`/`ETag`. Если исходник не найден — применяется обычная обработка ошибки (400).
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `authorization` | string | — | `"safe"` — только пресеты из allowlist и размеры, покрытые `size-rules`; `"unsafe"` — любые параметры (лимиты продолжают действовать) |
-| `allowed-presets` | list[string] | пусто | Allowlist имён пресетов целиком, включая суффикс: `"thumb@2"`; игнорируется при `authorization: "unsafe"` |
-| `size-rules` | list[string] | пусто | Правила размеров `"minW-maxWxminH-maxH"`; пустая сторона = любая; `"500x"` = точная ширина 500; пустой список в safe = все канонические запросы отклоняются |
+| `enabled` | bool | `false` | При `true` отдаёт исходный файл по «простым» URL `/path/name.ext` со статусом `200`. |
+| `cache-control` | string | `"no-store"` | `Cache-Control` для ответа serve-original. |
 
-### policy.global.limits
+Матрица поведения:
 
-Лимиты применяются в любом режиме авторизации. `0` = без ограничения.
+| `source-fallback.enabled` | `serve-original.enabled` | `/test/my.png` (простой URL) | `/test/my-png/200x200.webp` (канонический) |
+|---------------------------|--------------------------|------------------------------|---------------------------------------------|
+| `false`                   | `false` (дефолт)         | 400 `missing source format`  | 400 (обычная ошибка)                        |
+| `false`                   | `true`                   | отдаётся исходник (200)      | 400 (обычная ошибка)                        |
+| `true`                    | `false`                  | 400 `missing source format`  | отдаётся исходник (статус `status`)         |
+| `true`                    | `true`                   | отдаётся исходник (200)      | отдаётся исходник (статус `status`)         |
 
-| Ключ | Тип | Описание |
-|------|-----|----------|
-| `source-bytes` | int | Максимум размера исходного файла (байт) |
-| `output-bytes` | int | Максимум размера выходного файла (байт) |
-| `width` / `height` | int | Максимум ширины/высоты запроса (px) |
-| `pixels` | int | Максимум пикселей (w×h) |
-| `dpr` | int | Максимум DPR запроса |
-| `frames` | int | Максимум кадров анимации |
-| `duration` | int | Максимум длительности анимации (мс) |
-| `concurrency` | int | Максимум одновременных операций от одного клиента |
+```yaml
+http:
+  serve-original:
+    enabled: false
+    cache-control: "no-store"
+```
+
+## policy
+
+Deny-by-default политика. Всё запрещено, кроме явно разрешённого: запрос допускается, только если его сегмент (имя пресета или custom-имя) разрешён path-policy для пути запроса, а `@dpr` и выходной формат URL удовлетворяют настройкам пресета/custom. Подробности семантики — [SECURITY.md](SECURITY.md).
 
 ### policy.presets
 
-Именованные конфигурации обработки. Пресет обязан быть включён в `policy.global.allowed-presets`, иначе недоступен в URL.
+Именованные конфигурации обработки, на которые ссылаются `path-policies[*].presets` по имени. Пресет становится доступным в URL только после включения его имени в какую-либо path-policy.
 
 | Поле | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `name` | string | обязателен | ≤64 символа, без дефисов; допустимы буквы, цифры, `_`, `.`, `@`; уникально |
+| `name` | string | обязателен | ≤64 символа, без дефисов; допустимы буквы, цифры, `_`, `.`, `@`; уникально. Может содержать фиксированный суффикс `@2`/`@3` (например `"banner@2"`); суффиксы `@0`/`@1` запрещены |
+| `width` | uint32 | `0` | Ширина в px; `0` = не задана (вычисляется пропорционально) |
+| `height` | uint32 | `0` | Высота в px; `0` = не задана (вычисляется пропорционально). Оба = `0` → исходный размер (`x`) |
+| `output-formats` | list[string] | обязателен | **Массив** допустимых выходных форматов (whitelist): `jpeg\|png\|webp\|gif\|avif\|heif\|apng\|jxl`. Непустой; формат URL обязан входить в список |
+| `dpr` | uint32 | ключ отсутствует | Не задан = берётся из `@dpr`-суффикса URL (без суффикса = 1); `2`/`3` = фиксированный множитель (умножение width/height), `@dpr` в URL запрещён. Явные `0`/`1` тоже считаются «заданными»: `@dpr` в URL запрещён, множитель = 1. Подробнее — [правила dpr](#правила-dpr) |
 | `crop` | string | `""` | `""`=resize, `center`=crop, `smart`=smart-crop, `face`=face-crop, `object`=object-crop |
-| `trim` | bool | `false` | Обрезка однотонных полей перед кропом/ресайзом |
-| `size` | string | обязателен | `"ШxВ"`; одна сторона может отсутствовать (`"x400"`, `"300x"`); `"x"` = исходный размер |
-| `output-format` | string | обязателен | `jpeg\|png\|webp\|gif\|avif\|heif\|apng\|jxl` |
-| `quality` | int | `0` | 0–100; 0 = `processing.default-quality` |
-| `dpr` | int | `0` | 0/1/2/3; 0 = берётся из суффикса `@dpr` имени или URL |
-| `frames` | int | `0` | Максимум кадров анимации; 0 = без ограничения |
-| `duration` | int | `0` | Максимум длительности анимации (мс) |
+| `trim` | bool | `false` | Обрезка однотонных полей. `crop`+`trim` — независимые фильтры: применяется сначала trim, затем кроп. Transform-код в URL не кодируется |
+| `quality` | uint32 | `0` | 0–100; 0 = `processing.default-quality` |
+| `frames` | uint32 | `0` | Максимум кадров анимации; 0 = без ограничения |
+| `duration` | uint32 | `0` | Максимум длительности анимации (мс); 0 = без ограничения |
 | `loop` | bool* | nil | nil = `processing.default-loop`; true = бесконечная анимация |
-| `watermark` | string | пусто | Имя водяного знака из секции `watermarks` |
+| `watermark` | string | пусто | Имя водяного знака из секции `watermarks`; неизвестное имя — ошибка старта |
 | `auto-orient` | bool* | nil | Автоповорот по EXIF; nil = глобальный дефолт |
-| `rotate` | string | `""` | `""`/`none`/`90`/`180`/`270` |
+| `rotate` | string | `""` | `""`=наследовать дефолт, `none`=явно отключить, `90`/`180`/`270` |
 | `flip` | string | `""` | `""`/`none`/`horizontal`/`vertical` |
-
-Комбинация `crop`+`trim` кодируется в transform-код URL: `resize`, `c`, `t`, `ct`, `sc`, `sct`, `fc`, `fct`, `oc`, `oct`.
 
 Пример:
 
 ```yaml
 presets:
   - name: "thumb"
-    size: "200x200"
-    output-format: webp
+    width: 200
+    height: 200
+    output-formats: [webp, avif]
     quality: 85
-    dpr: 1
+  - name: "banner@2"
+    width: 2400
+    height: 800
+    output-formats: [webp, avif]
+    dpr: 2
   - name: "portrait"
     crop: face
     trim: true
-    size: "300x300"
-    output-format: jpeg
+    width: 300
+    height: 300
+    output-formats: [jpeg]
 ```
 
 ### policy.path-policies
 
-Политики по префиксам пути канонических URL. Применяются только к каноническим URL (не к пресетам) и могут **только ужесточать** глобальную политику. Выбор — longest prefix match; `"/"` — fallback для всех путей.
+Политики по префиксам пути ассет-URL. **Map**: ключ = префикс пути, значение = настройки пути. Выбор policy — longest-prefix match; `"/"` — fallback для всех путей без более специфичного совпадения. deny-by-default: если для пути нет подходящей path-policy (нет `"/"` и совпадений) — запрос отклоняется.
 
 | Поле | Тип | Описание |
 |------|-----|----------|
-| `path` | string | Префикс пути (нормализуется в `/prefix`) |
-| `dpr` | string | Диапазон допустимых DPR (`"0-1"`, `"2-3"`); пусто = без ограничения |
-| `crop` | string/list | Строка: единственный разрешённый режим (`center`→`c/ct`, `smart`→`sc/sct`, `face`→`fc/fct`, `object`→`oc/oct`, `none` — кроп запрещён); список: allowlist режимов |
-| `trim` | bool* | nil = неважно; true = trim обязателен; false = trim запрещён |
-| `watermark` | string | Водяной знак префикса пути (приоритет ниже пресета, выше дефолта) |
+| *(ключ)* | string | Префикс пути, нормализуется в `/prefix` (например `"basket/products"` → `"/basket/products"`); `"/"` — fallback |
+| `presets` | list[string] | Список имён глобальных пресетов (`policy.presets`), доступных на этом пути; неизвестное имя — ошибка старта |
+| `customs` | map | Custom-настройки пути: ключ = custom-имя, значение = настройки как у пресетов (см. [customs](#policypath-policiescustoms)) |
 
-Пример:
+### policy.path-policies.*.customs
+
+Custom-настройки пути: быстрый способ разрешить произвольные размеры без объявления пресета. **Имя** имеет размер-грамматику `x` (оригинал) / `x200` (только высота) / `200x` (только ширина) / `200x200` (точный размер), опционально с суффиксом `@2`/`@3` (например `200x100@2`). Настройки — те же, что у пресетов (`output-formats` обязателен, `crop`, `quality`, `dpr` и т.д.).
+
+- **Приоритет имени над width/height**: размер custom берётся из имени; заданные в настройках `width`/`height` переопределяют соответствующие стороны (второе берётся из имени).
+- **Wildcard-@dpr**: если `dpr` не задан в настройках (ключ отсутствует), `@dpr` из URL допустим (соответствие по правилам ниже).
+- **Приоритет при разрешении**: customs имеют приоритет над presets пути.
 
 ```yaml
 path-policies:
-  - path: "/"
-  - path: "/thumbs"
-    dpr: "0-1"
-    crop: center
-  - path: "/originals"
-    crop: none
-    trim: false
+  "/":
+    presets: ["thumb"]
+    customs:
+      x:
+        crop: center
+        output-formats: [webp]
+      200x100@2:
+        output-formats: [webp, avif]
+  "/banners":
+    presets: ["banner", "banner@2"]
+    customs:
+      200x100@2:
+        output-formats: [webp, avif]
 ```
+
+### Правила dpr
+
+Поведение `@dpr` в URL зависит от того, задан ли `dpr` в настройках пресета/custom и содержит ли его имя фиксированный `@dpr`-суффикс. Здесь `P` — базовое имя сегмента (пресет или custom без `@dpr`).
+
+| Настройки пресета/custom | Допустимые URL | Итоговый dpr |
+|--------------------------|----------------|--------------|
+| `dpr` **не задан** (ключ отсутствует), имя без `@dpr` | `P.webp`, `P@2.webp`, `P@3.webp` | из суффикса URL; без суффикса → 1 |
+| `dpr` **задан** (0/1/2/3), имя без `@dpr` | только `P.webp` (без суффикса) | заданное значение (0/1 → 1) |
+| имя содержит `@dpr` (например `banner@2`) | только тот же `@dpr` в URL (`banner@2.webp`) | dpr из имени |
+
+Дополнительные правила:
+
+- Суффиксы `@0`/`@1` **запрещены всегда** (и в имени пресета/custom, и в URL).
+- В URL явно допустимы только `@2` и `@3` (без суффикса = `@1`).
+- Если `dpr` есть и в имени (`banner@2`), и в настройках — значения должны совпадать (иначе ошибка старта).
+- Если имя содержит `@2`, а URL — другой `@dpr` (`banner@3.webp`) — запрос отклоняется (`dpr_not_allowed`).
+- Вычисление при фиксированном dpr: итоговый размер = `width×dpr` и `height×dpr` (например пресет `banner@2` 1200×400 на dpr 2 → 2400×800).
 
 ## watermarks
 
@@ -247,9 +285,9 @@ path-policies:
 | `repeat` | string | `no-repeat` | `no-repeat\|repeat\|repeat-x\|repeat-y\|round\|space` |
 | `size` | string | `contain` | `contain\|cover\|"200px 50px"` |
 
-Ограничения движков: ImageMagick поддерживает точный размер только в px-форме и все repeat-режимы рендерит сплошной плиткой; libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
+Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
-Приоритет применения водяного знака: пресет → path-policy → `processing.default-watermark`.
+Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets[].watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`. Поле `watermark` у path-policy более не существует.
 
 ```yaml
 watermarks:
@@ -446,44 +484,6 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 
 Приоритет: путь из конфига → первый существующий кандидат автодетекта → дефолт биндинга. Если ни один файл не найден, биндинг `github.com/yalue/onnxruntime_go` сам пробует `onnxruntime.so` (Linux/macOS) или `onnxruntime.dll` (Windows) через системные механизмы (ld.so / dyld / LoadLibrary).
 
-## imagemagick
-
-Опциональный fallback для сборок без `-tags libvips`. В сборках с libvips не создаётся и не запускается.
-
-| Ключ | Тип | По умолчанию | Описание |
-|------|-----|--------------|----------|
-| `binary` | string | `"magick"` | Имя или путь к бинарю; для ImageMagick 6 укажите `"convert"` |
-
-### imagemagick.policy — генерация deny-by-default policy.xml
-
-| Ключ | Тип | По умолчанию | Описание |
-|------|-----|--------------|----------|
-| `enabled` | bool* | `true` | Генерировать policy.xml |
-| `dir` | string | пусто | Каталог для policy.xml; пусто = временный каталог (удаляется при закрытии) |
-| `disable-network` | bool* | `true` | Запретить network-capable delegates (SSR-риск); не отключайте в production |
-| `disabled-coders` | list[string] | пусто | Дополнительные coders для запрета |
-| `disabled-delegates` | list[string] | пусто | Дополнительные delegates для запрета |
-| `max-memory-bytes` / `max-map-bytes` / `max-disk-bytes` | int | — | Resource-лимиты policy.xml (0 = не задавать) |
-| `max-threads` / `max-time-seconds` | int | — | Лимиты потоков и времени |
-| `max-width` / `max-height` / `max-pixels` / `max-frames` | int | — | Защита от decompression bomb |
-
-Генерируемая политика запрещает все coders/delegates по умолчанию и разрешает только безопасный allowlist (JPEG/PNG/WebP/GIF/AVIF/HEIC/HEIF/APNG/MIFF/PPM/PGM/PBM/PNM/TIFF/BMP/ICO), явно блокирует network- и scripting-coders (URL/HTTPS/FTP/MSL/MVG/LABEL/TEXT/PS/PDF/SVG и др.) и delegates (curl, wget, ssh, rsvg, inkscape…).
-
-### imagemagick.limits — лимиты subprocess
-
-| Ключ | Тип | По умолчанию | Описание |
-|------|-----|--------------|----------|
-| `timeout` | duration | `"30s"` | Context deadline одного subprocess (убийство процесса) |
-| `output-bytes` | int | — | Лимит выходных данных (bounded writer на stdout) |
-| `memory-bytes` / `map-bytes` / `disk-bytes` | int | — | `-limit memory/map/disk` (0 = не задавать) |
-| `threads` | int | авто | Число потоков |
-| `time-seconds` | int | — | Лимит времени выполнения |
-| `width` / `height` / `pixels` | int | — | Защита от decompression bomb |
-| `frames` | int | — | Лимит кадров анимации |
-| `concurrency` | int | `16` (в коде при 0) | Максимум одновременных subprocess |
-| `webp-method` | int | `4` | Метод сжатия WebP (0–6) |
-| `png-compression-level` | int | `6` | Уровень сжатия PNG (0–9) |
-
 ## metadata
 
 Sidecar-кэш результатов ИИ-детекции (лица/объекты) и `largest_ai_asset`: каждая модель вызывается один раз на родительский файл.
@@ -499,10 +499,22 @@ Sidecar-кэш результатов ИИ-детекции (лица/объек
 
 ## application
 
+Прикладные лимиты генерации ассетов. `0` в любом поле = без ограничения.
+
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `output-limit` | int64 | `0` | Максимум размера сохраняемого выходного файла (байт); превышение прерывает генерацию |
+| `limits.source-bytes` | int64 | `0` | Максимум размера исходного файла (байт) |
+| `limits.output-bytes` | int64 | `0` | Максимум размера выходного файла (байт); превышение прерывает генерацию |
+| `limits.width` | uint32 | `0` | Максимальная ширина (px) |
+| `limits.height` | uint32 | `0` | Максимальная высота (px) |
+| `limits.pixels` | int64 | `0` | Максимум пикселей (width×height) |
+| `limits.dpr` | uint32 | `0` | Максимальный DPR запроса (1/2/3) |
+| `limits.frames` | uint32 | `0` | Максимум кадров анимации |
+| `limits.duration` | uint32 | `0` | Максимум длительности анимации (мс) |
+| `limits.concurrency` | uint32 | `0` | Максимум одновременных операций от одного клиента |
 | `buffer-max-bytes` | int64 | `524288000` (500 MiB) | Бюджет памяти spillable-буфера (source+result); при исчерпании — спул на диск |
+
+> Ключ `application.output-limit` удалён: заменён на `application.limits.output-bytes`. Лимиты перенесены из удалённой секции `policy.global.limits`.
 
 ## observability
 
@@ -626,6 +638,16 @@ libvips:
   metrics-interval: "15s"
 
 application:
+  limits:
+    source-bytes: 10485760
+    output-bytes: 10485760
+    width: 2000
+    height: 2000
+    pixels: 4000000
+    dpr: 3
+    frames: 150
+    duration: 60000
+    concurrency: 10
   buffer-max-bytes: 524288000
 
 observability:
@@ -636,26 +658,36 @@ observability:
 
 ```yaml
 policy:
-  global:
-    authorization: "safe"
-    allowed-presets: ["thumb", "thumb@2"]
-    size-rules: ["0-2000x0-2000"]
-    limits:
-      source-bytes: 10485760
-      output-bytes: 10485760
   presets:
     - name: "thumb"
-      size: "200x200"
-      output-format: webp
+      width: 200
+      height: 200
+      output-formats: [webp, avif]
       quality: 85
-      dpr: 1
     - name: "thumb@2"
-      size: "400x400"
-      output-format: webp
+      width: 400
+      height: 400
+      output-formats: [webp, avif]
       quality: 85
-      dpr: 2
+    - name: "banner@2"
+      width: 2400
+      height: 800
+      output-formats: [webp, avif]
   path-policies:
-    - path: "/"
+    "/":
+      presets: ["thumb", "thumb@2"]
+      customs:
+        x:
+          output-formats: [webp]
+        200x200:
+          output-formats: [webp]
+        x200@2:
+          output-formats: [webp, avif]
+    "/banners":
+      presets: ["banner@2"]
+      customs:
+        200x100@2:
+          output-formats: [webp, avif]
 
 processing:
   default-quality: 85
@@ -683,22 +715,14 @@ detection:
   object-model: ""
 
 application:
-  output-limit: 10485760
+  limits:
+    source-bytes: 10485760
+    output-bytes: 10485760
 ```
 
 ### `failback.yaml` (резервные механизмы)
 
 ```yaml
-imagemagick:
-  binary: "magick"
-  policy:
-    enabled: true
-    disable-network: true
-  limits:
-    timeout: "30s"
-    output-bytes: 10485760
-    concurrency: 2
-
 http:
   not-found-cache-control: "no-store"
   not-found:
@@ -706,6 +730,9 @@ http:
   source-fallback:
     enabled: false
     status: 404
+    cache-control: "no-store"
+  serve-original:
+    enabled: false
     cache-control: "no-store"
 ```
 

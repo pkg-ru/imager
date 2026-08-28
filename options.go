@@ -38,7 +38,7 @@ type Options struct {
 	// FTPS). Пустой Kind = FS fallback на ResultDir.
 	ResultStorage composition.RemoteStorageConfig
 
-	// Processor — абстрактный процессор. Обязателен (или ImageMagick-адаптер).
+	// Processor — абстрактный процессор. Обязателен.
 	Processor processor.Processor
 	// Sources — кастомный SourceStore. Если задан, имеет приоритет над
 	// SourceStorage/SourceDir.
@@ -47,8 +47,9 @@ type Options struct {
 	// ResultStorage/ResultDir.
 	Results storage.ResultStore
 
-	// OutputLimit — максимальный размер выходного файла (0 = без лимита).
-	OutputLimit int64
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения.
+	Limits generatev2.Limits
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
@@ -96,7 +97,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		Processor:       opts.Processor,
 		Sources:         opts.Sources,
 		Results:         opts.Results,
-		OutputLimit:     opts.OutputLimit,
+		Limits:          opts.Limits,
 		BufferMaxBytes:  opts.BufferMaxBytes,
 		MetadataEnabled: opts.MetadataEnabled,
 		MetadataDir:     opts.MetadataDir,

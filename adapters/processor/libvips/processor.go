@@ -381,14 +381,17 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	}
 
 	// Запись результата через bounded writer: OutputBytes → LimitOutput.
+	// Ошибка записи (лимит или сбой нижележащего writer'а) не отбрасывается:
+	// превышение лимита фиксируется через ExceededN, остальные ошибки
+	// возвращаются вызывающему.
 	bw := bounded.NewBoundedWriter(out, p.limits.OutputBytes, cancel)
-	_, _ = bw.Write(br.data)
+	_, werr := bw.Write(br.data)
 	exceeded, actual := bw.ExceededN()
 	if exceeded {
 		return nil, &LimitError{Kind: LimitOutput, Limit: p.limits.OutputBytes, Actual: actual}
 	}
-	if err != nil && !errors.Is(err, bounded.ErrOutputLimitExceeded) {
-		return nil, err
+	if werr != nil && !errors.Is(werr, bounded.ErrOutputLimitExceeded) {
+		return nil, werr
 	}
 	return &processor.Result{
 		Size:         actual,

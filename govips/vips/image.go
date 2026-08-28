@@ -54,7 +54,7 @@ type ImageMetadata struct {
 }
 
 type Parameter struct {
-	value interface{}
+	value any
 	isSet bool
 }
 
@@ -62,7 +62,7 @@ func (p *Parameter) IsSet() bool {
 	return p.isSet
 }
 
-func (p *Parameter) set(v interface{}) {
+func (p *Parameter) set(v any) {
 	p.value = v
 	p.isSet = true
 }

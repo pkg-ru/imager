@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/app/generatev2"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/filemeta"
@@ -204,7 +205,7 @@ func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Pr
 	if err != nil {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
-	p, err := asset.NewPreset(name, asset.TransformCrop, sz, f, 0, 0, 0, 0, nil)
+	p, err := asset.NewPreset(name, asset.TransformCrop, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPreset(%q): %v", name, err)
 	}
@@ -221,23 +222,39 @@ func mustPresetSet(t *testing.T, presets ...*asset.Preset) *asset.PresetSet {
 	return set
 }
 
-// safePolicy с точным size-rule (для перечисления канонических ассетов) и
-// разрешённым пресетом "thumb".
+// safePolicy — политика с "/" (fallback) и пресетом "thumb" (для
+// перечисления ассетов исходника).
 func safePolicy() *policy.Policy {
-	rule := policy.SizeRule{
-		Width:  &policy.Range{Min: 120, Max: 120},
-		Height: &policy.Range{Min: 80, Max: 80},
+	compiled, err := policy.Compile(policy.Config{
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+			},
+		},
+		Presets: []policy.PresetConfig{
+			{
+				Name:          dynamic.String("thumb"),
+				Crop:          dynamic.String("center"),
+				Width:         dynamic.Uint32(120),
+				Height:        dynamic.Uint32(80),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+			},
+		},
+	}, nil, nil)
+	if err != nil {
+		panic(err)
 	}
-	return &policy.Policy{Global: policy.GlobalPolicy{
-		Authorization:  policy.AuthSafe,
-		SizeRules:      []policy.SizeRule{rule},
-		AllowedPresets: []string{"thumb"},
-	}}
+	return compiled.Policy
 }
 
-// unsafePolicy — unsafe authorization без size-rules (перечисление → ошибка).
+// unsafePolicy — deny-by-default политика без path-policies (перечисление →
+// пусто → ErrInvalidRequest).
 func unsafePolicy() *policy.Policy {
-	return &policy.Policy{Global: policy.GlobalPolicy{Authorization: policy.AuthUnsafe}}
+	compiled, err := policy.Compile(policy.Config{}, nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	return compiled.Policy
 }
 
 // TestEnqueueGenerateInvalidRequest — оба/ни одного из source/assets → 400.
@@ -313,7 +330,7 @@ func TestEnqueueGenerateSkipExisting(t *testing.T) {
 	src.Add(object.ObjectKey("thumbs/photo.jpg"), []byte("JPEG"))
 	res := testutil.NewMemResultStore()
 	// Заранее публикуем один канонический ассет, чтобы он был пропущен.
-	url := "thumbs/photo-jpg/120x80.jpeg"
+	url := "thumbs/photo-jpg/thumb.webp"
 	res.Publish(context.Background(), object.ObjectKey(url), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
@@ -339,7 +356,7 @@ func TestEnqueueGenerateAssetsMode(t *testing.T) {
 	svc.Start(context.Background())
 	defer svc.Stop()
 
-	url := "thumbs/photo-jpg/c-120x80@2.webp"
+	url := "thumbs/photo-jpg/thumb@2.webp"
 	res2, err := svc.EnqueueGenerate("", []string{url}, true)
 	if err != nil {
 		t.Fatalf("EnqueueGenerate: %v", err)
@@ -371,12 +388,12 @@ func TestEnqueueGenerateQueueFull(t *testing.T) {
 	}
 
 	// Первая задача занимает очередь (wait=false, воркеры не запущены).
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@2.webp"}, false)
+	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb@2.webp"}, false)
 	if err != nil {
 		t.Fatalf("first enqueue: %v", err)
 	}
 	// Вторая — переполнение.
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@3.webp"}, false)
+	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb@3.webp"}, false)
 	wantErr(t, err, ErrQueueFull)
 }
 
@@ -387,7 +404,7 @@ func TestDeleteBySource(t *testing.T) {
 	res := testutil.NewMemResultStore()
 	// Публикуем ассеты исходника.
 	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет (другой исходник) — не должен удаляться.
 	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
@@ -411,10 +428,10 @@ func TestDeleteAssets(t *testing.T) {
 	src := testutil.NewMemSourceStore()
 	res := testutil.NewMemResultStore()
 	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
-	deleted, err := svc.DeleteAssets(context.Background(), []string{"thumbs/photo-jpg/thumb.webp", "thumbs/photo-jpg/c-120x80@2.webp"})
+	deleted, err := svc.DeleteAssets(context.Background(), []string{"thumbs/photo-jpg/thumb.webp", "thumbs/photo-jpg/thumb@2.webp"})
 	if err != nil {
 		t.Fatalf("DeleteAssets: %v", err)
 	}
@@ -602,7 +619,7 @@ func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
 	svc.Start(context.Background())
 	defer svc.Stop()
 
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@2.webp"}, true)
+	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb.webp"}, true)
 	wantErr(t, err, ErrWaitTimeout)
 
 	// Воркер должен получить отмену контекста и завершиться.
@@ -640,7 +657,7 @@ func TestConcurrentEnqueueStop(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_, _ = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/c-120x80@2.webp"}, false)
+					_, _ = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb.webp"}, false)
 				}
 			}
 		}()
@@ -708,8 +725,9 @@ func TestDeleteBySourceBlindKeys(t *testing.T) {
 	src := testutil.NewMemSourceStore()
 	res := newBlindResultStore()
 	// Публикуем ассеты, которые должны быть сформированы политикой/пресетами.
+	// safePolicy разрешает пресет "thumb" (dpr=1, output webp) → ключ
+	// "thumbs/photo-jpg/thumb.webp".
 	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет — не должен удаляться (вне сформированных ключей).
 	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
@@ -718,8 +736,8 @@ func TestDeleteBySourceBlindKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteBySource: %v", err)
 	}
-	if deleted == 0 {
-		t.Error("expected at least one asset deleted via blind keys")
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (preset thumb.webp)", deleted)
 	}
 	// Посторонний ассет остался.
 	if _, err := res.Lookup(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp")); err != nil {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/coordination/singleflight"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/object"
@@ -33,11 +34,27 @@ func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 	proc := newFakeProcessor([]byte("IMG"))
 	coord := singleflight.New(singleflight.Options{})
 
-	pol := &policy.Policy{
-		Global: policy.GlobalPolicy{
-			Authorization: policy.AuthUnsafe,
-			Limits:        policy.Limits{},
+	// Политика: "/" (fallback) с пресетом thumb. Канонические (программные)
+	// запросы разрешаются, если path-policy существует; segment-запросы
+	// разрешаются через Resolve (пресет thumb на любом пути).
+	pol, err := policy.Compile(policy.Config{
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+			},
 		},
+		Presets: []policy.PresetConfig{
+			{
+				Name:          dynamic.String("thumb"),
+				Crop:          dynamic.String("center"),
+				Width:         dynamic.Uint32(100),
+				Height:        dynamic.Uint32(100),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+			},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("policy compile: %v", err)
 	}
 	presets, err := asset.NewPresetSet([]*asset.Preset{
 		mustPreset(t, "thumb", asset.TransformCrop, "100x100", "webp"),
@@ -51,9 +68,9 @@ func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
 		Results:     res,
 		Coordinator: coord,
 		Processor:   proc,
-		Policy:      pol,
+		Policy:      pol.Policy,
 		Presets:     presets,
-		OutputLimit: 0,
+		Limits:      &Limits{},
 		Quality:     85,
 		Logger:      testutil.NopLogger{},
 	}
@@ -78,7 +95,7 @@ func mustPreset(t *testing.T, name string, tr asset.Transform, size string, outF
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
-	p, err := asset.NewPreset(name, tr, sz, of, 0, 0, 0, 0, nil)
+	p, err := asset.NewPreset(name, tr, sz, []asset.Format{of}, 0, false, 0, 0, 0, nil)
 	if err != nil {
 		t.Fatalf("preset: %v", err)
 	}
@@ -214,8 +231,10 @@ func TestGeneratePresetResolves(t *testing.T) {
 		t.Fatalf("Generate preset: %v", err)
 	}
 	defer res.Close()
-	if res.Request.IsPreset() {
-		t.Fatal("resolved request must be canonical")
+	// Resolve применяет настройки пресета, сохраняя segmentName: запрос
+	// остаётся preset-запросом, но уже разрешённым (IsResolved).
+	if !res.Request.IsResolved() {
+		t.Fatal("resolved request must be marked as resolved")
 	}
 	if res.Request.Size().String() != "100x100" {
 		t.Fatalf("resolved size = %s, want 100x100", res.Request.Size().String())
@@ -224,13 +243,14 @@ func TestGeneratePresetResolves(t *testing.T) {
 
 // TestGenerateKeyIsCanonicalURL проверяет, что Result.Key (и, следовательно,
 // ключ ResultStore/кэша) равен каноническому URL, а не SHA-256 хешу.
+// Resolve сохраняет segmentName, поэтому ключ — segment URL
+// (photos/photo-png/thumb@2.webp), а не transform-size URL.
 func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 	env := newTestEnv(t)
 	env.src.Add("photos/photo.png", []byte("SRC"))
 
 	ctx := context.Background()
-	// Preset-запрос: photos/photo-png/thumb@2.webp раскрывается в
-	// photos/photo-png/c-100x100@2.webp.
+	// Preset-запрос: photos/photo-png/thumb@2.webp.
 	sn, _ := asset.NewSourceName("photo")
 	sf, _ := asset.NewFormat("png")
 	pn, _ := asset.NewPresetName("thumb")
@@ -246,7 +266,7 @@ func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 	}
 	defer res.Close()
 
-	want := object.ObjectKey("photos/photo-png/c-100x100@2.webp")
+	want := object.ObjectKey("photos/photo-png/thumb@2.webp")
 	if res.Key != want {
 		t.Fatalf("Result.Key = %q, want canonical URL %q", res.Key, want)
 	}
@@ -269,19 +289,18 @@ func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 }
 
 func TestGenerateForbidden(t *testing.T) {
+	// Политика без path-policy для пути "" → deny-by-default (path_not_allowed).
+	pol, err := policy.Compile(policy.Config{}, nil, nil)
+	if err != nil {
+		t.Fatalf("policy compile: %v", err)
+	}
 	env := newTestEnv(t, func(d *Deps) {
-		d.Policy = &policy.Policy{
-			Global: policy.GlobalPolicy{
-				Authorization: policy.AuthSafe,
-				SizeRules:     []policy.SizeRule{{Width: &policy.Range{Min: 100, Max: 100}, Height: &policy.Range{Min: 100, Max: 100}}},
-				Limits:        policy.Limits{},
-			},
-		}
+		d.Policy = pol.Policy
 	})
 
 	ctx := context.Background()
 	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "1x1", 2, "webp")
-	_, err := env.svc.Generate(ctx, req)
+	_, err = env.svc.Generate(ctx, req)
 	if err == nil {
 		t.Fatal("expected forbidden error")
 	}
@@ -345,7 +364,7 @@ func TestGeneratePublishError(t *testing.T) {
 
 func TestGenerateOutputLimit(t *testing.T) {
 	env := newTestEnv(t, func(d *Deps) {
-		d.OutputLimit = 2 // payload "IMG" = 3 байта > 2
+		d.Limits = &Limits{OutputBytes: 2} // payload "IMG" = 3 байта > 2
 	})
 	env.src.Add("photo.png", []byte("SRC"))
 

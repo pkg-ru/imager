@@ -38,7 +38,15 @@ func newAdminTestCtx(t *testing.T) *adminTestCtx {
 	if err != nil {
 		t.Fatalf("NewPresetSet: %v", err)
 	}
-	pol := &policy.Policy{Global: policy.GlobalPolicy{Authorization: policy.AuthSafe}}
+	compiled, err := policy.Compile(policy.Config{
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/": {},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("policy.Compile: %v", err)
+	}
+	pol := compiled.Policy
 	svc, err := adminsvc.New(adminsvc.Deps{
 		Gen:     gen,
 		Sources: src,
@@ -164,7 +172,7 @@ func TestAdminGenerateBadJSON(t *testing.T) {
 func TestAdminGenerateBothFields(t *testing.T) {
 	ctx := newAdminTestCtx(t)
 	rec := doAdmin(ctx.auth, http.MethodPost, "/admin/assets/generate", "secret-token",
-		`{"source":"thumbs/photo.jpg","assets":["thumbs/photo-jpg/c-120x80@2.webp"]}`)
+		`{"source":"thumbs/photo.jpg","assets":["thumbs/photo-jpg/thumb.webp"]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
@@ -184,10 +192,10 @@ func TestAdminGenerateAsync202(t *testing.T) {
 	ctx := newAdminTestCtx(t)
 	ctx.svc.Start(context.Background())
 	defer ctx.svc.Stop()
-	ctx.gen.addResult("thumbs/photo-jpg/c-120x80@2.webp")
+	ctx.gen.addResult("thumbs/photo-jpg/thumb.webp")
 
 	rec := doAdmin(ctx.auth, http.MethodPost, "/admin/assets/generate", "secret-token",
-		`{"assets":["thumbs/photo-jpg/c-120x80@2.webp"],"wait":false}`)
+		`{"assets":["thumbs/photo-jpg/thumb.webp"],"wait":false}`)
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("status = %d, want 202", rec.Code)
 	}
@@ -205,10 +213,10 @@ func TestAdminGenerateWait200(t *testing.T) {
 	ctx := newAdminTestCtx(t)
 	ctx.svc.Start(context.Background())
 	defer ctx.svc.Stop()
-	ctx.gen.addResult("thumbs/photo-jpg/c-120x80@2.webp")
+	ctx.gen.addResult("thumbs/photo-jpg/thumb.webp")
 
 	rec := doAdmin(ctx.auth, http.MethodPost, "/admin/assets/generate", "secret-token",
-		`{"assets":["thumbs/photo-jpg/c-120x80@2.webp"],"wait":true}`)
+		`{"assets":["thumbs/photo-jpg/thumb.webp"],"wait":true}`)
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
@@ -253,13 +261,13 @@ func TestAdminGenerateQueueFull503(t *testing.T) {
 
 	// Первая задача занимает очередь.
 	rec1 := doAdmin(auth, http.MethodPost, "/admin/assets/generate", "secret-token",
-		`{"assets":["thumbs/photo-jpg/c-120x80@2.webp"],"wait":false}`)
+		`{"assets":["thumbs/photo-jpg/thumb.webp"],"wait":false}`)
 	if rec1.Code != http.StatusAccepted {
 		t.Errorf("first status = %d, want 202", rec1.Code)
 	}
 	// Вторая — переполнение → 503.
 	rec2 := doAdmin(auth, http.MethodPost, "/admin/assets/generate", "secret-token",
-		`{"assets":["thumbs/photo-jpg/c-120x80@3.webp"],"wait":false}`)
+		`{"assets":["thumbs/photo-jpg/thumb@2.webp"],"wait":false}`)
 	if rec2.Code != http.StatusServiceUnavailable {
 		t.Errorf("second status = %d, want 503", rec2.Code)
 	}
@@ -269,7 +277,7 @@ func TestAdminGenerateQueueFull503(t *testing.T) {
 func TestAdminDeleteBySource(t *testing.T) {
 	ctx := newAdminTestCtx(t)
 	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), strings.NewReader("x"), object.PublishOptions{})
-	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), strings.NewReader("x"), object.PublishOptions{})
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb@2.webp"), strings.NewReader("x"), object.PublishOptions{})
 
 	rec := doAdmin(ctx.auth, http.MethodDelete, "/admin/assets/delete", "secret-token",
 		`{"source":"thumbs/photo.jpg"}`)
@@ -342,7 +350,7 @@ func TestAdminAuthWrongTokenLength(t *testing.T) {
 func TestAdminDeleteBySourceDeletedCount(t *testing.T) {
 	ctx := newAdminTestCtx(t)
 	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), strings.NewReader("x"), object.PublishOptions{})
-	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), strings.NewReader("x"), object.PublishOptions{})
+	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb@2.webp"), strings.NewReader("x"), object.PublishOptions{})
 	ctx.res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/640x.webp"), strings.NewReader("x"), object.PublishOptions{})
 
 	rec := doAdmin(ctx.auth, http.MethodDelete, "/admin/assets/delete", "secret-token",

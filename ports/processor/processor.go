@@ -1,6 +1,6 @@
 // Package processor defines an abstract port of the image processor.
-// Implementations (ImageMagick, libvips, mock) do not depend on HTTP, the
-// file system, or a specific engine.
+// Implementations (libvips, mock) do not depend on HTTP, the file system, or
+// a specific engine.
 package processor
 
 import (

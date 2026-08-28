@@ -72,17 +72,7 @@ size-rules:
 
 ## Изоляция движков обработки
 
-### ImageMagick (fallback)
-
-Три слоя ограничений subprocess:
-
-1. `-limit` аргументы командной строки (memory/map/disk/threads/time/pixels/frames);
-2. генерируемый deny-by-default `policy.xml` (через `MAGICK_CONFIGURE_PATH`): все coders/delegates запрещены, разрешён только безопасный allowlist форматов; network- и scripting-coders (URL/HTTPS/FTP/MSL/MVG/LABEL/TEXT/PS/PDF/SVG…) и delegates (curl, wget, ssh, rsvg, inkscape…) явно заблокированы; `imagemagick.policy.disable-network` держите включённым в production (риск SSRF);
-3. application-level: bounded writer на stdout (лимит выхода) и context deadline (убийство процесса по таймауту).
-
-Защита от decompression bomb: `max-pixels` / `pixels` (по умолчанию 256 MP).
-
-### libvips (основной)
+### libvips (единственный)
 
 In-process без subprocess; ограничения: `libvips.limits.timeout` (context deadline), `output-bytes` (bounded writer), `concurrency` (слоты одновременных операций), лимиты кэша и потоков.
 

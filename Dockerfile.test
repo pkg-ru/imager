@@ -12,20 +12,20 @@
 # Модели ONNX и тестовое изображение ожидаются в ./models (монтируется в
 # /src/models через -v) — тесты реального инференса находят их автоматически.
 ###############################################################################
-FROM golang:1.25.0-alpine
+FROM golang:1.27.0-alpine3.23
 
 ENV CGO_ENABLED=1 \
     GOOS=linux \
     GOARCH=amd64
 
 # Зависимости для cgo (libvips, govips) — те же, что в production builder.
-# Без пиннинга версий: golang:1.25.0-alpine базируется на Alpine 3.22, где
-# версии пакетов отличаются от production (vips 8.16, tzdata 2026c).
-# onnxruntime (1.29.0) и libstdc++/libgcc 15.2 — из edge (C++23-символ).
+# Без пиннинга версий: golang:1.27.0-alpine3.23 базируется на Alpine 3.23, где
+# версии пакетов совпадают с production (vips 8.17, tzdata 2026c).
+# onnxruntime и libstdc++/libgcc — из edge (C++23-символ в onnxruntime).
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.22 для golang:1.25.0-alpine).
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.22/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.22/community" >> /etc/apk/repositories \
+# на mirror.yandex.ru (v3.23 для golang:1.27.0-alpine3.23).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
         build-base \
         pkgconf \

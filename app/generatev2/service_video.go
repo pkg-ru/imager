@@ -123,15 +123,15 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 		return nil, outcome(OutcomeInvalid, "build processing plan", err)
 	}
 
-	// C1: проверка лимитов политики ДО обработки. Размер источника — размер
-	// кадра (x.jpg или извлечённого). Размеры и DPR — из запроса.
+	// C1: проверка application-лимитов ДО обработки. Размер источника —
+	// размер кадра (x.jpg или извлечённого). Размеры и DPR — из запроса.
 	var w, h int
 	if !plan.Size.Original {
 		w, h = plan.Size.Width, plan.Size.Height
 	}
-	check := s.deps.Policy.CheckLimits(req.Path(), srcSize, w, h, req.DPR().Int(), 0, 0, 0)
+	check := s.deps.Limits.Check(srcSize, int64(w), int64(h), int64(req.DPR().Int()), 0, 0, 0)
 	if check.Exceeded() {
-		return nil, outcome(OutcomeForbidden, "policy limit: "+check.ExceededLimit, errLimitExceeded)
+		return nil, outcome(OutcomeForbidden, "application limit: "+check.ExceededLimit, errLimitExceeded)
 	}
 
 	// 4. Детекция (fc/oc) — как для обычных картинок, из кадра.

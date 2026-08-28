@@ -9,9 +9,9 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/pkg-ru/imager/adapters/httpapi"
-	"github.com/pkg-ru/imager/adapters/processor/imagemagick"
 	"github.com/pkg-ru/imager/adapters/processor/libvips"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/app/generatev2"
 	"github.com/pkg-ru/imager/config"
 )
 
@@ -24,7 +24,7 @@ const DefaultBufferMaxBytes int64 = 500 * 1024 * 1024
 // Собирается из YAML-файлов (setting.yaml + setting-local.yaml) через
 // ParseRuntimeConfig. Содержит все настройки приложения: pipeline
 // (policy/processing), HTTP-адаптер, HTTP-сервер, хранилища source/result,
-// ImageMagick processor и observability.
+// libvips processor и observability.
 type RuntimeConfig struct {
 	// Pipeline — typed конфигурация конвейера (policy/processing).
 	Pipeline *config.Config
@@ -47,12 +47,8 @@ type RuntimeConfig struct {
 	// Result — конфигурация result-хранилища.
 	Result RemoteStorageConfig
 
-	// ImageMagick — конфигурация ImageMagick processor (опциональный
-	// fallback для APNG).
-	ImageMagick ImageMagickConfig
-	// Libvips — конфигурация libvips processor (primary движок; in-process
-	// через govips). Если libvips не скомпилирован (без тэка "libvips"),
-	// процессор недоступен и используется ImageMagick.
+	// Libvips — конфигурация libvips processor (единственный движок;
+	// in-process через govips). Требует сборки с тэком "libvips".
 	Libvips LibvipsConfig
 	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
 	// Пустые пути к моделям = face-crop/object-crop отключены (запрос с
@@ -68,8 +64,9 @@ type RuntimeConfig struct {
 	// локально по этому пути. Пусто = дефолт `<эффективный локальный
 	// result-каталог>` (без подкаталога .meta).
 	MetadataDir string
-	// OutputLimit — application-level лимит размера выхода (0 = нет).
-	OutputLimit int64
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения.
+	Limits generatev2.Limits
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
@@ -99,16 +96,6 @@ type ServerConfig struct {
 	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
 	// Сервис не принимает тела, поэтому по умолчанию жёсткий лимит 4 KiB.
 	MaxBodyBytes int
-}
-
-// ImageMagickConfig — конфигурация ImageMagick processor.
-type ImageMagickConfig struct {
-	// Binary — путь к ImageMagick binary (по умолчанию "magick").
-	Binary string
-	// Limits — resource limits для subprocess.
-	Limits imagemagick.Limits
-	// Policy — настройки deny-by-default policy.xml.
-	Policy imagemagick.PolicyConfig
 }
 
 // LibvipsConfig — конфигурация libvips processor (govips).
@@ -218,8 +205,6 @@ type RuntimeConfigFile struct {
 	Source StorageYAML `yaml:"source"`
 	// Result — конфигурация result-хранилища.
 	Result StorageYAML `yaml:"result"`
-	// ImageMagick — конфигурация ImageMagick processor.
-	ImageMagick ImageMagickYAML `yaml:"imagemagick"`
 	// Libvips — конфигурация libvips processor.
 	Libvips LibvipsYAML `yaml:"libvips"`
 	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
@@ -316,16 +301,6 @@ type StorageYAML struct {
 	IdleConnTimeout dynamic.String `yaml:"idle-conn-timeout"`
 	// MetadataTTL — TTL кэша метаданных (S3; duration; 0 = кэш отключён).
 	MetadataTTL dynamic.String `yaml:"metadata-ttl"`
-}
-
-// ImageMagickYAML — YAML-представление ImageMagickConfig.
-type ImageMagickYAML struct {
-	// Binary — путь к ImageMagick binary (по умолчанию "magick").
-	Binary dynamic.String `yaml:"binary"`
-	// Policy — настройки deny-by-default policy.xml.
-	Policy PolicyYAML `yaml:"policy"`
-	// Limits — resource limits для subprocess.
-	Limits LimitsYAML `yaml:"limits"`
 }
 
 // LibvipsYAML — YAML-представление конфигурации libvips.
@@ -436,72 +411,45 @@ type LibvipsLimitsYAML struct {
 	MaxCacheSize dynamic.Int64 `yaml:"max-cache-size"`
 }
 
-// PolicyYAML — YAML-представление imagemagick.PolicyConfig.
-type PolicyYAML struct {
-	// Enabled — включать ли генерацию policy.xml (nil = true).
-	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
-	// Dir — каталог, куда записывается policy.xml (пусто = временный).
-	Dir dynamic.String `yaml:"dir"`
-	// MaxMemoryBytes, MaxMapBytes, MaxDiskBytes, MaxThreads, MaxTimeSeconds,
-	// MaxWidth, MaxHeight, MaxPixels, MaxFrames — resource policies
-	// (0 = не задавать).
-	MaxMemoryBytes dynamic.Int64 `yaml:"max-memory-bytes"`
-	MaxMapBytes    dynamic.Int64 `yaml:"max-map-bytes"`
-	MaxDiskBytes   dynamic.Int64 `yaml:"max-disk-bytes"`
-	MaxThreads     dynamic.Int64 `yaml:"max-threads"`
-	MaxTimeSeconds dynamic.Int64 `yaml:"max-time-seconds"`
-	MaxWidth       dynamic.Int64 `yaml:"max-width"`
-	MaxHeight      dynamic.Int64 `yaml:"max-height"`
-	MaxPixels      dynamic.Int64 `yaml:"max-pixels"`
-	MaxFrames      dynamic.Int64 `yaml:"max-frames"`
-	// DisableNetwork — отключать network-capable delegates (nil = true).
-	DisableNetwork dynamic.Nullable[dynamic.Bool] `yaml:"disable-network"`
-	// DisabledCoders — дополнительные coders для запрета.
-	DisabledCoders []dynamic.String `yaml:"disabled-coders"`
-	// DisabledDelegates — дополнительные delegates для запрета.
-	DisabledDelegates []dynamic.String `yaml:"disabled-delegates"`
-}
-
-// LimitsYAML describes the YAML representation of imagemagick.Limits.
-type LimitsYAML struct {
-	// MemoryBytes — лимит памяти в байтах.
-	MemoryBytes dynamic.Int64 `yaml:"memory-bytes"`
-	// MapBytes — лимит виртуальной памяти в байтах.
-	MapBytes dynamic.Int64 `yaml:"map-bytes"`
-	// DiskBytes — лимит дискового кэша в байтах.
-	DiskBytes dynamic.Int64 `yaml:"disk-bytes"`
-	// Threads — лимит потоков.
-	Threads dynamic.Int64 `yaml:"threads"`
-	// TimeSeconds — лимит времени CPU в секундах.
-	TimeSeconds dynamic.Int64 `yaml:"time-seconds"`
-	// Width — лимит ширины в пикселях (0 = не ограничено).
-	Width dynamic.Int64 `yaml:"width"`
-	// Height — лимит высоты в пикселях (0 = не ограничено).
-	Height dynamic.Int64 `yaml:"height"`
-	// Pixels — лимит площади (width*height) в пикселях.
-	Pixels dynamic.Int64 `yaml:"pixels"`
-	// Frames — лимит числа кадров.
-	Frames dynamic.Int64 `yaml:"frames"`
-	// OutputBytes — application-level лимит размера выхода в байтах.
-	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
-	// Timeout — application-level context deadline для subprocess (duration).
-	Timeout dynamic.String `yaml:"timeout"`
-	// Concurrency — максимальное число одновременно работающих subprocess
-	// (0 = без ограничения).
-	Concurrency dynamic.Int64 `yaml:"concurrency"`
-	// WebPMethod — метод сжатия WebP (0-6; 0 = умолчание ImageMagick).
-	WebPMethod dynamic.Int64 `yaml:"webp-method"`
-	// PNGCompressionLevel — уровень сжатия PNG (0-9; 0 = умолчание).
-	PNGCompressionLevel dynamic.Int64 `yaml:"png-compression-level"`
-}
-
 // ApplicationYAML — прикладные лимиты.
 type ApplicationYAML struct {
-	// OutputLimit — максимальный размер выходного файла (0 = без лимита).
-	OutputLimit dynamic.Int64 `yaml:"output-limit"`
+	// Limits — application-level лимиты генерации ассетов.
+	Limits ApplicationLimitsYAML `yaml:"limits"`
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes dynamic.Int64 `yaml:"buffer-max-bytes"`
+}
+
+// ApplicationLimitsYAML — YAML-представление application-level лимитов
+// генерации ассетов (application.limits).
+//
+// Нулевое значение поля = без ограничения. Все значения должны быть
+// неотрицательными (fail-fast на старте).
+type ApplicationLimitsYAML struct {
+	// SourceBytes — максимальный размер исходного файла в байтах (0 = без
+	// ограничения).
+	SourceBytes dynamic.Int64 `yaml:"source-bytes"`
+	// OutputBytes — максимальный размер выходного файла в байтах (0 = без
+	// ограничения).
+	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
+	// Pixels — максимальное число пикселей (width*height) (0 = без
+	// ограничения).
+	Pixels dynamic.Int64 `yaml:"pixels"`
+	// Width — максимальная ширина (0 = без ограничения).
+	Width dynamic.Uint32 `yaml:"width"`
+	// Height — максимальная высота (0 = без ограничения).
+	Height dynamic.Uint32 `yaml:"height"`
+	// DPR — максимальный DPR (0 = без ограничения).
+	DPR dynamic.Uint32 `yaml:"dpr"`
+	// Frames — максимальное число кадров (0 = без ограничения).
+	Frames dynamic.Uint32 `yaml:"frames"`
+	// Duration — максимальная длительность в миллисекундах (0 = без
+	// ограничения).
+	Duration dynamic.Uint32 `yaml:"duration"`
+	// Concurrency — максимальное число одновременно выполняемых операций
+	// (0 = без ограничения). Валидируется, но НЕ подключается к HTTP-слою
+	// (admission control остаётся в httpapi).
+	Concurrency dynamic.Uint32 `yaml:"concurrency"`
 }
 
 // ObservabilityYAML — логирование и метрики.
@@ -573,7 +521,7 @@ type AdminYAML struct {
 // HTTPYAML — YAML-представление httpapi.Config.
 type HTTPYAML struct {
 	// AllowedOrigins — CORS allowlist.
-	AllowedOrigins []dynamic.String `yaml:"allowed-origins"`
+	AllowedOrigins dynamic.StringSlice `yaml:"allowed-origins"`
 	// AllowCredentials — разрешить credentials.
 	AllowCredentials dynamic.Bool `yaml:"allow-credentials"`
 	// CacheControl — Cache-Control для canonical assets.
@@ -592,6 +540,9 @@ type HTTPYAML struct {
 	NotFound NotFoundYAML `yaml:"not-found"`
 	// SourceFallback — fallback на исходный файл при ошибке ассета.
 	SourceFallback SourceFallbackYAML `yaml:"source-fallback"`
+	// ServeOriginal — отдача исходников по «простым» URL вида /path/name.ext
+	// (отдельная фича, не относящаяся к source-fallback).
+	ServeOriginal ServeOriginalYAML `yaml:"serve-original"`
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
 	// HTTP-запросов (0 = без ограничения).
 	MaxConcurrentRequests dynamic.Int64 `yaml:"max-concurrent-requests"`
@@ -604,6 +555,15 @@ type SourceFallbackYAML struct {
 	// Status — HTTP-статус ответа: 200 или 404 (0 → 404).
 	Status dynamic.Int64 `yaml:"status"`
 	// CacheControl — Cache-Control для fallback-ответа. Дефолт "no-store".
+	CacheControl dynamic.String `yaml:"cache-control"`
+}
+
+// ServeOriginalYAML — YAML-представление ServeOriginalConfig (отдача
+// исходников по «простым» URL вида /path/name.ext).
+type ServeOriginalYAML struct {
+	// Enabled — включать ли отдачу исходников по «простым» URL. Дефолт false.
+	Enabled dynamic.Bool `yaml:"enabled"`
+	// CacheControl — Cache-Control для ответа. Дефолт "no-store".
 	CacheControl dynamic.String `yaml:"cache-control"`
 }
 
@@ -682,6 +642,10 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			Enabled:      raw.HTTP.SourceFallback.Enabled.Unwrap(),
 			Status:       int(raw.HTTP.SourceFallback.Status.Unwrap()),
 			CacheControl: raw.HTTP.SourceFallback.CacheControl.Unwrap(),
+		},
+		ServeOriginal: httpapi.ServeOriginalConfig{
+			Enabled:      raw.HTTP.ServeOriginal.Enabled.Unwrap(),
+			CacheControl: raw.HTTP.ServeOriginal.CacheControl.Unwrap(),
 		},
 		Admin: httpapi.AdminConfig{
 			Enabled:   raw.Admin.Enabled.Unwrap(),
@@ -769,12 +733,6 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		server.MaxBodyBytes = httpapi.DefaultMaxBodyBytes
 	}
 
-	// ImageMagick.
-	img, err := raw.ImageMagick.build()
-	if err != nil {
-		return nil, fmt.Errorf("composition: imagemagick: %w", err)
-	}
-
 	// Libvips.
 	lv, err := raw.Libvips.build()
 	if err != nil {
@@ -788,8 +746,9 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	}
 
 	// Прикладные лимиты.
-	if raw.Application.OutputLimit.Unwrap() < 0 {
-		return nil, fmt.Errorf("composition: application.output-limit: negative value %d", raw.Application.OutputLimit.Unwrap())
+	limits, err := buildApplicationLimits(raw.Application.Limits)
+	if err != nil {
+		return nil, err
 	}
 	if raw.Application.BufferMaxBytes.Unwrap() < 0 {
 		return nil, fmt.Errorf("composition: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes.Unwrap())
@@ -824,14 +783,38 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		ResultDir:       resultDir,
 		Source:          source,
 		Result:          result,
-		ImageMagick:     img,
 		Libvips:         lv,
 		Detection:       det,
 		MetadataEnabled: metadataEnabled,
 		MetadataDir:     metadataDir,
-		OutputLimit:     raw.Application.OutputLimit.Unwrap(),
+		Limits:          limits,
 		BufferMaxBytes:  bufferMaxBytes,
 		LogLevel:        logLevel,
+	}, nil
+}
+
+// buildApplicationLimits валидирует и собирает application-level лимиты из
+// YAML-представления. Все значения должны быть неотрицательными (fail-fast).
+func buildApplicationLimits(raw ApplicationLimitsYAML) (generatev2.Limits, error) {
+	if raw.SourceBytes.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.source-bytes: negative value %d", raw.SourceBytes.Unwrap())
+	}
+	if raw.OutputBytes.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.output-bytes: negative value %d", raw.OutputBytes.Unwrap())
+	}
+	if raw.Pixels.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.pixels: negative value %d", raw.Pixels.Unwrap())
+	}
+	return generatev2.Limits{
+		SourceBytes: raw.SourceBytes.Unwrap(),
+		OutputBytes: raw.OutputBytes.Unwrap(),
+		Pixels:      raw.Pixels.Unwrap(),
+		Width:       raw.Width.Unwrap(),
+		Height:      raw.Height.Unwrap(),
+		DPR:         raw.DPR.Unwrap(),
+		Frames:      raw.Frames.Unwrap(),
+		Duration:    raw.Duration.Unwrap(),
+		Concurrency: raw.Concurrency.Unwrap(),
 	}, nil
 }
 
@@ -988,69 +971,6 @@ func (s ServerYAML) build() (ServerConfig, error) {
 		if err := parse(p.name, p.val); err != nil {
 			return ServerConfig{}, err
 		}
-	}
-	return cfg, nil
-}
-
-// build конвертирует YAML-конфигурацию ImageMagick в ImageMagickConfig.
-func (i ImageMagickYAML) build() (ImageMagickConfig, error) {
-	disabledCoders := make([]string, 0, len(i.Policy.DisabledCoders))
-	for _, c := range i.Policy.DisabledCoders {
-		disabledCoders = append(disabledCoders, c.Unwrap())
-	}
-	disabledDelegates := make([]string, 0, len(i.Policy.DisabledDelegates))
-	for _, d := range i.Policy.DisabledDelegates {
-		disabledDelegates = append(disabledDelegates, d.Unwrap())
-	}
-	cfg := ImageMagickConfig{
-		Binary: i.Binary.Unwrap(),
-		Limits: imagemagick.Limits{
-			MemoryBytes:         i.Limits.MemoryBytes.Unwrap(),
-			MapBytes:            i.Limits.MapBytes.Unwrap(),
-			DiskBytes:           i.Limits.DiskBytes.Unwrap(),
-			Threads:             int(i.Limits.Threads.Unwrap()),
-			TimeSeconds:         int(i.Limits.TimeSeconds.Unwrap()),
-			Width:               i.Limits.Width.Unwrap(),
-			Height:              i.Limits.Height.Unwrap(),
-			Pixels:              i.Limits.Pixels.Unwrap(),
-			Frames:              int(i.Limits.Frames.Unwrap()),
-			OutputBytes:         i.Limits.OutputBytes.Unwrap(),
-			Concurrency:         int(i.Limits.Concurrency.Unwrap()),
-			WebPMethod:          int(i.Limits.WebPMethod.Unwrap()),
-			PNGCompressionLevel: int(i.Limits.PNGCompressionLevel.Unwrap()),
-		},
-		Policy: imagemagick.PolicyConfig{
-			Enabled:           true,
-			DisableNetwork:    true,
-			Dir:               i.Policy.Dir.Unwrap(),
-			MaxMemoryBytes:    i.Policy.MaxMemoryBytes.Unwrap(),
-			MaxMapBytes:       i.Policy.MaxMapBytes.Unwrap(),
-			MaxDiskBytes:      i.Policy.MaxDiskBytes.Unwrap(),
-			MaxThreads:        int(i.Policy.MaxThreads.Unwrap()),
-			MaxTimeSeconds:    int(i.Policy.MaxTimeSeconds.Unwrap()),
-			MaxWidth:          i.Policy.MaxWidth.Unwrap(),
-			MaxHeight:         i.Policy.MaxHeight.Unwrap(),
-			MaxPixels:         i.Policy.MaxPixels.Unwrap(),
-			MaxFrames:         int(i.Policy.MaxFrames.Unwrap()),
-			DisabledCoders:    disabledCoders,
-			DisabledDelegates: disabledDelegates,
-		},
-	}
-	if cfg.Binary == "" {
-		cfg.Binary = "magick"
-	}
-	if i.Policy.Enabled.Set {
-		cfg.Policy.Enabled = i.Policy.Enabled.Value.Unwrap()
-	}
-	if i.Policy.DisableNetwork.Set {
-		cfg.Policy.DisableNetwork = i.Policy.DisableNetwork.Value.Unwrap()
-	}
-	if i.Limits.Timeout.Unwrap() != "" {
-		d, err := time.ParseDuration(i.Limits.Timeout.Unwrap())
-		if err != nil {
-			return ImageMagickConfig{}, fmt.Errorf("limits.timeout: %w", err)
-		}
-		cfg.Limits.Timeout = d
 	}
 	return cfg, nil
 }

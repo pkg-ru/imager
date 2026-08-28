@@ -18,7 +18,7 @@ func TestAdmissionControlAllowsUnderLimit(t *testing.T) {
 	})
 	wrapped := ac.Wrap(next)
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
 

@@ -12,17 +12,20 @@ import (
 	"github.com/pkg-ru/imager/internal/testutil"
 )
 
-// testConfigYAML — валидная конфигурация с unsafe policy (разрешает всё).
+// testConfigYAML — валидная конфигурация с path-policy "/" (разрешает пресет
+// thumb на всех путях).
 const testConfigYAML = `
 version: "1"
 policy:
-  global:
-    authorization: unsafe
+  path-policies:
+    "/":
+      presets: [thumb]
   presets:
     - name: thumb
       crop: center
-      size: 120x80
-      output-format: webp
+      width: 120
+      height: 80
+      output-formats: [webp]
 processing:
   default-quality: 80
 http:
@@ -103,8 +106,9 @@ func TestBuildFullPipeline(t *testing.T) {
 		t.Fatal("Build returned nil handler/service")
 	}
 
-	// Полный запрос через handler.
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	// Полный запрос через handler. Пресет thumb (crop center, 120x80,
+	// output webp) разрешается path-policy "/".
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.webp", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -114,8 +118,8 @@ func TestBuildFullPipeline(t *testing.T) {
 	if body := rec.Body.String(); body != "RAWIMAGE" {
 		t.Errorf("body = %q, want RAWIMAGE", body)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
-		t.Errorf("Content-Type = %q, want image/png", ct)
+	if ct := rec.Header().Get("Content-Type"); ct != "image/webp" {
+		t.Errorf("Content-Type = %q, want image/webp", ct)
 	}
 }
 

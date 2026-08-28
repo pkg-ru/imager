@@ -44,7 +44,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.0"
+          go-version: "1.27.0"
           cache: true
 
       - name: Install libvips (Linux)
@@ -107,7 +107,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.0"
+          go-version: "1.27.0"
           cache: true
 
       - name: gofmt check
@@ -131,13 +131,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.0"
+          go-version: "1.27.0"
           cache: true
 
       - name: govulncheck
         uses: golang/govulncheck-action@v1
         with:
-          go-version-input: "1.25.0"
+          go-version-input: "1.27.0"
           go-package: ./...
 
       - name: fuzz smoke (FuzzParse)

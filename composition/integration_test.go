@@ -63,7 +63,7 @@ func TestIntegrationFullPipelineFS(t *testing.T) {
 	app, srcDir, resDir := buildFSApp(t)
 	seedSource(t, srcDir, "img.png", []byte("RAWIMAGE"))
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.webp", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -73,8 +73,8 @@ func TestIntegrationFullPipelineFS(t *testing.T) {
 	if body := rec.Body.String(); body != "RAWIMAGE" {
 		t.Errorf("body = %q, want RAWIMAGE", body)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "image/png" {
-		t.Errorf("Content-Type = %q, want image/png", ct)
+	if ct := rec.Header().Get("Content-Type"); ct != "image/webp" {
+		t.Errorf("Content-Type = %q, want image/webp", ct)
 	}
 	if etag := rec.Header().Get("ETag"); etag == "" {
 		t.Error("ETag missing")
@@ -98,7 +98,7 @@ func TestIntegrationCacheHitNoRegeneration(t *testing.T) {
 	seedSource(t, srcDir, "img.png", []byte("RAWIMAGE"))
 
 	do := func() string {
-		req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.webp", nil)
 		rec := httptest.NewRecorder()
 		app.Handler.ServeHTTP(rec, req)
 		return rec.Body.String()
@@ -157,7 +157,9 @@ func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 	}
 
 	// Физический файл должен существовать под каноническим URL-именем.
-	want := filepath.Join(resDir, "test-jpg/c-120x80@2.webp")
+	// В новой грамматике канонический URL строится из имени сегмента
+	// (пресета), а не из transform-кода.
+	want := filepath.Join(resDir, "test-jpg/thumb@2.webp")
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("expected result file %q to exist: %v", want, err)
 	}
@@ -167,7 +169,7 @@ func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 func TestIntegrationNotFoundFS(t *testing.T) {
 	app, _, _ := buildFSApp(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/thumb.webp", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -190,7 +192,7 @@ func TestIntegrationTraversalRejectedFS(t *testing.T) {
 
 	// Traversal через URL: /../secret.txt... — должен быть отклонён на
 	// уровне парсера (400), а не прочитать файл.
-	req := httptest.NewRequest(http.MethodGet, "/../secret-txt/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/../secret-txt/thumb.webp", nil)
 	rec := httptest.NewRecorder()
 	app.Handler.ServeHTTP(rec, req)
 
@@ -240,7 +242,7 @@ func TestIntegrationConcurrentHTTPStampede(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+			req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.webp", nil)
 			rec := httptest.NewRecorder()
 			app.Handler.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {

@@ -2,8 +2,8 @@
 // not-found fallback (httpapi.PixelGenerator).
 //
 // Файлы лежат в adapters/pixel/pixels/not-found-pixel.* и встраиваются в
-// бинарь через go:embed — ноль зависимостей от внешних бинарников
-// (ImageMagick) и ноль чтения с диска в рантайме.
+// бинарь через go:embed — ноль зависимостей от внешних бинарников и ноль
+// чтения с диска в рантайме.
 package pixel
 
 import (
@@ -23,7 +23,6 @@ var pixelFS embed.FS
 type Generator struct{}
 
 // New создаёт генератор пикселей на основе встроенных файлов.
-// Не требует ImageMagick.
 func New() *Generator {
 	return &Generator{}
 }

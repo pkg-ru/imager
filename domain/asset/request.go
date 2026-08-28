@@ -3,6 +3,7 @@ package asset
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/pkg-ru/imager/domain/processing"
 )
@@ -10,34 +11,43 @@ import (
 // Request — immutable типизированное представление asset URL.
 //
 // Поля приватны и неизменяемы; создаётся только через конструкторы
-// (NewRequest, Parse, NewPresetRequest). Для канонического запроса
-// заполняются SourceName, SourceFormat, Transform, Size, DPR и OutputFormat,
-// а PresetName пуст. Для preset-запроса заполняются SourceName, SourceFormat
-// (берётся из URL), PresetName, DPR и OutputFormat.
+// (NewRequest, NewSegmentRequest, NewPresetRequest, Parse).
 //
-// Поля quality/frames/duration/loop — параметры обработки, которые не
-// являются частью URL-грамматики. Они заполняются при разрешении пресета
-// (PresetSet.Resolve) и не влияют на Build(): канонический URL строится
-// только из URL-компонентов. Для канонических запросов (не preset) эти
-// поля нулевые.
+// Новая грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
+// где segment — имя пресета ИЛИ custom-имя (размер). Transform-коды в URL
+// отсутствуют: операция определяется полем crop пресета/custom.
+//
+// Для segment-запроса заполняются SourceName, SourceFormat, SegmentName, DPR
+// (0 = @dpr в URL отсутствует) и OutputFormats. Поля transform/size/quality/
+// frames/duration/loop/watermark/orientation заполняются при разрешении
+// (PresetSet.Resolve / Policy.Resolve) и не влияют на Build(): канонический
+// URL строится из segmentName + dpr + outputFormat.
+//
+// Для канонического запроса (NewRequest, программное создание) заполняются
+// Transform, Size, DPR и OutputFormats, а SegmentName пуст. Build() в этом
+// случае использует старую форму {transform}-{size}@{dpr}.{out} (совместимость
+// с программными вызовами; парсер такую форму не разбирает).
 type Request struct {
 	path         string
 	sourceName   SourceName
 	sourceFormat Format
+	segmentName  SegmentName
 	transform    Transform
 	size         Size
 	dpr          DPR
 	outputFormat Format
-	presetName   PresetName
 	quality      int
 	frames       int
 	duration     int
 	loop         *bool
 	watermark    *processing.WatermarkSpec
 	orientation  *processing.OrientationSpec
+	resolved     bool
 }
 
-// NewRequest создаёт канонический Request.
+// NewRequest создаёт канонический Request (transform/size, без segment).
+// Используется программно (тесты, перечисление); парсер такую форму не
+// разбирает.
 func NewRequest(path string, sourceName SourceName, sourceFormat Format, transform Transform, size Size, dpr DPR, outputFormat Format) (*Request, error) {
 	if sourceName == "" {
 		return nil, fmt.Errorf("request: empty source name")
@@ -72,24 +82,25 @@ func NewRequest(path string, sourceName SourceName, sourceFormat Format, transfo
 	}, nil
 }
 
-// NewPresetRequest создаёт preset Request. SourceFormat берётся из URL и
-// сохраняется в запросе: при разрешении пресета он определяет, какой
-// исходный файл искать. DPR берётся из URL (default 1).
-func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, presetName PresetName, dpr DPR, outputFormat Format) (*Request, error) {
+// NewSegmentRequest создаёт segment Request (имя пресета/custom) из URL.
+// dprURL — @dpr-суффикс URL: 0 = отсутствует, 2/3 = явный. SourceFormat
+// берётся из URL и сохраняется в запросе: при разрешении он определяет,
+// какой исходный файл искать.
+func NewSegmentRequest(path string, sourceName SourceName, sourceFormat Format, segmentName SegmentName, dprURL DPR, outputFormat Format) (*Request, error) {
 	if sourceName == "" {
 		return nil, fmt.Errorf("request: empty source name")
 	}
 	if sourceFormat == "" {
 		return nil, fmt.Errorf("request: empty source format")
 	}
-	if presetName == "" {
-		return nil, fmt.Errorf("request: empty preset name")
+	if segmentName == "" {
+		return nil, fmt.Errorf("request: empty segment name")
 	}
 	if outputFormat == "" {
 		return nil, fmt.Errorf("request: empty output format")
 	}
-	if !dpr.Valid() {
-		return nil, fmt.Errorf("request: dpr must be in [%d,%d], got %d", DefaultDPR, MaxDPR, dpr.Int())
+	if dprURL != 0 && !dprURL.Valid() {
+		return nil, fmt.Errorf("request: dpr must be in [%d,%d], got %d", MinDPR, MaxDPR, dprURL.Int())
 	}
 	canon, err := NewCanonicalizer().CanonicalPath(path)
 	if err != nil {
@@ -99,10 +110,16 @@ func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, p
 		path:         canon,
 		sourceName:   sourceName,
 		sourceFormat: sourceFormat,
-		presetName:   presetName,
-		dpr:          dpr,
+		segmentName:  segmentName,
+		dpr:          dprURL,
 		outputFormat: outputFormat,
 	}, nil
+}
+
+// NewPresetRequest создаёт preset Request (обратно-совместимая обёртка
+// NewSegmentRequest). dpr — фиксированный DPR (1-3), как раньше.
+func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, presetName PresetName, dpr DPR, outputFormat Format) (*Request, error) {
+	return NewSegmentRequest(path, sourceName, sourceFormat, SegmentName(presetName), dpr, outputFormat)
 }
 
 // Path возвращает канонический путь.
@@ -125,8 +142,7 @@ func (r *Request) Duration() int { return r.duration }
 func (r *Request) Loop() *bool { return r.loop }
 
 // Watermark возвращает спецификацию ватермарки (nil = не задана).
-// Заполняется при разрешении пресета; для канонических запросов
-// ватермарка определяется path-policy/дефолтом на уровне use case.
+// Заполняется при разрешении пресета.
 func (r *Request) Watermark() *processing.WatermarkSpec { return r.watermark }
 
 // Orientation возвращает спецификацию ориентации (nil = не задана:
@@ -137,44 +153,60 @@ func (r *Request) Orientation() *processing.OrientationSpec { return r.orientati
 // SourceName возвращает имя исходника.
 func (r *Request) SourceName() SourceName { return r.sourceName }
 
-// SourceFormat возвращает формат исходника. Для preset-запроса это формат,
+// SourceFormat возвращает формат исходника. Для segment-запроса это формат,
 // указанный в URL.
 func (r *Request) SourceFormat() Format { return r.sourceFormat }
 
-// Transform возвращает режим трансформации (пуст для preset).
+// Transform возвращает режим трансформации (пуст для неразрешённого segment).
 func (r *Request) Transform() Transform { return r.transform }
 
-// Size возвращает размер (пуст для preset).
+// Size возвращает размер (пуст для неразрешённого segment).
 func (r *Request) Size() Size { return r.size }
 
-// DPR возвращает DPR (default 1 для preset без суффикса).
+// DPR возвращает DPR. Для неразрешённого segment-запроса это @dpr-суффикс
+// URL (0 = отсутствует); после разрешения — итоговый DPR (1-3).
 func (r *Request) DPR() DPR { return r.dpr }
 
-// OutputFormat возвращает выходной формат.
-func (r *Request) OutputFormat() Format { return r.outputFormat }
+// OutputFormats возвращает выходной формат.
+func (r *Request) OutputFormats() Format { return r.outputFormat }
 
-// PresetName возвращает имя пресета (пуст для канонического).
-func (r *Request) PresetName() PresetName { return r.presetName }
+// SegmentName возвращает имя сегмента (пресета/custom; пуст для
+// канонического запроса).
+func (r *Request) SegmentName() SegmentName { return r.segmentName }
 
-// IsPreset возвращает true, если запрос является preset URL.
-func (r *Request) IsPreset() bool { return r.presetName != "" }
+// PresetName возвращает имя пресета (алиас SegmentName; пуст для
+// канонического запроса).
+func (r *Request) PresetName() PresetName { return PresetName(r.segmentName) }
+
+// IsPreset возвращает true, если запрос является segment URL (имя
+// пресета/custom).
+func (r *Request) IsPreset() bool { return r.segmentName != "" }
+
+// IsResolved возвращает true, если запрос уже разрешён (настройки
+// пресета/custom применены).
+func (r *Request) IsResolved() bool { return r.resolved }
 
 // Build собирает канонический URL.
 //
-//	канонический: {path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
-//	preset:       {path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+//	segment:  {path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
+//	канонич.: {path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
 //
-// DPR=1 (default) не выводится в URL; явные 2 и 3 выводятся как @2/@3.
+// Для segment-запросов DPR=1 (default) и DPR=0 (не задан) не выводятся;
+// явные 2 и 3 выводятся как @2/@3, если имя сегмента не содержит @dpr
+// (например "banner@2" — суффикс уже в имени).
 func (r *Request) Build() (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("build: nil request")
 	}
 	var core string
-	if r.IsPreset() {
+	if r.segmentName != "" {
 		if r.sourceFormat == "" {
-			return "", fmt.Errorf("build: empty source format for preset request")
+			return "", fmt.Errorf("build: empty source format for segment request")
 		}
-		core = r.sourceName.String() + "-" + r.sourceFormat.String() + "/" + r.presetName.String()
+		core = r.sourceName.String() + "-" + r.sourceFormat.String() + "/" + r.segmentName.String()
+		if r.dpr != 0 && !r.dpr.IsDefault() && !strings.Contains(r.segmentName.String(), "@") {
+			core += "@" + strconv.Itoa(r.dpr.Int())
+		}
 	} else {
 		if !r.dpr.Valid() {
 			return "", fmt.Errorf("build: dpr must be in [%d,%d], got %d", DefaultDPR, MaxDPR, r.dpr.Int())
@@ -187,10 +219,9 @@ func (r *Request) Build() (string, error) {
 			core += string(r.transform) + "-"
 		}
 		core += r.size.String()
-	}
-	// DPR suffix: default (1) не выводится.
-	if !r.dpr.IsDefault() {
-		core += "@" + strconv.Itoa(r.dpr.Int())
+		if !r.dpr.IsDefault() {
+			core += "@" + strconv.Itoa(r.dpr.Int())
+		}
 	}
 	file := core + "." + r.outputFormat.String()
 	if r.path == "" {
@@ -243,5 +274,27 @@ func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
 	}
 	cp := *r
 	cp.orientation = o
+	return &cp
+}
+
+// WithResolved возвращает копию запроса с применёнными настройками
+// пресета/custom. segmentName сохраняется: канонический URL строится из
+// него. resolved=true помечает запрос разрешённым (Authorize не резолвит
+// повторно).
+func (r *Request) WithResolved(transform Transform, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec) *Request {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	cp.transform = transform
+	cp.size = size
+	cp.dpr = dpr
+	cp.quality = quality
+	cp.frames = frames
+	cp.duration = duration
+	cp.loop = loop
+	cp.watermark = watermark
+	cp.orientation = orientation
+	cp.resolved = true
 	return &cp
 }

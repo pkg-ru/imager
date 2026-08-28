@@ -77,7 +77,7 @@ func passthroughEligible(plan *processing.ProcessingPlan, src sourceInfo, colorM
 		return false
 	}
 	// Перекодирование формата — не passthrough.
-	if plan.SourceFormat != plan.OutputFormat {
+	if plan.SourceFormat != plan.OutputFormats {
 		return false
 	}
 	// Независимые фильтры и ватермарка меняют пиксели.

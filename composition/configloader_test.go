@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/policy"
 	"github.com/pkg-ru/imager/domain/processing"
 )
 
@@ -47,8 +46,8 @@ result:
 	if rc.ResultDir != "/var/cache/imager" {
 		t.Errorf("ResultDir = %q, want /var/cache/imager", rc.ResultDir)
 	}
-	if rc.OutputLimit != 0 {
-		t.Errorf("OutputLimit = %d, want 0", rc.OutputLimit)
+	if rc.Limits.OutputBytes != 0 {
+		t.Errorf("Limits.OutputBytes = %d, want 0", rc.Limits.OutputBytes)
 	}
 	if rc.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want default info", rc.LogLevel)
@@ -79,8 +78,6 @@ observability:
 	local := `
 server:
   addr: ":9090"
-imagemagick:
-  binary: /usr/bin/magick
 source:
   prefix: local/prefix
 http:
@@ -113,10 +110,6 @@ http:
 	// Список (allowed-origins) заменён целиком.
 	if len(rc.HTTP.AllowedOrigins) != 1 || rc.HTTP.AllowedOrigins[0] != "https://local.example.com" {
 		t.Errorf("AllowedOrigins = %v, want exactly [https://local.example.com] (replaced)", rc.HTTP.AllowedOrigins)
-	}
-	// Ключ, добавленный только в local (imagemagick.binary), присутствует.
-	if rc.ImageMagick.Binary != "/usr/bin/magick" {
-		t.Errorf("ImageMagick.Binary = %q, want /usr/bin/magick", rc.ImageMagick.Binary)
 	}
 	// Значение по умолчанию для отсутствующего раздела.
 	if rc.LogLevel != "info" {
@@ -264,97 +257,6 @@ func TestParseRuntimeConfigFailFast(t *testing.T) {
 	}
 }
 
-// TestParseRuntimeConfigImageMagickDefaults проверяет умолчания ImageMagick:
-// policy включена, network отключён, binary magick.
-func TestParseRuntimeConfigImageMagickDefaults(t *testing.T) {
-	rc, err := ParseRuntimeConfig([]byte(`
-version: "1"
-`))
-	if err != nil {
-		t.Fatalf("ParseRuntimeConfig: %v", err)
-	}
-	if rc.ImageMagick.Binary != "magick" {
-		t.Errorf("Binary = %q, want magick", rc.ImageMagick.Binary)
-	}
-	if rc.ImageMagick.Policy.Enabled != true {
-		t.Errorf("Policy.Enabled = %v, want true", rc.ImageMagick.Policy.Enabled)
-	}
-	if rc.ImageMagick.Policy.DisableNetwork != true {
-		t.Errorf("Policy.DisableNetwork = %v, want true", rc.ImageMagick.Policy.DisableNetwork)
-	}
-
-	// Явное отключение policy.
-	rc2, err := ParseRuntimeConfig([]byte(`
-version: "1"
-imagemagick:
-  policy:
-    enabled: false
-`))
-	if err != nil {
-		t.Fatalf("ParseRuntimeConfig: %v", err)
-	}
-	if rc2.ImageMagick.Policy.Enabled != false {
-		t.Errorf("Policy.Enabled = %v, want false (explicit)", rc2.ImageMagick.Policy.Enabled)
-	}
-	// DisableNetwork — независимый дефолт безопасности (true), сохраняется
-	// даже при отключённой policy (policy.xml просто не генерируется).
-	if rc2.ImageMagick.Policy.DisableNetwork != true {
-		t.Errorf("Policy.DisableNetwork = %v, want true (security default)", rc2.ImageMagick.Policy.DisableNetwork)
-	}
-}
-
-// TestParseRuntimeConfigLimits проверяет парсинг resource limits.
-func TestParseRuntimeConfigLimits(t *testing.T) {
-	rc, err := ParseRuntimeConfig([]byte(`
-version: "1"
-imagemagick:
-  limits:
-    memory-bytes: 1048576
-    threads: 2
-    timeout: 30s
-  policy:
-    max-memory-bytes: 524288
-    disabled-coders:
-      - PDF
-      - PS
-`))
-	if err != nil {
-		t.Fatalf("ParseRuntimeConfig: %v", err)
-	}
-	if rc.ImageMagick.Limits.MemoryBytes != 1048576 {
-		t.Errorf("Limits.MemoryBytes = %d, want 1048576", rc.ImageMagick.Limits.MemoryBytes)
-	}
-	if rc.ImageMagick.Limits.Threads != 2 {
-		t.Errorf("Limits.Threads = %d, want 2", rc.ImageMagick.Limits.Threads)
-	}
-	if rc.ImageMagick.Limits.Timeout.String() != "30s" {
-		t.Errorf("Limits.Timeout = %v, want 30s", rc.ImageMagick.Limits.Timeout)
-	}
-	if rc.ImageMagick.Policy.MaxMemoryBytes != 524288 {
-		t.Errorf("Policy.MaxMemoryBytes = %d, want 524288", rc.ImageMagick.Policy.MaxMemoryBytes)
-	}
-}
-
-// TestLoadConfigDirImageMagickAbsolutePath проверяет, что абсолютный путь к
-// ImageMagick binary из local-конфига сохраняется в rc.ImageMagick.Binary.
-// Это важно на Windows, где имя `magick` может не разрешаться через PATH.
-func TestLoadConfigDirImageMagickAbsolutePath(t *testing.T) {
-	dir := t.TempDir()
-	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
-	writeConfig(t, filepath.Join(dir, LocalConfigFile), `
-imagemagick:
-  binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
-`)
-
-	rc, err := LoadConfigDir(dir)
-	if err != nil {
-		t.Fatalf("LoadConfigDir: %v", err)
-	}
-	if rc.ImageMagick.Binary != "D:/OSPanel/addons/ImageMagick-vs17/magick.exe" {
-		t.Errorf("ImageMagick.Binary = %q, want absolute Windows path", rc.ImageMagick.Binary)
-	}
-}
-
 // TestLoadConfigDirFSWithPath проверяет, что путь из YAML (source.path /
 // result.path) попадает в SourceDir/ResultDir и используется при FS-сборке.
 func TestLoadConfigDirFSWithPath(t *testing.T) {
@@ -389,30 +291,25 @@ func TestParseRuntimeConfigPathPolicies(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
 policy:
-  global:
-    authorization: safe
-    allowed-presets: ["thumb"]
-    size-rules: ["0-2000x0-2000"]
-    limits:
-      source-bytes: 10485760
-      output-bytes: 10485760
-  presets:
-    - name: thumb
-      crop: center
-      size: 120x80
-      output-format: webp
-  path-policies:
-    - path: "/"
-      dpr: "0-1"
-      crop: none
-    - path: "/users"
-      dpr: "2-3"
-      crop: center
-      trim: false
-    - path: "basket/products"
-      dpr: "0-1"
-    - path: "/basket/users/"
-      dpr: "2-3"
+   presets:
+     - name: thumb
+       crop: center
+       width: 120
+       height: 80
+       output-formats: [webp]
+   path-policies:
+     "/":
+       presets: ["thumb"]
+     "/users":
+       presets: ["thumb"]
+     "basket/products":
+       presets: ["thumb"]
+     "/basket/users/":
+       presets: ["thumb"]
+application:
+   limits:
+     source-bytes: 10485760
+     output-bytes: 10485760
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -420,12 +317,12 @@ policy:
 	if len(rc.Pipeline.Policy.PathPolicies) != 4 {
 		t.Fatalf("PathPolicies = %d, want 4", len(rc.Pipeline.Policy.PathPolicies))
 	}
-	// Лимиты из global декодируются из YAML.
-	if rc.Pipeline.Policy.Global.Limits.SourceBytes != 10485760 {
-		t.Errorf("Global.Limits.SourceBytes = %d, want 10485760", rc.Pipeline.Policy.Global.Limits.SourceBytes)
+	// Лимиты из application.limits декодируются из YAML.
+	if rc.Limits.SourceBytes != 10485760 {
+		t.Errorf("Limits.SourceBytes = %d, want 10485760", rc.Limits.SourceBytes)
 	}
-	if rc.Pipeline.Policy.Global.Limits.OutputBytes != 10485760 {
-		t.Errorf("Global.Limits.OutputBytes = %d, want 10485760", rc.Pipeline.Policy.Global.Limits.OutputBytes)
+	if rc.Limits.OutputBytes != 10485760 {
+		t.Errorf("Limits.OutputBytes = %d, want 10485760", rc.Limits.OutputBytes)
 	}
 	// Нормализация имён при компиляции.
 	compiled, err := rc.Pipeline.Compile()
@@ -445,26 +342,41 @@ policy:
 }
 
 // TestParseRuntimeConfigPathPolicyCropModes проверяет декодирование форм
-// поля crop в path-policies: строка-режим, список режимов, "none" — и их
-// компиляцию в доменные правила. Булевы значения crop запрещены (crop —
-// только строка).
+// поля crop в пресетах: строка-режим (center/smart/face/object) — и их
+// компиляцию в доменные transform-коды. В новой архитектуре crop задаётся
+// в пресетах/customs, а не в path-policies.
 func TestParseRuntimeConfigPathPolicyCropModes(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
 policy:
-  global:
-    authorization: unsafe
-  path-policies:
-    - path: "/center"
-      crop: center
-    - path: "/deny"
-      crop: none
-    - path: "/smart"
-      crop: smart
-    - path: "/list"
-      crop: [center, face]
-    - path: "/none"
-      crop: none
+   presets:
+     - name: center
+       crop: center
+       width: 120
+       height: 80
+       output-formats: [webp]
+     - name: smart
+       crop: smart
+       width: 120
+       height: 80
+       output-formats: [webp]
+     - name: face
+       crop: face
+       width: 120
+       height: 80
+       output-formats: [webp]
+     - name: object
+       crop: object
+       width: 120
+       height: 80
+       output-formats: [webp]
+     - name: resize
+       width: 120
+       height: 80
+       output-formats: [webp]
+   path-policies:
+     "/":
+       presets: ["center", "smart", "face", "object", "resize"]
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -473,61 +385,44 @@ policy:
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	byPath := map[string]*policy.PathPolicy{}
-	for i := range compiled.Policy.PathPolicies {
-		pp := &compiled.Policy.PathPolicies[i]
-		byPath[pp.Path] = pp
-	}
 	cases := []struct {
-		path      string
+		name      string
 		transform asset.Transform
-		allowed   bool
 	}{
-		// crop: center → разрешены только c/ct.
-		{"/center", asset.TransformCrop, true},
-		{"/center", asset.TransformCropTrim, true},
-		{"/center", asset.TransformSmartCrop, false},
-		// crop: none → все crop-режимы запрещены, остальное разрешено.
-		{"/deny", asset.TransformCrop, false},
-		{"/deny", asset.TransformCropTrim, false},
-		{"/deny", asset.TransformSmartCrop, false},
-		{"/deny", asset.TransformObjectCropTrim, false},
-		{"/deny", "", true},
-		// crop: smart → sc/sct.
-		{"/smart", asset.TransformSmartCrop, true},
-		{"/smart", asset.TransformSmartCropTrim, true},
-		{"/smart", asset.TransformCrop, false},
-		// crop: [center, face] → c/ct/fc/fct.
-		{"/list", asset.TransformCrop, true},
-		{"/list", asset.TransformFaceCropTrim, true},
-		{"/list", asset.TransformObjectCrop, false},
-		// crop: none → все crop-режимы запрещены.
-		{"/none", asset.TransformCrop, false},
-		{"/none", asset.TransformObjectCropTrim, false},
-		{"/none", "", true},
+		// crop: center → c.
+		{"center", asset.TransformCrop},
+		// crop: smart → sc.
+		{"smart", asset.TransformSmartCrop},
+		// crop: face → fc.
+		{"face", asset.TransformFaceCrop},
+		// crop: object → oc.
+		{"object", asset.TransformObjectCrop},
+		// crop: "" → resize.
+		{"resize", ""},
 	}
 	for _, tc := range cases {
-		pp := byPath[tc.path]
-		if pp == nil {
-			t.Fatalf("path policy %q not found", tc.path)
+		p, ok := compiled.Presets.Get(tc.name)
+		if !ok {
+			t.Fatalf("preset %q not found", tc.name)
 		}
-		if got := pp.Crop.Allows(tc.transform); got != tc.allowed {
-			t.Errorf("%s: Allows(%q) = %v, want %v", tc.path, tc.transform, got, tc.allowed)
+		if got := p.Transform(); got != tc.transform {
+			t.Errorf("%s: Transform() = %q, want %q", tc.name, got, tc.transform)
 		}
 	}
 }
 
 // TestParseRuntimeConfigPathPolicyCropInvalid проверяет, что неизвестный
-// crop-режим в path-policy отклоняется при загрузке конфигурации.
+// crop-режим в пресете отклоняется при загрузке конфигурации.
 func TestParseRuntimeConfigPathPolicyCropInvalid(t *testing.T) {
 	_, err := ParseRuntimeConfig([]byte(`
 version: "1"
 policy:
-  global:
-    authorization: unsafe
-  path-policies:
-    - path: "/"
-      crop: bogus
+   presets:
+     - name: thumb
+       crop: bogus
+       width: 120
+       height: 80
+       output-formats: [webp]
 `))
 	if err == nil {
 		t.Fatal("expected error for invalid crop mode")
@@ -541,20 +436,19 @@ func TestParseRuntimeConfigOrientationKeys(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
 policy:
-  global:
-    authorization: unsafe
-  presets:
-    - name: thumb
-      crop: center
-      size: 120x80
-      output-format: webp
-      auto-orient: false
-      rotate: "90"
-      flip: horizontal
+   presets:
+     - name: thumb
+       crop: center
+       width: 120
+       height: 80
+       output-formats: [webp]
+       auto-orient: false
+       rotate: "90"
+       flip: horizontal
 processing:
-  default-auto-orient: true
-  default-rotate: "270"
-  default-flip: vertical
+   default-auto-orient: true
+   default-rotate: "270"
+   default-flip: vertical
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -592,17 +486,16 @@ func TestParseRuntimeConfigTrimKeys(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
 policy:
-  global:
-    authorization: unsafe
-  presets:
-    - name: thumb
-      crop: center
-      size: 120x80
-      output-format: webp
+   presets:
+     - name: thumb
+       crop: center
+       width: 120
+       height: 80
+       output-formats: [webp]
 processing:
-  default-trim-mode: color
-  default-trim-color: "#f0f0f0"
-  default-trim-tolerance: 0.1
+   default-trim-mode: color
+   default-trim-color: "#f0f0f0"
+   default-trim-tolerance: 0.1
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -638,21 +531,21 @@ result:
 `)
 	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
 policy:
-  global:
-    authorization: safe
-    allowed-presets: ["thumb"]
-  presets:
-    - name: thumb
-      size: 200x200
-      output-format: webp
+   path-policies:
+     "/":
+       presets: ["thumb"]
+   presets:
+     - name: thumb
+       width: 200
+       height: 200
+       output-formats: [webp]
 processing:
-  default-quality: 80
+   default-quality: 80
 application:
-  output-limit: 10485760
+   limits:
+     output-bytes: 10485760
 `)
 	writeConfig(t, filepath.Join(dir, FailbackConfigFile), `
-imagemagick:
-  binary: /usr/bin/magick
 http:
   not-found:
     pixel: true
@@ -670,19 +563,16 @@ http:
 		t.Errorf("Server.Addr = %q, want :8080", rc.Server.Addr)
 	}
 	// Из generate.
-	if rc.OutputLimit != 10485760 {
-		t.Errorf("OutputLimit = %d, want 10485760", rc.OutputLimit)
+	if rc.Limits.OutputBytes != 10485760 {
+		t.Errorf("Limits.OutputBytes = %d, want 10485760", rc.Limits.OutputBytes)
 	}
-	if rc.Pipeline.Policy.Global.Authorization != "safe" {
-		t.Errorf("Authorization = %q, want safe", rc.Pipeline.Policy.Global.Authorization)
+	if len(rc.Pipeline.Policy.PathPolicies) != 1 {
+		t.Errorf("PathPolicies = %d, want 1", len(rc.Pipeline.Policy.PathPolicies))
 	}
 	if rc.Pipeline.Processing.DefaultQuality != 80 {
 		t.Errorf("DefaultQuality = %d, want 80", rc.Pipeline.Processing.DefaultQuality)
 	}
 	// Из failback.
-	if rc.ImageMagick.Binary != "/usr/bin/magick" {
-		t.Errorf("ImageMagick.Binary = %q, want /usr/bin/magick", rc.ImageMagick.Binary)
-	}
 	if !rc.HTTP.NotFound.Pixel {
 		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
 	}
@@ -725,20 +615,22 @@ func TestLoadConfigDirFailbackLocalOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
 	writeConfig(t, filepath.Join(dir, FailbackConfigFile), `
-imagemagick:
-  binary: magick
+http:
+  not-found:
+    pixel: true
 `)
 	writeConfig(t, filepath.Join(dir, FailbackLocalFile), `
-imagemagick:
-  binary: "D:/OSPanel/addons/ImageMagick-vs17/magick.exe"
+http:
+  not-found:
+    pixel: false
 `)
 
 	rc, err := LoadConfigDir(dir)
 	if err != nil {
 		t.Fatalf("LoadConfigDir: %v", err)
 	}
-	if rc.ImageMagick.Binary != "D:/OSPanel/addons/ImageMagick-vs17/magick.exe" {
-		t.Errorf("ImageMagick.Binary = %q, want overridden Windows path", rc.ImageMagick.Binary)
+	if rc.HTTP.NotFound.Pixel {
+		t.Errorf("NotFound.Pixel = %v, want false (overridden by local)", rc.HTTP.NotFound.Pixel)
 	}
 }
 
@@ -767,11 +659,8 @@ result:
 		t.Errorf("Server.Addr = %q, want :9090", rc.Server.Addr)
 	}
 	// Умолчания схемы для отсутствующих слоёв.
-	if rc.OutputLimit != 0 {
-		t.Errorf("OutputLimit = %d, want 0 (default)", rc.OutputLimit)
-	}
-	if rc.ImageMagick.Binary != "magick" {
-		t.Errorf("ImageMagick.Binary = %q, want default magick", rc.ImageMagick.Binary)
+	if rc.Limits.OutputBytes != 0 {
+		t.Errorf("Limits.OutputBytes = %d, want 0 (default)", rc.Limits.OutputBytes)
 	}
 }
 
@@ -788,7 +677,8 @@ application:
 `)
 	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
 application:
-  output-limit: 10485760
+   limits:
+     output-bytes: 10485760
 `)
 
 	prev := configLogger
@@ -804,8 +694,8 @@ application:
 	if rc.BufferMaxBytes != 524288000 {
 		t.Errorf("BufferMaxBytes = %d, want 524288000 (from setting)", rc.BufferMaxBytes)
 	}
-	if rc.OutputLimit != 10485760 {
-		t.Errorf("OutputLimit = %d, want 10485760 (from generate)", rc.OutputLimit)
+	if rc.Limits.OutputBytes != 10485760 {
+		t.Errorf("Limits.OutputBytes = %d, want 10485760 (from generate)", rc.Limits.OutputBytes)
 	}
 	// Warning о конфликте top-level ключа "application".
 	found := false
@@ -861,24 +751,24 @@ func TestLoadConfigDirBackwardCompatSingleFile(t *testing.T) {
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
 version: "1"
 server:
-  addr: ":8080"
+   addr: ":8080"
 policy:
-  global:
-    authorization: safe
-    allowed-presets: ["thumb"]
-  presets:
-    - name: thumb
-      size: 200x200
-      output-format: webp
+   path-policies:
+     "/":
+       presets: ["thumb"]
+   presets:
+     - name: thumb
+       width: 200
+       height: 200
+       output-formats: [webp]
 processing:
-  default-quality: 80
-imagemagick:
-  binary: /usr/bin/magick
+   default-quality: 80
 http:
-  not-found:
-    pixel: true
+   not-found:
+     pixel: true
 application:
-  output-limit: 10485760
+   limits:
+     output-bytes: 10485760
 `)
 
 	rc, err := LoadConfigDir(dir)
@@ -888,11 +778,8 @@ application:
 	if rc.Server.Addr != ":8080" {
 		t.Errorf("Server.Addr = %q, want :8080", rc.Server.Addr)
 	}
-	if rc.OutputLimit != 10485760 {
-		t.Errorf("OutputLimit = %d, want 10485760", rc.OutputLimit)
-	}
-	if rc.ImageMagick.Binary != "/usr/bin/magick" {
-		t.Errorf("ImageMagick.Binary = %q, want /usr/bin/magick", rc.ImageMagick.Binary)
+	if rc.Limits.OutputBytes != 10485760 {
+		t.Errorf("Limits.OutputBytes = %d, want 10485760", rc.Limits.OutputBytes)
 	}
 	if !rc.HTTP.NotFound.Pixel {
 		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)

@@ -160,7 +160,7 @@ func (c *Config) Validate() error {
 		}
 		seenWM[name] = true
 	}
-	// Ссылки на ватермарки: default-watermark, пресеты, path-policies.
+	// Ссылки на ватермарки: default-watermark, пресеты, customs.
 	checkRef := func(name, what string) error {
 		if name == "" {
 			return nil
@@ -178,9 +178,11 @@ func (c *Config) Validate() error {
 			return err
 		}
 	}
-	for i, pp := range c.Policy.PathPolicies {
-		if err := checkRef(pp.Watermark.Unwrap(), fmt.Sprintf("policy.path-policies[%d] (%s).watermark", i, pp.Path.Unwrap())); err != nil {
-			return err
+	for path, pp := range c.Policy.PathPolicies {
+		for cname, cc := range pp.Customs {
+			if err := checkRef(cc.Watermark.Unwrap(), fmt.Sprintf("policy.path-policies.%s.customs.%s.watermark", path, cname)); err != nil {
+				return err
+			}
 		}
 	}
 	if err := policy.ValidateConfig(&c.Policy); err != nil {
@@ -288,7 +290,7 @@ func (c *Config) Compile() (*Compiled, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: compile default orientation: %w", err)
 	}
-	compiled, err := policy.Compile(&c.Policy, reg, defOr)
+	compiled, err := policy.Compile(c.Policy, reg, defOr)
 	if err != nil {
 		return nil, fmt.Errorf("config: compile policy: %w", err)
 	}

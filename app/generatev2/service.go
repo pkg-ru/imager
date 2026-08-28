@@ -59,9 +59,9 @@ type Deps struct {
 	// Buffers — фабрика spillable-буферов для материализации результата
 	// обработки. Если nil, результат материализуется в памяти без spill.
 	Buffers buffer.Factory
-	// OutputLimit — максимальный размер выходного файла в байтах (0 = без
-	// ограничения).
-	OutputLimit int64
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения. nil = лимиты не заданы.
+	Limits *Limits
 	// Quality — качество сжатия (0 = по умолчанию).
 	Quality int
 	// DefaultWatermark — ватермарка по умолчанию (nil = не применяется).
@@ -171,19 +171,22 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 		return nil, outcome(OutcomeInvalid, "nil request", nil)
 	}
 
-	// Разрешение preset URL в канонический запрос.
-	if req.IsPreset() {
-		resolved, err := s.deps.Presets.Resolve(req)
-		if err != nil {
-			return nil, outcome(OutcomeInvalid, "resolve preset", err)
+	// Policy decision (deny-by-default). Для segment-запросов Policy.Resolve
+	// применяет настройки пресета/custom и возвращает канонический запрос;
+	// для канонических (программных) запросов Authorize проверяет
+	// path-policy. ResolveError (неизвестный пресет) маппится в
+	// OutcomeInvalid, чтобы HTTP-слой мог вернуть понятную ошибку.
+	if req.IsPreset() && !req.IsResolved() {
+		resolved, dec := s.deps.Policy.Resolve(req)
+		if !dec.Allowed {
+			return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
 		}
 		req = resolved
-	}
-
-	// Policy decision (deny-by-default).
-	dec := s.deps.Policy.Authorize(req)
-	if !dec.Allowed {
-		return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+	} else {
+		dec := s.deps.Policy.Authorize(req)
+		if !dec.Allowed {
+			return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+		}
 	}
 
 	// Канонический cache key — сам canonical URL (без хеширования). Preset
@@ -198,7 +201,7 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	// Ограничение: отдаём ТОЛЬКО медиа-файлы (картинки/анимации/векторы/
 	// видео). Не-медиа форматы (HTML, метаданные, исходники и т.п.) не
 	// отдаются, даже если файл существует.
-	if !isMediaFormat(req.OutputFormat().String()) {
+	if !isMediaFormat(req.OutputFormats().String()) {
 		return nil, outcome(OutcomeInvalid, "unsupported media format", nil)
 	}
 
@@ -343,17 +346,19 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	}
 	plan := pr.plan
 
-	// C1: проверка лимитов политики ДО обработки. Размер источника берём из
-	// метаданных открытого объекта (без дополнительного round-trip). Размеры
-	// и DPR — из запроса (уже с учётом DPR-умножения в buildPlan).
+	// C1: проверка application-лимитов ДО обработки. Размер источника берём
+	// из метаданных открытого объекта (без дополнительного round-trip).
+	// Размеры и DPR — из запроса (уже с учётом DPR-умножения в buildPlan).
+	// Frames/duration для статичных изображений не определяются на
+	// application-уровне (0) — они контролируются лимитами движка.
 	meta := src.Metadata()
 	var w, h int
 	if !plan.Size.Original {
 		w, h = plan.Size.Width, plan.Size.Height
 	}
-	check := s.deps.Policy.CheckLimits(req.Path(), meta.Size, w, h, req.DPR().Int(), 0, 0, 0)
+	check := s.deps.Limits.Check(meta.Size, int64(w), int64(h), int64(req.DPR().Int()), 0, 0, 0)
 	if check.Exceeded() {
-		return nil, outcome(OutcomeForbidden, "policy limit: "+check.ExceededLimit, errLimitExceeded)
+		return nil, outcome(OutcomeForbidden, "application limit: "+check.ExceededLimit, errLimitExceeded)
 	}
 
 	// Кэш ИИ-моделей: для планов с детекцией (fc/oc/fct/oct) боксы
@@ -435,15 +440,16 @@ func (s *Service) sourceKey(req *asset.Request) object.ObjectKey {
 }
 
 // resolveWatermark определяет ватермарку запроса по приоритету:
-//  1. ватермарка пресета (заполняется при разрешении preset URL);
-//  2. ватермарка path-policy (longest prefix match по пути);
-//  3. ватермарка по умолчанию из конфигурации (Deps.DefaultWatermark).
+//  1. ватермарка пресета/custom (заполняется при разрешении segment URL
+//     через Policy.Resolve);
+//  2. ватермарка по умолчанию из конфигурации (Deps.DefaultWatermark).
+//
+// Path-policy больше не несёт ватермарку (поле Watermark удалено из
+// PathPolicy в новой архитектуре) — ватермарка приходит только из
+// пресета/custom или глобального дефолта.
 func (s *Service) resolveWatermark(req *asset.Request) *processing.WatermarkSpec {
 	if wm := req.Watermark(); wm != nil {
 		return wm
-	}
-	if pp := s.deps.Policy.MatchPath(req.Path()); pp != nil && pp.Watermark != nil {
-		return pp.Watermark
 	}
 	return s.deps.DefaultWatermark
 }
@@ -489,7 +495,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	// последний ("t"-суффикс). Операция плана — только режим кропа/ресайза,
 	// trim выделяется в отдельное булево поле (применяется первым).
 	op, trim := transformFromPlan(req.Transform())
-	outFmt, err := processing.ParseFormat(req.OutputFormat().String())
+	outFmt, err := processing.ParseFormat(req.OutputFormats().String())
 	if err != nil {
 		return nil, err
 	}
@@ -629,23 +635,18 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		}
 		return nil, outcome(OutcomeProcessing, "process image", procErr)
 	}
-	if buf.Size() > s.deps.OutputLimit && s.deps.OutputLimit > 0 {
+	// C1: post-check application-лимитов (output-bytes). Превышение
+	// output-bytes — это квота (OutcomeQuota), а не запрет политики:
+	// запрос валиден, но результат не помещается в лимит выхода.
+	check := s.deps.Limits.Check(0, 0, 0, 0, 0, buf.Size(), 0)
+	if check.Exceeded() {
 		s.metrics.IncProcessorError()
 		s.metrics.ObserveProcessorDuration(time.Since(procStart))
 		_ = buf.Close()
-		return nil, outcome(OutcomeQuota, "output exceeds limit", bounded.ErrOutputLimitExceeded)
+		return nil, outcome(OutcomeQuota, "output exceeds limit: "+check.ExceededLimit, bounded.ErrOutputLimitExceeded)
 	}
 	s.metrics.IncProcessorSuccess()
 	s.metrics.ObserveProcessorDuration(time.Since(procStart))
-
-	// C1: post-check лимитов политики (outputBytes). Frames/duration для
-	// статичных изображений не определяются на application-уровне — они
-	// контролируются ImageMagick resource limits (list-length/time).
-	check := s.deps.Policy.CheckLimits(in.Plan.SourceFormat.String(), 0, 0, 0, 0, 0, buf.Size(), 0)
-	if check.Exceeded() {
-		_ = buf.Close()
-		return nil, outcome(OutcomeForbidden, "policy limit: "+check.ExceededLimit, errLimitExceeded)
-	}
 
 	// Публикация в remote после завершения записи в буфер. Transient-ошибки
 	// (ErrUnavailable) ретраятся с экспоненциальным backoff.
@@ -683,7 +684,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	) {
 		s.updateLargestAIAssetAsync(
 			key,
-			in.Plan.OutputFormat.String(),
+			in.Plan.OutputFormats.String(),
 			procRes.Width, procRes.Height,
 			procRes.SourceWidth, procRes.SourceHeight,
 		)
@@ -711,8 +712,8 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 
 	var r io.Reader = reader
 	var br *bounded.BoundedReader
-	if s.deps.OutputLimit > 0 {
-		br = bounded.NewBoundedReader(reader, s.deps.OutputLimit)
+	if s.deps.Limits != nil && s.deps.Limits.OutputBytes > 0 {
+		br = bounded.NewBoundedReader(reader, s.deps.Limits.OutputBytes)
 		r = br
 	}
 
@@ -850,8 +851,8 @@ func (s *bufferStream) Close() error {
 func (s *bufferStream) Metadata() object.ObjectMetadata { return s.meta }
 
 // isTooManyConcurrency распознаёт сигнал перегрузки процессора (bounded
-// очередь ожидания слота переполнена). Оба процессора (ImageMagick, libvips)
-// возвращают sentinel-ошибку с одинаковым текстом; распознаём по нему, чтобы
+// очередь ожидания слота переполнена). Процессор (libvips) возвращает
+// sentinel-ошибку с одинаковым текстом; распознаём по нему, чтобы
 // не завязывать application-слой на конкретные адаптеры.
 func isTooManyConcurrency(err error) bool {
 	if err == nil {
@@ -899,7 +900,7 @@ func isOriginalRequest(req *asset.Request) bool {
 	// через ParseFormat приводит алиасы к каноническому виду (jpg→jpeg,
 	// heic→heif, jpegxl→jxl).
 	return normalizeFormatForCompare(req.SourceFormat().String()) ==
-		normalizeFormatForCompare(req.OutputFormat().String())
+		normalizeFormatForCompare(req.OutputFormats().String())
 }
 
 // normalizeFormatForCompare приводит формат к канонической строке для

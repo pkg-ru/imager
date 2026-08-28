@@ -194,7 +194,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 	}
 
 	// Анимация: loop/delay применяются только для анимированных выходов.
-	if plan.OutputFormat.Animated() {
+	if plan.OutputFormats.Animated() {
 		if err := b.applyAnimation(ctx, img, plan); err != nil {
 			return nil, err
 		}
@@ -987,8 +987,7 @@ func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, p
 // исходника в выходной файл. govips RemoveMetadata сохраняет технические
 // поля (orientation, n-pages/page-height/delay/loop), необходимые для
 // корректного отображения; orientation к этому моменту уже применён при
-// загрузке (AutoRotate). RemoveICCProfile удаляет цветовой профиль —
-// консистентно с ImageMagick -strip.
+// загрузке (AutoRotate). RemoveICCProfile удаляет цветовой профиль.
 //
 // keepICC (Фаза 5a, режим ColorKeep) сохраняет embedded-профиль в выходе:
 // профиль описывает цвет пикселей, и при совпадении формата/без конверсии
@@ -1036,7 +1035,7 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		img = norm
 	}
 	enc := b.opts.Encoders
-	switch plan.OutputFormat {
+	switch plan.OutputFormats {
 	case processing.FormatJPEG:
 		p := vips.NewJpegExportParams()
 		p.Quality = plan.Quality
@@ -1132,7 +1131,7 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportPng(p)
 		return out, err
 	default:
-		return nil, fmt.Errorf("libvips: unsupported output format %q", plan.OutputFormat)
+		return nil, fmt.Errorf("libvips: unsupported output format %q", plan.OutputFormats)
 	}
 }
 
@@ -1285,7 +1284,7 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 	if animated {
 		out, err := compositeWatermarkPerFrame(img, wmImg, pts, W, ph)
 		if err != nil {
-			return nil, fmt.Errorf("libvips: watermark %q: animated output %q: %w", wm.Name, plan.OutputFormat, err)
+			return nil, fmt.Errorf("libvips: watermark %q: animated output %q: %w", wm.Name, plan.OutputFormats, err)
 		}
 		return out, nil
 	}

@@ -8,16 +8,38 @@ import (
 	"github.com/pkg-ru/imager/domain/processing"
 )
 
+// presetCfg — хелпер построения PresetConfig.
+func presetCfg(name string, width, height uint32, outFmts ...string) PresetConfig {
+	formats := make(dynamic.StringSlice, 0, len(outFmts))
+	for _, f := range outFmts {
+		formats = append(formats, dynamic.String(f))
+	}
+	return PresetConfig{
+		Name:          dynamic.String(name),
+		Width:         dynamic.Uint32(width),
+		Height:        dynamic.Uint32(height),
+		OutputFormats: formats,
+	}
+}
+
 func TestValidateConfig(t *testing.T) {
 	valid := &Config{
-		Global: GlobalConfig{Authorization: dynamic.String("safe"), SizeRules: []dynamic.String{dynamic.String("120x80")}},
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("smart"), Crop: dynamic.String("smart"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("face"), Crop: dynamic.String("face"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("object"), Crop: dynamic.String("object"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
+			presetCfg("smart", 120, 80, "webp"),
+			presetCfg("face", 120, 80, "webp"),
+			presetCfg("object", 120, 80, "webp"),
 			// Пустой crop — валиден (кроп не используется).
-			{Name: dynamic.String("resize"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("resize", 120, 80, "webp"),
+		},
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+				Customs: map[string]PresetConfig{
+					"200x200": presetCfg("", 0, 0, "webp"),
+					"x":       presetCfg("", 0, 0, "webp"),
+				},
+			},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
@@ -27,34 +49,34 @@ func TestValidateConfig(t *testing.T) {
 
 func TestValidateConfigInvalid(t *testing.T) {
 	invalid := []*Config{
-		{Global: GlobalConfig{Authorization: dynamic.String("bogus")}},
-		{Global: GlobalConfig{SizeRules: []dynamic.String{dynamic.String("bogus")}}},
-		{Global: GlobalConfig{Limits: Limits{Width: -1}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("a")}, {Path: dynamic.String("a")}}},
-		// Дубликаты после нормализации: "a" и "/a/" — один и тот же путь.
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("a")}, {Path: dynamic.String("/a/")}}},
-		// dpr: невалидные диапазоны.
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), DPR: dynamic.String("bogus")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), DPR: dynamic.String("3-1")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), DPR: dynamic.String("-1-2")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), DPR: dynamic.String("0-4")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String(""), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("bogus"), OutputFormat: dynamic.String("webp")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("")}}},
-		// Недопустимые значения crop (пусто = валидно).
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("bogus"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("true"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("Center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")}}},
-		// dpr вне [1,3] (0 = не задан, валиден).
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), DPR: dynamic.Int64(4)}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), DPR: dynamic.Int64(-1)}}},
+		// Пути.
+		{PathPolicies: map[string]PathPolicyConfig{"": {}}},
+		{PathPolicies: map[string]PathPolicyConfig{"a": {}, "/a/": {}}},
+		// Пресеты.
+		{Presets: []PresetConfig{{Name: dynamic.String(""), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("")}}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{}}}},
+		// Недопустимые значения crop.
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("bogus"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("true"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("Center"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		// dpr вне [0,3].
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(4))}}},
 		// quality вне [0,100].
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Quality: dynamic.Int64(-1)}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Quality: dynamic.Int64(101)}}},
-		// frames/duration отрицательные.
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Frames: dynamic.Int64(-1)}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Duration: dynamic.Int64(-1)}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Quality: dynamic.Uint32(101)}}},
+		// width/height > MaxDimension.
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), Width: dynamic.Uint32(asset.MaxDimension + 1), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		// Имя пресета с @0/@1.
+		{Presets: []PresetConfig{{Name: dynamic.String("a@0"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a@1"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		// Конфликт dpr в имени vs настройки.
+		{Presets: []PresetConfig{{Name: dynamic.String("a@2"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(3))}}},
+		// Custom: невалидное имя.
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"bogus": presetCfg("", 0, 0, "webp")}}}},
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@0": presetCfg("", 0, 0, "webp")}}}},
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@1": presetCfg("", 0, 0, "webp")}}}},
+		// Custom: конфликт dpr в имени vs настройки.
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@2": {DPR: dynamic.NewNullable(dynamic.Uint32(3)), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}}}},
 	}
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {
@@ -67,10 +89,17 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 	loop := true
 	valid := &Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), DPR: dynamic.Int64(2), Quality: dynamic.Int64(80), Frames: dynamic.Int64(10), Duration: dynamic.Int64(5000), Loop: dynamic.NewNullable(dynamic.Bool(loop))},
-			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Size: dynamic.String("x50"), OutputFormat: dynamic.String("png")},
-			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Size: dynamic.String("800x200"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("resize"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			{
+				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp"), dynamic.String("avif")},
+				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
+				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
+				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
+			},
+			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Height: dynamic.Uint32(50), OutputFormats: dynamic.StringSlice{dynamic.String("png")}},
+			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(800), Height: dynamic.Uint32(200), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("resize"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
@@ -79,200 +108,32 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 }
 
 func TestValidateConfigValidPathPolicies(t *testing.T) {
-	trimFalse := false
 	valid := &Config{
-		PathPolicies: []PathPolicyConfig{
-			{Path: dynamic.String("/"), DPR: dynamic.String("0-1"), Crop: strCropRule("none")},
-			{Path: dynamic.String("/users"), DPR: dynamic.String("2-3"), Crop: strCropRule("smart"), Trim: dynamic.NewNullable(dynamic.Bool(trimFalse))},
-			{Path: dynamic.String("/users/gift"), DPR: dynamic.String("0-1")},
-			{Path: dynamic.String("/basket/users"), DPR: dynamic.String("2-3")},
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+				Customs: map[string]PresetConfig{
+					"200x200": presetCfg("", 0, 0, "webp"),
+					"x":       presetCfg("", 0, 0, "webp"),
+				},
+			},
+			"/users": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+				Customs: map[string]PresetConfig{
+					"200x100@2": presetCfg("", 0, 0, "webp", "avif"),
+				},
+			},
 			// Без ведущего "/" и с завершающим "/" — нормализуются.
-			{Path: dynamic.String("basket/products"), DPR: dynamic.String("0-1"), Crop: listCropRule("center", "face"), Trim: dynamic.NewNullable(dynamic.Bool(trimFalse))},
-			{Path: dynamic.String("/basket/users/extra/"), DPR: dynamic.String("2-3")},
+			"basket/products": {
+				Customs: map[string]PresetConfig{"x200": presetCfg("", 0, 0, "webp")},
+			},
+			"/basket/users/": {
+				Customs: map[string]PresetConfig{"200x": presetCfg("", 0, 0, "webp")},
+			},
 		},
 	}
 	if err := ValidateConfig(valid); err != nil {
 		t.Errorf("expected valid config with path-policies, got %v", err)
-	}
-}
-
-func TestValidateConfigInvalidPathPolicyCrop(t *testing.T) {
-	invalid := []*Config{
-		// Неизвестный режим в строковой форме.
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), Crop: strCropRule("bogus")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), Crop: strCropRule("Center")}}},
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), Crop: strCropRule("true")}}},
-		// Неизвестный режим в списке.
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), Crop: listCropRule("smart", "bogus")}}},
-		// Пустой список.
-		{PathPolicies: []PathPolicyConfig{{Path: dynamic.String("/"), Crop: listCropRule()}}},
-	}
-	for _, c := range invalid {
-		if err := ValidateConfig(c); err == nil {
-			t.Errorf("ValidateConfig(%+v) expected error", c)
-		}
-	}
-}
-
-// strCropRule / listCropRule — хелперы построения CropRuleConfig для тестов
-// (имитируют результат UnmarshalYAML: crop — только строковые формы).
-func strCropRule(s string) *CropRuleConfig {
-	c := CropRuleConfig{s}
-	return &c
-}
-
-func listCropRule(modes ...string) *CropRuleConfig {
-	// Явно ненулевой слайс: пустой список должен считаться заданным
-	// (и невалидным), а не «поле отсутствует».
-	c := CropRuleConfig{}
-	c = append(c, modes...)
-	return &c
-}
-
-func TestCompileCropRule(t *testing.T) {
-	tests := []struct {
-		name    string
-		cfg     CropRuleConfig
-		check   func(*testing.T, *CropRule)
-		wantErr bool
-	}{
-		{
-			name: "nil = no restriction",
-			cfg:  nil,
-			check: func(t *testing.T, r *CropRule) {
-				if r != nil {
-					t.Errorf("rule = %+v, want nil", r)
-				}
-			},
-		},
-		{
-			name: "center allows c/ct",
-			cfg:  []string{"center"},
-			check: func(t *testing.T, r *CropRule) {
-				if !r.Allows(asset.TransformCrop) || !r.Allows(asset.TransformCropTrim) {
-					t.Error("c/ct must be allowed")
-				}
-				if r.Allows("") || r.Allows(asset.TransformSmartCrop) || r.Allows(asset.TransformTrim) {
-					t.Error("non-crop transforms must be denied")
-				}
-			},
-		},
-		{
-			name: "none denies all crop modes",
-			cfg:  []string{"none"},
-			check: func(t *testing.T, r *CropRule) {
-				for _, tr := range []asset.Transform{
-					asset.TransformCrop, asset.TransformCropTrim,
-					asset.TransformSmartCrop, asset.TransformSmartCropTrim,
-					asset.TransformFaceCrop, asset.TransformFaceCropTrim,
-					asset.TransformObjectCrop, asset.TransformObjectCropTrim,
-				} {
-					if r.Allows(tr) {
-						t.Errorf("transform %q must be denied", tr)
-					}
-				}
-				if !r.Allows("") || !r.Allows(asset.TransformTrim) {
-					t.Error("resize and trim-only must stay allowed")
-				}
-			},
-		},
-		{
-			name: "smart allows sc/sct",
-			cfg:  []string{"smart"},
-			check: func(t *testing.T, r *CropRule) {
-				if !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformSmartCropTrim) {
-					t.Error("sc/sct must be allowed")
-				}
-				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformFaceCrop) {
-					t.Error("c/fc must be denied")
-				}
-			},
-		},
-		{
-			name: "list [smart, face]",
-			cfg:  []string{"smart", "face"},
-			check: func(t *testing.T, r *CropRule) {
-				if !r.Allows(asset.TransformSmartCrop) || !r.Allows(asset.TransformSmartCropTrim) ||
-					!r.Allows(asset.TransformFaceCrop) || !r.Allows(asset.TransformFaceCropTrim) {
-					t.Error("sc/sct/fc/fct must be allowed")
-				}
-				if r.Allows(asset.TransformCrop) || r.Allows(asset.TransformObjectCrop) {
-					t.Error("c/oc must be denied")
-				}
-			},
-		},
-		{
-			name:    "unknown mode",
-			cfg:     []string{"bogus"},
-			wantErr: true,
-		},
-		{
-			name:    "empty list",
-			cfg:     []string{},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rule, err := compileCropRule(tt.cfg)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("compileCropRule(%v) expected error", tt.cfg)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("compileCropRule(%v) error: %v", tt.cfg, err)
-			}
-			tt.check(t, rule)
-		})
-	}
-}
-
-func TestCompilePathPolicyCropModes(t *testing.T) {
-	cfg := &Config{
-		PathPolicies: []PathPolicyConfig{
-			{Path: dynamic.String("/avatars"), Crop: strCropRule("center")},
-			{Path: dynamic.String("/news"), Crop: strCropRule("smart")},
-			{Path: dynamic.String("/portraits"), Crop: strCropRule("face"), Trim: dynamic.Nullable[dynamic.Bool]{}},
-			{Path: dynamic.String("/catalog"), Crop: listCropRule("object")},
-		},
-	}
-	compiled, err := Compile(cfg, nil, nil)
-	if err != nil {
-		t.Fatalf("Compile error: %v", err)
-	}
-	byPath := map[string]*PathPolicy{}
-	for i := range compiled.Policy.PathPolicies {
-		pp := &compiled.Policy.PathPolicies[i]
-		byPath[pp.Path] = pp
-	}
-	cases := []struct {
-		path      string
-		transform asset.Transform
-		allowed   bool
-	}{
-		{"/avatars", asset.TransformCrop, true},
-		{"/avatars", asset.TransformCropTrim, true},
-		{"/avatars", asset.TransformSmartCrop, false},
-		{"/news", asset.TransformSmartCrop, true},
-		{"/news", asset.TransformSmartCropTrim, true},
-		{"/news", asset.TransformCrop, false},
-		{"/portraits", asset.TransformFaceCrop, true},
-		{"/portraits", asset.TransformFaceCropTrim, true},
-		{"/portraits", asset.TransformObjectCrop, false},
-		{"/catalog", asset.TransformObjectCrop, true},
-		{"/catalog", asset.TransformObjectCropTrim, true},
-		{"/catalog", asset.TransformCrop, false},
-	}
-	for _, tc := range cases {
-		pp := byPath[tc.path]
-		if pp == nil {
-			t.Fatalf("path policy %q not found", tc.path)
-		}
-		if got := pp.Crop.Allows(tc.transform); got != tc.allowed {
-			t.Errorf("%s: Allows(%q) = %v, want %v", tc.path, tc.transform, got, tc.allowed)
-		}
 	}
 }
 
@@ -296,73 +157,18 @@ func TestNormalizePath(t *testing.T) {
 	}
 }
 
-func TestParseDPRRange(t *testing.T) {
-	tests := []struct {
-		in   string
-		want Range
-	}{
-		{"0-1", Range{Min: 0, Max: 1}},
-		{"2-3", Range{Min: 2, Max: 3}},
-		{"2", Range{Min: 2, Max: 2}},
-		{"0-3", Range{Min: 0, Max: 3}},
-	}
-	for _, tt := range tests {
-		got, err := ParseDPRRange(tt.in)
-		if err != nil {
-			t.Fatalf("ParseDPRRange(%q) error: %v", tt.in, err)
-		}
-		if got != tt.want {
-			t.Errorf("ParseDPRRange(%q) = %+v, want %+v", tt.in, got, tt.want)
-		}
-	}
-
-	invalid := []string{"", "bogus", "3-1", "-1-2", "1-2-3"}
-	for _, s := range invalid {
-		if _, err := ParseDPRRange(s); err == nil {
-			t.Errorf("ParseDPRRange(%q) expected error", s)
-		}
-	}
-}
-
-func TestValidateDPRRange(t *testing.T) {
-	valid := []Range{
-		{Min: 0, Max: 1},
-		{Min: 2, Max: 3},
-		{Min: 0, Max: 3},
-		{Min: 3, Max: 3},
-	}
-	for _, r := range valid {
-		if err := validateDPRRange(r); err != nil {
-			t.Errorf("validateDPRRange(%+v) unexpected error: %v", r, err)
-		}
-	}
-
-	invalid := []Range{
-		{Min: -1, Max: 1},
-		{Min: 3, Max: 2},
-		{Min: 0, Max: 4},
-		{Min: 4, Max: 4},
-	}
-	for _, r := range invalid {
-		if err := validateDPRRange(r); err == nil {
-			t.Errorf("validateDPRRange(%+v) expected error", r)
-		}
-	}
-}
-
 func TestCompile(t *testing.T) {
-	cfg := &Config{
-		Global: GlobalConfig{
-			Authorization:  dynamic.String("safe"),
-			SizeRules:      []dynamic.String{dynamic.String("120x80")},
-			AllowedPresets: []dynamic.String{dynamic.String("thumb")},
-			Limits:         Limits{Width: 1000, Height: 1000},
-		},
-		PathPolicies: []PathPolicyConfig{
-			{Path: dynamic.String("/private"), DPR: dynamic.String("0-1")},
+	cfg := Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/private": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+				Customs: map[string]PresetConfig{
+					"200x200": presetCfg("", 0, 0, "webp"),
+				},
+			},
 		},
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -375,23 +181,30 @@ func TestCompile(t *testing.T) {
 	if compiled.Presets == nil {
 		t.Fatal("expected non-nil presets")
 	}
-	if compiled.Policy.Global.Limits.Width != 1000 {
-		t.Errorf("Global.Limits.Width = %d, want 1000", compiled.Policy.Global.Limits.Width)
-	}
-	if len(compiled.Policy.PathPolicies) != 1 {
-		t.Errorf("PathPolicies = %d, want 1", len(compiled.Policy.PathPolicies))
+	if len(compiled.Policy.PathNames()) != 1 {
+		t.Errorf("PathNames = %v, want 1", compiled.Policy.PathNames())
 	}
 	if _, ok := compiled.Presets.Get("thumb"); !ok {
 		t.Error("expected preset thumb")
 	}
+	pp := compiled.Policy.MatchPath("private")
+	if pp == nil {
+		t.Fatal("expected path-policy /private")
+	}
+	if _, ok := pp.Customs["200x200"]; !ok {
+		t.Error("expected custom 200x200")
+	}
+	if _, ok := pp.Presets.Get("thumb"); !ok {
+		t.Error("expected preset thumb in path-policy")
+	}
 }
 
 func TestCompilePathPolicyNormalization(t *testing.T) {
-	cfg := &Config{
-		PathPolicies: []PathPolicyConfig{
-			{Path: dynamic.String("/"), DPR: dynamic.String("0-1"), Crop: strCropRule("none")},
-			{Path: dynamic.String("basket/products"), DPR: dynamic.String("2-3")},
-			{Path: dynamic.String("/basket/users/"), DPR: dynamic.String("0-1")},
+	cfg := Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/":               {},
+			"basket/products": {},
+			"/basket/users/":  {},
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -408,44 +221,21 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 			t.Errorf("PathNames[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
-	// Проверяем скомпилированные поля.
-	for _, pp := range compiled.Policy.PathPolicies {
-		switch pp.Path {
-		case "/":
-			if pp.DPR == nil || *pp.DPR != (Range{Min: 0, Max: 1}) {
-				t.Errorf("path / dpr = %+v, want 0-1", pp.DPR)
-			}
-			if pp.Crop == nil || pp.Crop.Allows(asset.TransformCrop) {
-				t.Errorf("path / crop must deny TransformCrop")
-			}
-			if !pp.Crop.Allows("") {
-				t.Errorf("path / crop must allow resize")
-			}
-		case "/basket/products":
-			if pp.DPR == nil || *pp.DPR != (Range{Min: 2, Max: 3}) {
-				t.Errorf("path /basket/products dpr = %+v, want 2-3", pp.DPR)
-			}
-		case "/basket/users":
-			if pp.DPR == nil || *pp.DPR != (Range{Min: 0, Max: 1}) {
-				t.Errorf("path /basket/users dpr = %+v, want 0-1", pp.DPR)
-			}
-		}
-	}
 }
 
 func TestCompileCropTrimMapping(t *testing.T) {
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("crop"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("resize"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("smart"), Crop: dynamic.String("smart"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("face"), Crop: dynamic.String("face"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("object"), Crop: dynamic.String("object"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("smart-trim"), Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("face-trim"), Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("object-trim"), Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			{Name: dynamic.String("crop"), Crop: dynamic.String("center"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("trim"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("both"), Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			presetCfg("resize", 120, 80, "webp"),
+			{Name: dynamic.String("smart"), Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("face"), Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("object"), Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("smart-trim"), Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("face-trim"), Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			{Name: dynamic.String("object-trim"), Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -505,9 +295,16 @@ func TestTransformFromCropTrim(t *testing.T) {
 
 func TestCompilePresetOptions(t *testing.T) {
 	loop := true
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb@2"), Crop: dynamic.String("center"), Size: dynamic.String("240x160"), OutputFormat: dynamic.String("webp"), DPR: dynamic.Int64(2), Quality: dynamic.Int64(80), Frames: dynamic.Int64(10), Duration: dynamic.Int64(5000), Loop: dynamic.NewNullable(dynamic.Bool(loop))},
+			{
+				Name: dynamic.String("thumb@2"), Crop: dynamic.String("center"),
+				Width: dynamic.Uint32(240), Height: dynamic.Uint32(160),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
+				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
+				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
+			},
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -536,10 +333,10 @@ func TestCompilePresetOptions(t *testing.T) {
 }
 
 func TestCompileDuplicatePreset(t *testing.T) {
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
+			presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	if _, err := Compile(cfg, nil, nil); err == nil {
@@ -549,10 +346,10 @@ func TestCompileDuplicatePreset(t *testing.T) {
 
 func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 	// "thumb" и "thumb@2" — разные имена (не дубликаты).
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
-			{Name: dynamic.String("thumb@2"), Crop: dynamic.String("center"), Size: dynamic.String("240x160"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
+			presetCfg("thumb@2", 240, 160, "webp"),
 		},
 	}
 	if _, err := Compile(cfg, nil, nil); err != nil {
@@ -560,44 +357,85 @@ func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 	}
 }
 
-func TestParseSizeRule(t *testing.T) {
+func TestCompileCustomSizeFromName(t *testing.T) {
+	cfg := Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Customs: map[string]PresetConfig{
+					"200x200":   presetCfg("", 0, 0, "webp"),
+					"200x":      presetCfg("", 0, 0, "webp"),
+					"x200":      presetCfg("", 0, 0, "webp"),
+					"x":         presetCfg("", 0, 0, "webp"),
+					"200x100@2": presetCfg("", 0, 0, "webp"),
+				},
+			},
+		},
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	pp := compiled.Policy.MatchPath("anything")
+	if pp == nil {
+		t.Fatal("expected path-policy /")
+	}
 	tests := []struct {
-		in   string
-		want SizeRule
+		name string
+		want string
 	}{
-		{"120x80", SizeRule{Width: &Range{120, 120}, Height: &Range{80, 80}}},
-		{"x50", SizeRule{Height: &Range{50, 50}}},
-		{"180x", SizeRule{Width: &Range{180, 180}}},
-		{"120-300x", SizeRule{Width: &Range{120, 300}}},
+		{"200x200", "200x200"},
+		{"200x", "200x"},
+		{"x200", "x200"},
+		{"x", "x"},
+		{"200x100@2", "200x100"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.in, func(t *testing.T) {
-			got, err := ParseSizeRule(tt.in)
-			if err != nil {
-				t.Fatalf("ParseSizeRule(%q) error: %v", tt.in, err)
-			}
-			if got.Width == nil && tt.want.Width != nil {
-				t.Errorf("width = nil, want %+v", *tt.want.Width)
-			}
-			if got.Width != nil && tt.want.Width != nil && *got.Width != *tt.want.Width {
-				t.Errorf("width = %+v, want %+v", *got.Width, *tt.want.Width)
-			}
-			if got.Height == nil && tt.want.Height != nil {
-				t.Errorf("height = nil, want %+v", *tt.want.Height)
-			}
-			if got.Height != nil && tt.want.Height != nil && *got.Height != *tt.want.Height {
-				t.Errorf("height = %+v, want %+v", *got.Height, *tt.want.Height)
-			}
-		})
+		c, ok := pp.Customs[tt.name]
+		if !ok {
+			t.Fatalf("custom %q not found", tt.name)
+		}
+		if got := c.Size().String(); got != tt.want {
+			t.Errorf("custom %q size = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+	// dpr из имени custom.
+	c, ok := pp.Customs["200x100@2"]
+	if !ok {
+		t.Fatal("custom 200x100@2 not found")
+	}
+	if c.DPR().Int() != 2 {
+		t.Errorf("custom 200x100@2 DPR = %d, want 2", c.DPR().Int())
+	}
+}
+
+func TestCompileCustomSizeOverride(t *testing.T) {
+	// width/height в настройках имеют приоритет над именем.
+	cfg := Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Customs: map[string]PresetConfig{
+					"200x200": presetCfg("", 300, 100, "webp"),
+				},
+			},
+		},
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	pp := compiled.Policy.MatchPath("anything")
+	c := pp.Customs["200x200"]
+	if got := c.Size().String(); got != "300x100" {
+		t.Errorf("custom size = %q, want 300x100 (settings override name)", got)
 	}
 }
 
 func TestCompilePresetOrientationInheritsGlobal(t *testing.T) {
 	// Пресет без явных ориентационных полей наследует глобальный дефолт.
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, def)
@@ -619,9 +457,16 @@ func TestCompilePresetOrientationInheritsGlobal(t *testing.T) {
 
 func TestCompilePresetOrientationOverridesGlobal(t *testing.T) {
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), AutoOrient: dynamic.NewNullable(dynamic.Bool(false)), Rotate: dynamic.String("270"), Flip: dynamic.String("vertical")},
+			{
+				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+				AutoOrient:    dynamic.NewNullable(dynamic.Bool(false)),
+				Rotate:        dynamic.String("270"),
+				Flip:          dynamic.String("vertical"),
+			},
 		},
 	}
 	compiled, err := Compile(cfg, nil, def)
@@ -644,9 +489,15 @@ func TestCompilePresetOrientationOverridesGlobal(t *testing.T) {
 func TestCompilePresetOrientationNoneDisables(t *testing.T) {
 	// "none" в пресете ЯВНО отключает унаследованный глобальный поворот/отражение.
 	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Rotate: dynamic.String("none"), Flip: dynamic.String("none")},
+			{
+				Name: dynamic.String("thumb"), Crop: dynamic.String("center"),
+				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+				Rotate:        dynamic.String("none"),
+				Flip:          dynamic.String("none"),
+			},
 		},
 	}
 	compiled, err := Compile(cfg, nil, def)
@@ -668,9 +519,9 @@ func TestCompilePresetOrientationNoneDisables(t *testing.T) {
 
 func TestCompilePresetOrientationNilDefault(t *testing.T) {
 	// nil defaultOrientation эквивалентен {AutoOrient: true}.
-	cfg := &Config{
+	cfg := Config{
 		Presets: []PresetConfig{
-			{Name: dynamic.String("thumb"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp")},
+			presetCfg("thumb", 120, 80, "webp"),
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -692,8 +543,8 @@ func TestCompilePresetOrientationNilDefault(t *testing.T) {
 
 func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
 	invalid := []*Config{
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Rotate: dynamic.String("45")}}},
-		{Presets: []PresetConfig{{Name: dynamic.String("a"), Crop: dynamic.String("center"), Size: dynamic.String("120x80"), OutputFormat: dynamic.String("webp"), Flip: dynamic.String("diagonal")}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Rotate: dynamic.String("45")}}},
+		{Presets: []PresetConfig{{Name: dynamic.String("a"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Flip: dynamic.String("diagonal")}}},
 	}
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {

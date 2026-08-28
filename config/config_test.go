@@ -59,8 +59,8 @@ func TestCompileWatermarks(t *testing.T) {
 		t.Errorf("preset watermark not resolved: %+v", preset.Watermark())
 	}
 	pp := compiled.Policy.MatchPath("any/path")
-	if pp == nil || pp.Watermark == nil || pp.Watermark.Name != "logo" {
-		t.Errorf("path-policy watermark not resolved")
+	if pp == nil {
+		t.Errorf("path-policy not found for any/path")
 	}
 	if compiled.DefaultWatermark == nil || compiled.DefaultWatermark.Name != "logo" {
 		t.Errorf("default watermark not resolved")
@@ -112,10 +112,14 @@ func TestValidateWatermarkErrors(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown path-policy reference",
+			name: "unknown custom reference",
 			mutate: func(c *Config) {
 				c.Watermarks = wmDecls("logo")
-				c.Policy.PathPolicies[0].Watermark = dynamic.String("ghost")
+				pp := c.Policy.PathPolicies["/"]
+				cc := pp.Customs["200x200"]
+				cc.Watermark = dynamic.String("ghost")
+				pp.Customs["200x200"] = cc
+				c.Policy.PathPolicies["/"] = pp
 			},
 		},
 	}
@@ -139,24 +143,30 @@ func TestValidateWatermarkErrors(t *testing.T) {
 	}
 }
 
-// policyConfigForTest — минимальная политика с пресетом и path-policy.
+// policyConfigForTest — минимальная политика с пресетом, custom и path-policy.
 func policyConfigForTest() policy.Config {
 	return policy.Config{
-		Global: policy.GlobalConfig{
-			Authorization:  dynamic.String("safe"),
-			AllowedPresets: []dynamic.String{dynamic.String("thumb")},
-		},
 		Presets: []policy.PresetConfig{{
-			Name:         dynamic.String("thumb"),
-			Size:         dynamic.String("200x200"),
-			OutputFormat: dynamic.String("webp"),
-			Quality:      dynamic.Int64(85),
-			Watermark:    dynamic.String("logo"),
+			Name:          dynamic.String("thumb"),
+			Width:         dynamic.Uint32(200),
+			Height:        dynamic.Uint32(200),
+			OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+			Quality:       dynamic.Uint32(85),
+			Watermark:     dynamic.String("logo"),
 		}},
-		PathPolicies: []policy.PathPolicyConfig{{
-			Path:      dynamic.String("/"),
-			Watermark: dynamic.String("logo"),
-		}},
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+				Customs: map[string]policy.PresetConfig{
+					"200x200": {
+						Width:         dynamic.Uint32(200),
+						Height:        dynamic.Uint32(200),
+						OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+						Watermark:     dynamic.String("logo"),
+					},
+				},
+			},
+		},
 	}
 }
 

@@ -12,7 +12,7 @@
 6. Открытие источника из source-хранилища.
 7. Проверка лимитов политики до обработки (размер источника, размеры/DPR запроса).
 8. Загрузка кэша детекции для `fc`/`oc`/`fct`/`oct` (подробнее — в разделе «Детекция лиц и объектов»).
-9. Обработка движком (libvips или ImageMagick) в spillable-буфер: память с переполнением на диск при исчерпании бюджета `application.buffer-max-bytes`.
+9. Обработка движком (libvips) в spillable-буфер: память с переполнением на диск при исчерпании бюджета `application.buffer-max-bytes`.
 10. Post-check лимитов (размер выхода) и атомарная публикация в result-хранилище с retry (экспоненциальный backoff, до 3 попыток для transient-ошибок).
 
 Канонический ключ кэша — сам canonical URL без хеширования: закэшированный ассет доступен по человекочитаемому имени.
@@ -21,10 +21,9 @@
 
 | Движок | Роль | Особенности |
 |--------|------|-------------|
-| libvips (govips) | Основной; сборка `-tags libvips` | In-process, без subprocess; все форматы включая APNG (≥ 8.13); smart-crop |
-| ImageMagick | Fallback для сборок без `-tags libvips` | Subprocess на операцию; deny-by-default policy.xml; лимиты через `-limit` |
+| libvips (govips) | Единственный; сборка `-tags libvips` | In-process, без subprocess; все форматы включая APNG (≥ 8.13); smart-crop |
 
-Маршрутизация между движками — `adapters/processor/routing`. В сборке с работающим libvips ImageMagick не создаётся и не запускается.
+Маршрутизация — `adapters/processor/routing`.
 
 ## Операции
 
@@ -87,7 +86,7 @@ watermarks:
 
 Ограничения:
 
-- libvips реализует position/repeat/size полностью; ImageMagick — точный размер только в px-форме, `contain`/`cover` рендерятся в натуральном размере файла, все repeat-режимы кроме `no-repeat` дают сплошную плитку;
+- libvips реализует position/repeat/size полностью;
 - анимированные выходы (GIF/WebP/APNG) с водяным знаком на libvips возвращают ошибку обработки (композит применился бы только к первому кадру).
 
 Файл водяного знака обязан существовать на старте, иначе конфигурация отклоняется.
@@ -129,15 +128,15 @@ APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 ## Качество и сжатие
 
 - `quality` пресета (0–100; 0 = `processing.default-quality`) применяется к lossy-форматам (JPEG/WebP);
-- PNG управляется уровнем сжатия: `imagemagick.limits.png-compression-level` (0–9);
-- WebP: `imagemagick.limits.webp-method` (0–6) для fallback-движка.
+- PNG управляется уровнем сжатия: `libvips.encoders.png-compression-level` (0–9);
+- WebP: `libvips.encoders.webp-reduction-effort` (0–6).
 
 ## Лимиты обработки
 
 Три слоя защиты (значения — [CONFIGURATION.md](CONFIGURATION.md)):
 
 1. **Политика** (`policy.global.limits`): размер источника/выхода, размеры, DPR, кадры, длительность — проверяются до и после обработки.
-2. **Движок**: libvips `limits.*` (timeout, output-bytes, concurrency, threads, cache); ImageMagick `-limit` + policy.xml (memory/map/disk/time/pixels/frames — защита от decompression bomb).
+2. **Движок**: libvips `limits.*` (timeout, output-bytes, concurrency, threads, cache).
 3. **Application**: `application.output-limit` (bounded writer прерывает запись), context deadline (`http.generate-timeout` → `504`), admission control (`http.max-concurrent-requests` → `503`).
 
 Перегрузка процессора (переполнение очереди слотов) возвращает клиенту `503 overloaded` с `Retry-After: 1`.

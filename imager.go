@@ -145,8 +145,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 		rc.HTTP.Pixel = pixel.New()
 	}
 
-	// 3) Процессоры: libvips (primary, если скомпилирован) + ImageMagick
-	// (опциональный fallback для сборок без тега "libvips").
+	// 3) Процессор: libvips (требует сборки с тэком "libvips").
 	proc, err := bootstrap.BuildProcessor(logger, rc)
 	if err != nil {
 		return nil, fmt.Errorf("imager: processor: %w", err)
@@ -164,7 +163,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 		SourceStorage:   rc.Source,
 		ResultStorage:   rc.Result,
 		Processor:       proc.Processor,
-		OutputLimit:     rc.OutputLimit,
+		Limits:          rc.Limits,
 		BufferMaxBytes:  rc.BufferMaxBytes,
 		MetadataEnabled: rc.MetadataEnabled,
 		MetadataDir:     rc.MetadataDir,

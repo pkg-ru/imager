@@ -12,13 +12,13 @@ import (
 // TestHandlerMaxURLLenRejected проверяет ограничение длины URL (request limit).
 func TestHandlerMaxURLLenRejected(t *testing.T) {
 	gen := newFakeGenerator()
-	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
+	gen.addResult("img-png/thumb.png", []byte("PNGDATA"), 7)
 	cfg := baseConfig()
-	cfg.MaxURLLen = 20
+	cfg.MaxURLLen = 15
 	h := newTestHandler(t, gen, cfg)
 
-	// URL длиннее лимита → 414.
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	// URL (img-png/thumb.png, 16 символов) длиннее лимита → 414.
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusRequestURITooLong {
@@ -35,8 +35,8 @@ func TestHandlerEncodedSeparatorRejected(t *testing.T) {
 	h := newTestHandler(t, gen, baseConfig())
 
 	for _, p := range []string{
-		"/a%2fb-png/c-120x80@2.png",
-		"/a%2fb-png/c-120x80@2.png",
+		"/a%2fb-png/thumb.png",
+		"/a%2fb-png/thumb.png",
 	} {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
 		rec := httptest.NewRecorder()
@@ -52,9 +52,9 @@ func TestHandlerEncodedSeparatorRejected(t *testing.T) {
 // asset.Parse, т.к. httptest.NewRequest кодирует control-символы в %XX.
 func TestParseControlCharRejected(t *testing.T) {
 	for _, raw := range []string{
-		"/img-png/c-120x80@2.png\x00",
-		"/img-png/c-120x80@2.png\x1f",
-		"/img-png/c-120x80@2.png\x7f",
+		"/img-png/thumb.png\x00",
+		"/img-png/thumb.png\x1f",
+		"/img-png/thumb.png\x7f",
 	} {
 		if _, err := asset.Parse(raw); err == nil {
 			t.Errorf("asset.Parse(%q): expected error for control char", raw)
@@ -77,11 +77,11 @@ func TestConfigWildcardWithCredentialsRejected(t *testing.T) {
 // возвращает 304 без body, но с корректными headers.
 func TestHandlerHeadConditionalNoBody(t *testing.T) {
 	gen := newFakeGenerator()
-	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
+	gen.addResult("img-png/thumb.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
 	// Получаем ETag через GET.
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	etag := rec.Header().Get("ETag")
@@ -90,7 +90,7 @@ func TestHandlerHeadConditionalNoBody(t *testing.T) {
 	}
 
 	// HEAD с If-None-Match → 304, без body.
-	reqH := httptest.NewRequest(http.MethodHead, "/img-png/c-120x80@2.png", nil)
+	reqH := httptest.NewRequest(http.MethodHead, "/img-png/thumb.png", nil)
 	reqH.Header.Set("If-None-Match", etag)
 	recH := httptest.NewRecorder()
 	h.ServeHTTP(recH, reqH)
@@ -110,7 +110,7 @@ func TestHandlerNotFoundImageFallback(t *testing.T) {
 	cfg.NotFound = NotFoundConfig{Image: "testdata/not-found.html"}
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/missing-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing-png/thumb.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -129,10 +129,10 @@ func TestHandlerNotFoundImageFallback(t *testing.T) {
 // разрешённого origin (чтобы прокси не смешивали ответы).
 func TestHandlerVaryOriginOnAllowed(t *testing.T) {
 	gen := newFakeGenerator()
-	gen.addResult("img-png/c-120x80@2.png", []byte("PNGDATA"), 7)
+	gen.addResult("img-png/thumb.png", []byte("PNGDATA"), 7)
 	h := newTestHandler(t, gen, baseConfig())
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@2.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
 	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

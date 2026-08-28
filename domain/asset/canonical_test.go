@@ -6,7 +6,7 @@ import (
 
 func TestCanonicalIDStable(t *testing.T) {
 	// Один и тот же запрос всегда даёт один и тот же CanonicalID.
-	url := "/photos/photo-1-jpg/c-120x80@2.webp"
+	url := "/photos/photo-1-jpg/banner@2.webp"
 	req1, err := Parse(url)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
@@ -34,11 +34,11 @@ func TestCanonicalIDStable(t *testing.T) {
 func TestCanonicalIDDistinct(t *testing.T) {
 	// Разные запросы дают разные CanonicalID.
 	urls := []string{
-		"/photos/photo-1-jpg/c-120x80@2.webp",
-		"/photos/photo-1-jpg/c-120x80@3.webp",
-		"/photos/photo-1-jpg/c-121x80@2.webp",
-		"/photos/photo-1-jpg/t-120x80@2.webp",
-		"/photos/photo-2-jpg/c-120x80@2.webp",
+		"/photos/photo-1-jpg/banner@2.webp",
+		"/photos/photo-1-jpg/banner@3.webp",
+		"/photos/photo-1-jpg/banner.webp",
+		"/photos/photo-1-jpg/200x200.webp",
+		"/photos/photo-2-jpg/banner@2.webp",
 	}
 	ids := make(map[string]bool)
 	for _, u := range urls {
@@ -54,60 +54,6 @@ func TestCanonicalIDDistinct(t *testing.T) {
 			t.Errorf("duplicate canonical id for %q", u)
 		}
 		ids[id.Hash()] = true
-	}
-}
-
-// TestCanonicalIDTrimDetectionDistinct проверяет, что trim-варианты кодов
-// (sct/fct/oct) дают canonical-id, отличные от базовых (sc/fc/oc) — кеш
-// новых операций не коллизирует с существующими.
-func TestCanonicalIDTrimDetectionDistinct(t *testing.T) {
-	ids := make(map[string]bool)
-	urls := []string{
-		"/photos/photo-1-jpg/sc-120x80@2.webp",
-		"/photos/photo-1-jpg/sct-120x80@2.webp",
-		"/photos/photo-1-jpg/fc-120x80@2.webp",
-		"/photos/photo-1-jpg/fct-120x80@2.webp",
-		"/photos/photo-1-jpg/oc-120x80@2.webp",
-		"/photos/photo-1-jpg/oct-120x80@2.webp",
-	}
-	for _, u := range urls {
-		req, err := Parse(u)
-		if err != nil {
-			t.Fatalf("Parse(%q) error: %v", u, err)
-		}
-		id, err := req.CanonicalID()
-		if err != nil {
-			t.Fatalf("CanonicalID error: %v", err)
-		}
-		if ids[id.Hash()] {
-			t.Errorf("duplicate canonical id for %q (url %q)", id.URL(), u)
-		}
-		ids[id.Hash()] = true
-	}
-
-	// Idempotentность: Parse -> Build -> Parse -> Build сохраняет ключ.
-	req, err := Parse("/photos/photo-1-jpg/sct-120x80@2.webp")
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-	built, err := req.Build()
-	if err != nil {
-		t.Fatalf("Build error: %v", err)
-	}
-	req2, err := Parse("/" + built)
-	if err != nil {
-		t.Fatalf("Parse(rebuild) error: %v", err)
-	}
-	id1, err := req.CanonicalID()
-	if err != nil {
-		t.Fatalf("CanonicalID error: %v", err)
-	}
-	id2, err := req2.CanonicalID()
-	if err != nil {
-		t.Fatalf("CanonicalID error: %v", err)
-	}
-	if !id1.Equal(id2) {
-		t.Errorf("canonical id not idempotent: %q != %q", built, id2.URL())
 	}
 }
 
@@ -160,7 +106,7 @@ func TestCanonicalPathTooLong(t *testing.T) {
 
 func TestCanonicalizeURLIdempotent(t *testing.T) {
 	// Parse -> Build -> Parse -> Build должен быть идемпотентным.
-	url := "/photos/photo-1-jpg/c-120x80@2.webp"
+	url := "/photos/photo-1-jpg/banner@2.webp"
 	req, err := Parse(url)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)

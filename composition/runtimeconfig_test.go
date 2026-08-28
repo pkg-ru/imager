@@ -308,6 +308,70 @@ policy:
 	}
 }
 
+// TestParseRuntimeConfigServeOriginal проверяет декодирование отдельной
+// секции http.serve-original из YAML (enabled true/false, cache-control).
+func TestParseRuntimeConfigServeOriginal(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+http:
+  serve-original:
+    enabled: true
+    cache-control: "public, max-age=60"
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if !rc.HTTP.ServeOriginal.Enabled {
+		t.Errorf("ServeOriginal.Enabled = false, want true")
+	}
+	if got := rc.HTTP.ServeOriginal.CacheControl; got != "public, max-age=60" {
+		t.Errorf("ServeOriginal.CacheControl = %q, want %q", got, "public, max-age=60")
+	}
+
+	rc, err = ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+http:
+  serve-original:
+    enabled: false
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.HTTP.ServeOriginal.Enabled {
+		t.Errorf("ServeOriginal.Enabled = true, want false")
+	}
+}
+
+// TestParseRuntimeConfigServeOriginalDefault проверяет дефолты секции
+// http.serve-original при её отсутствии в YAML: enabled=false,
+// cache-control="no-store" (после Normalize).
+func TestParseRuntimeConfigServeOriginalDefault(t *testing.T) {
+	rc, err := ParseRuntimeConfig([]byte(`
+version: "1"
+policy:
+  global:
+    authorization: unsafe
+http:
+  source-fallback:
+    enabled: true
+`))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig: %v", err)
+	}
+	if rc.HTTP.ServeOriginal.Enabled {
+		t.Errorf("ServeOriginal.Enabled = true, want default false")
+	}
+	if got := rc.HTTP.ServeOriginal.CacheControl; got != "no-store" {
+		t.Errorf("ServeOriginal.CacheControl = %q, want default no-store", got)
+	}
+}
+
 // TestParseRuntimeConfigSourceFallbackInvalid проверяет fail-fast валидацию
 // некорректного статуса source-fallback.
 func TestParseRuntimeConfigSourceFallbackInvalid(t *testing.T) {

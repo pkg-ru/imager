@@ -6,76 +6,66 @@ import (
 	"testing"
 )
 
-func TestParseCanonical(t *testing.T) {
+func TestParseSegment(t *testing.T) {
 	tests := []struct {
 		name string
 		url  string
 		want string // ожидаемый канонический URL (без /)
 	}{
 		{
-			name: "crop",
-			url:  "/photos/photo-1-jpg/c-120x80@2.webp",
-			want: "photos/photo-1-jpg/c-120x80@2.webp",
+			name: "preset",
+			url:  "/photos/photo-1-jpg/banner.webp",
+			want: "photos/photo-1-jpg/banner.webp",
 		},
 		{
-			name: "trim",
-			url:  "/logo-png/t-x50@3.png",
-			want: "logo-png/t-x50@3.png",
+			name: "preset with dpr",
+			url:  "/photos/photo-1-jpg/banner@2.webp",
+			want: "photos/photo-1-jpg/banner@2.webp",
 		},
 		{
-			name: "crop trim",
-			url:  "/img-jpg/ct-180x@2.avif",
-			want: "img-jpg/ct-180x@2.avif",
+			name: "preset name with dpr suffix",
+			url:  "/photos/photo-1-jpg/banner@2.webp",
+			want: "photos/photo-1-jpg/banner@2.webp",
 		},
 		{
-			name: "smart crop",
-			url:  "/photos/photo-1-jpg/sc-120x80@2.webp",
-			want: "photos/photo-1-jpg/sc-120x80@2.webp",
+			name: "custom exact size",
+			url:  "/banners/photo-jpg/200x200.webp",
+			want: "banners/photo-jpg/200x200.webp",
 		},
 		{
-			name: "face crop",
-			url:  "/photos/photo-1-jpg/fc-120x80@2.webp",
-			want: "photos/photo-1-jpg/fc-120x80@2.webp",
+			name: "custom size with dpr",
+			url:  "/banners/photo-jpg/200x100@2.webp",
+			want: "banners/photo-jpg/200x100@2.webp",
 		},
 		{
-			name: "object crop",
-			url:  "/photos/photo-1-jpg/oc-120x80@2.webp",
-			want: "photos/photo-1-jpg/oc-120x80@2.webp",
+			name: "custom width only",
+			url:  "/banners/photo-jpg/200x.webp",
+			want: "banners/photo-jpg/200x.webp",
 		},
 		{
-			name: "smart crop trim",
-			url:  "/photos/photo-1-jpg/sct-120x80@2.webp",
-			want: "photos/photo-1-jpg/sct-120x80@2.webp",
+			name: "custom height only",
+			url:  "/banners/photo-jpg/x200.webp",
+			want: "banners/photo-jpg/x200.webp",
 		},
 		{
-			name: "face crop trim",
-			url:  "/photos/photo-1-jpg/fct-120x80@2.webp",
-			want: "photos/photo-1-jpg/fct-120x80@2.webp",
-		},
-		{
-			name: "object crop trim",
-			url:  "/photos/photo-1-jpg/oct-120x80@2.webp",
-			want: "photos/photo-1-jpg/oct-120x80@2.webp",
+			name: "custom original",
+			url:  "/banners/photo-jpg/x.webp",
+			want: "banners/photo-jpg/x.webp",
 		},
 		{
 			name: "nested path with dashes in source name",
-			url:  "/a/b/c/my-photo-2-png/c-10x10@3.gif",
-			want: "a/b/c/my-photo-2-png/c-10x10@3.gif",
+			url:  "/a/b/c/my-photo-2-png/200x200@3.gif",
+			want: "a/b/c/my-photo-2-png/200x200@3.gif",
 		},
 		{
 			name: "dpr 3",
-			url:  "/name-gif/t-220x30@3.jpg",
-			want: "name-gif/t-220x30@3.jpg",
+			url:  "/name-gif/banner@3.jpg",
+			want: "name-gif/banner@3.jpg",
 		},
 		{
-			name: "no transform",
-			url:  "/photos/photo-1-jpg/120x80.webp",
-			want: "photos/photo-1-jpg/120x80.webp",
-		},
-		{
-			name: "original size",
-			url:  "/photos/photo-1-jpg/x.webp",
-			want: "photos/photo-1-jpg/x.webp",
+			name: "deep path fallback",
+			url:  "/fig-ego-znaet/chto-za-papka/bugoga-gif/x.webp",
+			want: "fig-ego-znaet/chto-za-papka/bugoga-gif/x.webp",
 		},
 	}
 	for _, tt := range tests {
@@ -95,91 +85,66 @@ func TestParseCanonical(t *testing.T) {
 	}
 }
 
-func TestParsePreset(t *testing.T) {
-	req, err := Parse("/photos/photo-1-jpg/thumb.webp")
+func TestParseSegmentFields(t *testing.T) {
+	req, err := Parse("/photos/photo-1-jpg/banner.webp")
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
 	if !req.IsPreset() {
-		t.Fatal("expected preset request")
+		t.Fatal("expected segment request")
 	}
-	if req.PresetName().String() != "thumb" {
-		t.Errorf("PresetName = %q, want thumb", req.PresetName())
+	if req.SegmentName().String() != "banner" {
+		t.Errorf("SegmentName = %q, want banner", req.SegmentName())
 	}
 	if req.SourceFormat().String() != "jpg" {
 		t.Errorf("SourceFormat = %q, want jpg (from url)", req.SourceFormat())
 	}
-	if req.DPR().Int() != DefaultDPR {
-		t.Errorf("DPR = %d, want %d (default)", req.DPR().Int(), DefaultDPR)
+	if req.DPR().Int() != 0 {
+		t.Errorf("DPR = %d, want 0 (no @dpr in url)", req.DPR().Int())
 	}
 	got, err := req.Build()
 	if err != nil {
 		t.Fatalf("Build() error: %v", err)
 	}
-	if want := "photos/photo-1-jpg/thumb.webp"; got != want {
+	if want := "photos/photo-1-jpg/banner.webp"; got != want {
 		t.Errorf("Build() = %q, want %q", got, want)
 	}
 }
 
-// TestParsePresetNameWithDPRSuffix проверяет, что @dpr-суффикс имени пресета
-// распознаётся целиком как часть имени, а dpr URL = 1 (default).
-func TestParsePresetNameWithDPRSuffix(t *testing.T) {
-	req, err := Parse("/photos/photo-1-jpg/thumb@2.webp")
+// TestParseSegmentDPRURL проверяет, что @dpr-суффикс URL отделяется от имени
+// сегмента: последний "@" — dpr URL, имя — всё до него.
+func TestParseSegmentDPRURL(t *testing.T) {
+	req, err := Parse("/photos/photo-1-jpg/banner@2.webp")
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	if !req.IsPreset() {
-		t.Fatal("expected preset request")
+	if req.SegmentName().String() != "banner" {
+		t.Errorf("SegmentName = %q, want banner", req.SegmentName())
 	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Errorf("PresetName = %q, want thumb@2", req.PresetName())
-	}
-	if req.DPR().Int() != DefaultDPR {
-		t.Errorf("DPR = %d, want %d (default, dpr in preset name)", req.DPR().Int(), DefaultDPR)
+	if req.DPR().Int() != 2 {
+		t.Errorf("DPR = %d, want 2 (url dpr)", req.DPR().Int())
 	}
 	got, err := req.Build()
 	if err != nil {
 		t.Fatalf("Build() error: %v", err)
 	}
-	if want := "photos/photo-1-jpg/thumb@2.webp"; got != want {
+	if want := "photos/photo-1-jpg/banner@2.webp"; got != want {
 		t.Errorf("Build() = %q, want %q", got, want)
 	}
 }
 
-// TestParsePresetNameWithDPRSuffixAndURLDPR проверяет, что при двух "@"
-// последний — dpr URL, а имя пресета — всё до него.
-func TestParsePresetNameWithDPRSuffixAndURLDPR(t *testing.T) {
-	req, err := Parse("/photos/photo-1-jpg/thumb@2@3.webp")
+// TestParseSegmentNameWithDPRSuffix проверяет, что @dpr-суффикс в URL
+// отделяется от имени сегмента: последний "@" — всегда dpr URL, имя — всё
+// до него. Парсер не знает, пресет это или custom: имя "banner@2" в URL
+// разбирается как segment "banner" + dprURL 2; точное имя "banner@2"
+// ищется на этапе Resolve (policy).
+func TestParseSegmentNameWithDPRSuffix(t *testing.T) {
+	req, err := Parse("/photos/photo-1-jpg/banner@2.webp")
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
-	if !req.IsPreset() {
-		t.Fatal("expected preset request")
-	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Errorf("PresetName = %q, want thumb@2", req.PresetName())
-	}
-	if req.DPR().Int() != 3 {
-		t.Errorf("DPR = %d, want 3 (url dpr)", req.DPR().Int())
-	}
-	got, err := req.Build()
-	if err != nil {
-		t.Fatalf("Build() error: %v", err)
-	}
-	if want := "photos/photo-1-jpg/thumb@2@3.webp"; got != want {
-		t.Errorf("Build() = %q, want %q", got, want)
-	}
-}
-
-// TestParsePresetNameWithDPRSuffixSameAsURLDPR проверяет, что совпадающий
-// @dpr URL допустим: имя "thumb@2" + URL @2.
-func TestParsePresetNameWithDPRSuffixSameAsURLDPR(t *testing.T) {
-	req, err := Parse("/photos/photo-1-jpg/thumb@2@2.webp")
-	if err != nil {
-		t.Fatalf("Parse() error: %v", err)
-	}
-	if req.PresetName().String() != "thumb@2" {
-		t.Errorf("PresetName = %q, want thumb@2", req.PresetName())
+	if req.SegmentName().String() != "banner" {
+		t.Errorf("SegmentName = %q, want banner (dpr separated)", req.SegmentName())
 	}
 	if req.DPR().Int() != 2 {
 		t.Errorf("DPR = %d, want 2", req.DPR().Int())
@@ -189,32 +154,48 @@ func TestParsePresetNameWithDPRSuffixSameAsURLDPR(t *testing.T) {
 func TestParseInvalid(t *testing.T) {
 	invalid := []string{
 		"",
-		"/",                               // empty
-		"/photos/photo-1-jpg/c-120x80@2",  // missing output format
-		"/photos/photo-1-jpg/c-120x80@2.", // empty output format
-		// Дефисная грамматика канонического URL не поддерживается.
-		"/photos/photo-1-jpg-c-120x80@2.webp",
-		// Дефисный preset не поддерживается.
-		"/photos/photo-1-jpg-thumb.webp",
-		// invalid transform
-		"/photos/photo-1-jpg/tc-120x80@2.webp",                 // tc недопустим
-		"/photos/photo-1-jpg/crop-120x80@2.webp",               // слово "crop"
-		"/photos/photo-1-jpg/trim-120x80@2.webp",               // слово "trim"
-		"/photos/photo-1-jpg/foo-120x80@2.webp",                // неизвестный
+		"/",                                   // empty
+		"/photos/photo-1-jpg/banner",          // missing output format
+		"/photos/photo-1-jpg/banner.",         // empty output format
+		"/photos/photo-1-jpg/banner@2",        // missing output format
+		"/photos/photo-1-jpg/banner@2.",       // empty output format
+		"/photos/photo-1-jpg/banner@0.webp",   // explicit @0
+		"/photos/photo-1-jpg/banner@1.webp",   // explicit @1
+		"/photos/photo-1-jpg/banner@4.webp",   // dpr > MaxDPR
+		"/photos/photo-1-jpg/banner@-1.webp",  // negative dpr
+		"/photos/photo-1-jpg/banner@x.webp",   // non-numeric dpr
+		"/photos/photo-1-jpg/banner@.webp",    // empty dpr
+		"/photos/photo-1-jpg/banner@2@3.webp", // multiple '@' in segment
+		"/photos/photo-1-jpg/@2.webp",         // empty segment
+		"/photos/photo-1-jpg/.webp",           // empty segment
+		// Transform-коды больше не поддерживаются.
+		"/photos/photo-1-jpg/c-120x80@2.webp",                  // transform code
+		"/photos/photo-1-jpg/t-x50@3.png",                      // transform code
+		"/photos/photo-1-jpg/ct-180x@2.avif",                   // transform code
+		"/photos/photo-1-jpg/sc-120x80@2.webp",                 // transform code
+		"/photos/photo-1-jpg/fc-120x80@2.webp",                 // transform code
+		"/photos/photo-1-jpg/oc-120x80@2.webp",                 // transform code
+		"/photos/photo-1-jpg/sct-120x80@2.webp",                // transform code
+		"/photos/photo-1-jpg/fct-120x80@2.webp",                // transform code
+		"/photos/photo-1-jpg/oct-120x80@2.webp",                // transform code
+		"/photos/photo-1-jpg/tc-120x80@2.webp",                 // invalid transform
+		"/photos/photo-1-jpg/crop-120x80@2.webp",               // word "crop"
+		"/photos/photo-1-jpg/trim-120x80@2.webp",               // word "trim"
+		"/photos/photo-1-jpg/foo-120x80@2.webp",                // unknown
 		"/photos/photo-1-jpg/c-@2.webp",                        // empty size
 		"/photos/photo-1-jpg/c-120x80@1.webp",                  // explicit @1
 		"/photos/photo-1-jpg/c-120x80@0.webp",                  // explicit @0
 		"/photos/photo-1-jpg/c-120x80@-1.webp",                 // negative dpr
 		"/photos/photo-1-jpg/c-120x80@4.webp",                  // dpr > MaxDPR
 		"/photos/photo-1-jpg/c-99999999999999999999x80@2.webp", // dimension overflow
-		"/photos/photo-1-jpg/thumb@0.webp",                     // preset name dpr @0 недопустим
-		"/photos/photo-1-jpg/thumb@4.webp",                     // preset name dpr @4 недопустим
-		"/photos/photo-1-jpg/thumb@x.webp",                     // preset name dpr нечисловой
-		"/photos/photo-1-jpg/thumb@.webp",                      // preset name dpr пустой
-		"/photos/photo-1-jpg/c-120x80@2.webp/..",               // traversal
-		"/photos/../photo-1-jpg/c-120x80@2.webp",               // traversal
-		"/photos/photo-1-jpg/c-120x80@2%2fwebp",                // encoded separator
-		"/photos/photo-1-jpg/c-120x80@2.webp\x00",              // control char
+		"/photos/photo-1-jpg/thumb@0.webp",                     // segment name dpr @0 недопустим
+		"/photos/photo-1-jpg/thumb@4.webp",                     // segment name dpr @4 недопустим
+		"/photos/photo-1-jpg/thumb@x.webp",                     // segment name dpr нечисловой
+		"/photos/photo-1-jpg/thumb@.webp",                      // segment name dpr пустой
+		"/photos/photo-1-jpg/banner@2.webp/..",                 // traversal
+		"/photos/../photo-1-jpg/banner@2.webp",                 // traversal
+		"/photos/photo-1-jpg/banner@2%2fwebp",                  // encoded separator
+		"/photos/photo-1-jpg/banner@2.webp\x00",                // control char
 	}
 	for _, u := range invalid {
 		t.Run(u, func(t *testing.T) {
@@ -227,8 +208,8 @@ func TestParseInvalid(t *testing.T) {
 
 func TestParseRejectsTraversal(t *testing.T) {
 	urls := []string{
-		"/../../etc/passwd-jpg/c-120x80@2.webp",
-		"/a/../b/photo-jpg/c-120x80@2.webp",
+		"/../../etc/passwd-jpg/banner@2.webp",
+		"/a/../b/photo-jpg/banner@2.webp",
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
@@ -239,8 +220,8 @@ func TestParseRejectsTraversal(t *testing.T) {
 
 func TestParseRejectsEncodedSeparator(t *testing.T) {
 	urls := []string{
-		"/a%2fb/photo-jpg/c-120x80@2.webp",
-		"/a%2Fb/photo-jpg/c-120x80@2.webp",
+		"/a%2fb/photo-jpg/banner@2.webp",
+		"/a%2Fb/photo-jpg/banner@2.webp",
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
@@ -251,8 +232,8 @@ func TestParseRejectsEncodedSeparator(t *testing.T) {
 
 func TestParseRejectsControlChars(t *testing.T) {
 	urls := []string{
-		"/a\x01b/photo-jpg/c-120x80@2.webp",
-		"/photo-jpg/c-120x80@2.webp\x7f",
+		"/a\x01b/photo-jpg/banner@2.webp",
+		"/photo-jpg/banner@2.webp\x7f",
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
@@ -265,7 +246,7 @@ func TestParseRejectsInvalidChars(t *testing.T) {
 	// Пробел разрешён в имени исходника (см. NewSourceName); проверяется
 	// реально недопустимый control-символ.
 	urls := []string{
-		"/photos/photo\x01-jpg/c-120x80@2.webp", // control char in source name
+		"/photos/photo\x01-jpg/banner@2.webp", // control char in source name
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
@@ -284,18 +265,18 @@ func TestParseAcceptsUnicodeSourceNames(t *testing.T) {
 	}{
 		{
 			name: "cyrillic source name",
-			url:  "/photos/изображение-png/c-120x80@2.webp",
-			want: "photos/изображение-png/c-120x80@2.webp",
+			url:  "/photos/изображение-png/banner@2.webp",
+			want: "photos/изображение-png/banner@2.webp",
 		},
 		{
 			name: "chinese source name",
-			url:  "/photos/图片-jpg/c-120x80@2.webp",
-			want: "photos/图片-jpg/c-120x80@2.webp",
+			url:  "/photos/图片-jpg/banner@2.webp",
+			want: "photos/图片-jpg/banner@2.webp",
 		},
 		{
 			name: "source name with space",
-			url:  "/photos/my photo-png/c-120x80@2.webp",
-			want: "photos/my photo-png/c-120x80@2.webp",
+			url:  "/photos/my photo-png/banner@2.webp",
+			want: "photos/my photo-png/banner@2.webp",
 		},
 	}
 	for _, tt := range cases {
@@ -319,11 +300,11 @@ func TestParseAcceptsUnicodeSourceNames(t *testing.T) {
 // отклоняются: traversal, разделители пути, control-символы.
 func TestParseRejectsUnsafeSourceNames(t *testing.T) {
 	urls := []string{
-		"/../etc/passwd-jpg/c-120x80@2.webp",     // path traversal
-		"/photos/a\\b.png-jpg/c-120x80@2.webp",   // '\' в имени исходника
-		"/photos/a\x00b-jpg/c-120x80@2.webp",     // нулевой байт
-		"/photos/a\x1f-jpg/c-120x80@2.webp",      // управляющий символ
-		"/photos/photo..old-jpg/c-120x80@2.webp", // ".." внутри имени
+		"/../etc/passwd-jpg/banner@2.webp",     // path traversal
+		"/photos/a\\b.png-jpg/banner@2.webp",   // '\' в имени исходника
+		"/photos/a\x00b-jpg/banner@2.webp",     // нулевой байт
+		"/photos/a\x1f-jpg/banner@2.webp",      // управляющий символ
+		"/photos/photo..old-jpg/banner@2.webp", // ".." внутри имени
 	}
 	for _, u := range urls {
 		if _, err := Parse(u); err == nil {
@@ -368,43 +349,24 @@ func TestNewSourceNameValidation(t *testing.T) {
 }
 
 func TestParseRejectsTooLong(t *testing.T) {
-	long := "/" + strings.Repeat("a", MaxURLLen) + "-jpg/c-120x80@2.webp"
+	long := "/" + strings.Repeat("a", MaxURLLen) + "-jpg/banner@2.webp"
 	if _, err := Parse(long); err == nil {
 		t.Error("expected length error")
 	}
 }
 
-func TestParsePresetWithNameContainingX(t *testing.T) {
-	// Имя пресета со строчной "x" (например "max") не должно разбираться
-	// как размер.
+func TestParseSegmentWithNameContainingX(t *testing.T) {
+	// Имя сегмента со строчной "x" (например "max") не должно разбираться
+	// как размер — это просто имя.
 	req, err := Parse("/photos/photo-1-jpg/max.webp")
 	if err != nil {
 		t.Fatalf("Parse() error: %v", err)
 	}
 	if !req.IsPreset() {
-		t.Fatal("expected preset request for preset name containing 'x'")
+		t.Fatal("expected segment request for name containing 'x'")
 	}
-	if req.PresetName().String() != "max" {
-		t.Errorf("PresetName = %q, want max", req.PresetName().String())
-	}
-}
-
-func TestParseCanonicalSizeStillWorks(t *testing.T) {
-	// Смоук: канонические размеры не сломаны после введения looksLikeSize.
-	cases := []string{
-		"/photos/photo-1-jpg/120x80.webp",
-		"/photos/photo-1-jpg/x50.webp",
-		"/photos/photo-1-jpg/180x.webp",
-		"/photos/photo-1-jpg/x.webp",
-	}
-	for _, url := range cases {
-		req, err := Parse(url)
-		if err != nil {
-			t.Fatalf("Parse(%q) error: %v", url, err)
-		}
-		if req.IsPreset() {
-			t.Errorf("Parse(%q): expected size request, got preset", url)
-		}
+	if req.SegmentName().String() != "max" {
+		t.Errorf("SegmentName = %q, want max", req.SegmentName().String())
 	}
 }
 
@@ -459,18 +421,18 @@ func TestParseDimensionOverflow(t *testing.T) {
 }
 
 func TestParseDPRSuffix(t *testing.T) {
-	// Отсутствие суффикса означает DPR=1.
-	req, err := Parse("/photos/photo-1-jpg/c-120x80.webp")
+	// Отсутствие суффикса означает DPR=0 (не задан).
+	req, err := Parse("/photos/photo-1-jpg/banner.webp")
 	if err != nil {
 		t.Fatalf("Parse without dpr: %v", err)
 	}
-	if req.DPR().Int() != DefaultDPR {
-		t.Errorf("DPR = %d, want %d (default)", req.DPR().Int(), DefaultDPR)
+	if req.DPR().Int() != 0 {
+		t.Errorf("DPR = %d, want 0 (not set)", req.DPR().Int())
 	}
 
 	// Явные @2 и @3 допустимы.
 	for _, ok := range []int{2, 3} {
-		url := "/photos/photo-1-jpg/c-120x80@" + strconv.Itoa(ok) + ".webp"
+		url := "/photos/photo-1-jpg/banner@" + strconv.Itoa(ok) + ".webp"
 		req, err := Parse(url)
 		if err != nil {
 			t.Errorf("Parse(%q) unexpected error: %v", url, err)
@@ -483,7 +445,7 @@ func TestParseDPRSuffix(t *testing.T) {
 
 	// Явные @0, @1, @4, @5, @-1 отклоняются парсером.
 	for _, bad := range []string{"0", "1", "4", "5", "-1"} {
-		url := "/photos/photo-1-jpg/c-120x80@" + bad + ".webp"
+		url := "/photos/photo-1-jpg/banner@" + bad + ".webp"
 		if _, err := Parse(url); err == nil {
 			t.Errorf("Parse(%q) expected error", url)
 		}

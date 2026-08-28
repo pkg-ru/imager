@@ -8,7 +8,6 @@
 | libvips ≥ 8.13 + заголовки (`vips-dev`) | Основной движок обработки, все форматы включая APNG | Рекомендуется |
 | C-компилятор (`gcc`/`build-base`), `pkgconf`, `musl-dev` | cgo-сборка govips | Нужны при сборке с `-tags libvips` |
 | Кодеки: `libheif`, `libde265`, `libjxl`, `librsvg`, `poppler`, `libraw` | HEIF/AVIF, JPEG XL, SVG, PDF, RAW в libvips | Для соответствующих форматов |
-| ImageMagick 7 (`magick`) или 6 (`convert`) | Fallback-движок для сборок без `-tags libvips` | Опционален |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов для `fc`/`oc` | Опциональна; сборка с `-tags onnx` |
 
 ## Сборка
@@ -27,12 +26,9 @@ libvips работает in-process (govips, cgo) и покрывает все �
 go build -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 ```
 
-В такой сборке основным движком становится ImageMagick. Исполняемый файл `magick` должен быть доступен в PATH либо задан явно:
-
-```yaml
-imagemagick:
-  binary: "magick"          # или абсолютный путь, например "D:/tools/ImageMagick/magick.exe"
-```
+Такая сборка не содержит движка обработки изображений (libvips не скомпилирован)
+и подходит только для разработки/CI. Для обработки изображений соберите с
+`-tags libvips`.
 
 ### С детекцией лиц/объектов
 
@@ -60,8 +56,8 @@ docker build -t imager:production .
 
 Образ двухэтапный:
 
-- **builder**: `golang:1.25.0-alpine3.21` + `build-base`, `vips-dev ~=8.15`, `libheif-dev`, `libjxl-dev`, `librsvg-dev`, `poppler-dev`, `libraw-dev`; бинарный файл собирается с `-tags libvips`;
-- **runtime**: `alpine:3.21` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`; non-root пользователь `imager` (uid 10001); бинарный файл `/usr/local/bin/imager`, каталог конфигурации `/etc/imager` (монтируется из `./config`, см. [CONFIGURATION.md](CONFIGURATION.md)).
+- **builder**: `golang:1.27.0-alpine3.23` + `build-base`, `vips-dev ~=8.17`, `libheif-dev`, `libjxl-dev`, `librsvg-dev`, `poppler-dev`, `libraw-dev`; бинарный файл собирается с `-tags libvips`;
+- **runtime**: `alpine:3.23` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`; non-root пользователь `imager` (uid 10001); бинарный файл `/usr/local/bin/imager`, каталог конфигурации `/etc/imager` (монтируется из `./config`, см. [CONFIGURATION.md](CONFIGURATION.md)).
 
 HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 

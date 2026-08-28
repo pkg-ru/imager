@@ -15,7 +15,7 @@
 # 1.29.0 доступен только в edge-репозитории Alpine (musl); libstdc++/libgcc
 # 15.2 из edge требуются из-за C++23-символа в onnxruntime.
 ###############################################################################
-FROM golang:1.25.0-alpine3.21 AS builder
+FROM golang:1.27.0-alpine3.23 AS builder
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 ARG GOFLAGS="-buildvcs=false"
@@ -29,14 +29,14 @@ ENV CGO_ENABLED=1 \
 ARG BUILD_TAGS=libvips,onnx
 
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.21 для golang:1.25.0-alpine3.21).
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/community" >> /etc/apk/repositories \
+# на mirror.yandex.ru (v3.23 для golang:1.27.0-alpine3.23).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
         build-base \
         pkgconf \
         musl-dev \
-        vips-dev~=8.15 \
+        vips-dev~=8.17 \
         glib-dev \
         libheif-dev \
         libde265-dev \
@@ -65,11 +65,11 @@ COPY . .
 RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
-# Runtime: минимальный образ с libvips (основной движок) и FFmpeg.
-# libvips покрывает все форматы, включая APNG (≥ 8.13); ImageMagick не
-# требуется. Pinned base image. Non-root пользователь, read-only root layout.
+# Runtime: минимальный образ с libvips (единственный движок) и FFmpeg.
+# libvips покрывает все форматы, включая APNG (≥ 8.13). Pinned base image.
+# Non-root пользователь, read-only root layout.
 ###############################################################################
-FROM alpine:3.21
+FROM alpine:3.23
 
 # Pinned версии пакетов для воспроизводимости (apk --no-cache).
 # libvips — основной процессор; сопутствующие библиотеки кодеков:
@@ -79,19 +79,19 @@ FROM alpine:3.21
 # onnxruntime — runtime для бинаря, собранного с тэком "onnx" (детекция
 # лиц/объектов). Обновление libstdc++/libgcc обязательно: edge-пакет
 # собран с C++23 (символ std::__format::__locale_encoding_to_utf8).
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
-        vips-tools~=8.15 \
-        vips~=8.15 \
-        libheif~=1.19 \
+        vips-tools~=8.17 \
+        vips~=8.17 \
+        libheif~=1.23 \
         libde265~=1.0 \
-        libjxl~=0.10 \
+        libjxl~=0.11 \
         poppler-utils \
         libraw~=0.21 \
-        librsvg~=2.59 \
-        ghostscript~=10.05 \
-        ffmpeg~=6.1 \
+        librsvg~=2.61 \
+        ghostscript~=10.06 \
+        ffmpeg~=8.0 \
         tzdata~=2026 \
         ca-certificates \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
