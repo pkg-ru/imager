@@ -168,14 +168,13 @@ policy:
   #   deny-by-default: сегмент, не найденный ни в customs, ни в presets
   #   пути (и не покрытый "/"), отклоняется.
   path-policies:
-    # "/" — fallback для всех путей. Разрешены пресеты thumb/thumb@2 и
+    # / — fallback для всех путей. Разрешены пресеты thumb/thumb@2 и
     # custom-размеры из секции customs ниже.
-    "/":
+    /:
       presets: ["thumb", "thumb@2"]
       customs:
         # custom-имя = размер: "x" = оригинальный размер.
         x:
-          crop: center              # настроек как у пресетов
           output-formats: [webp]
         # "x200" = только высота 200 (ширина пропорционально).
         x200:
@@ -188,39 +187,39 @@ policy:
         200x200:
           output-formats: [webp]
 
-    # "/thumbs" — специфичный префикс: только пресет thumb и один custom.
-    "/thumbs":
+    # /thumbs — специфичный префикс: только пресет thumb и один custom.
+    /thumbs:
       presets: ["thumb"]
       customs:
         100x100:
           output-formats: [webp, avif]
 
-    # "/banners" — баннеры: пресеты banner/banner@2 + кастомный вариант
+    # /banners — баннеры: пресеты banner/banner@2 + кастомный вариант
     # 200x100 с явным @2 в имени (фиксирует dpr=2; в URL допустим только
     # 200x100@2.{webp|avif}).
-    "/banners":
+    /banners:
       presets: ["banner", "banner@2"]
       customs:
         200x100@2:
           output-formats: [webp, avif]
 
-    # "/originals" — только custom "x" (оригинальный размер), все форматы.
-    "/originals":
+    # /originals — только custom "x" (оригинальный размер), все форматы.
+    /originals:
       customs:
         x:
           output-formats: [jpeg, png, webp, gif, avif, heif, apng, jxl]
 
-    # "/admin" — отдельный путь с пресетом thumb.
-    "/admin":
+    # /admin — отдельный путь с пресетом thumb.
+    /admin:
       presets: ["thumb"]
 
     # Примеры других path-policies (раскомментируйте при необходимости):
-    # "/avatars":
+    # /avatars:
     #   presets: ["avatar"]
     #   customs:
     #     100x100:
     #       output-formats: [webp, jpeg]
-    # "/news":
+    # /news:
     #   presets: ["hero"]
     #   customs:
     #     800x600:
