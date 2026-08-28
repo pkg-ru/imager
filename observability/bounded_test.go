@@ -20,9 +20,9 @@ func TestMetricsBoundedCardinality(t *testing.T) {
 	m := NewMiddleware(sm, next)
 
 	for _, path := range []string{
-		"/img.png.crop.120x80@1.png",
-		"/secret-token.png.crop.120x80@1.png",
-		"/a.png.crop.120x80@1.png?token=abc123",
+		"/img-png/thumb.png",
+		"/secret-token-png/thumb.png",
+		"/a-png/200x200.png?token=abc123",
 	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		m.ServeHTTP(httptest.NewRecorder(), req)

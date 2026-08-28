@@ -279,7 +279,7 @@ func TestResultStoreList(t *testing.T) {
 	// Публикуем ассеты исходника "thumbs/photo.jpg".
 	keys := []object.ObjectKey{
 		"thumbs/photo-jpg/thumb.webp",
-		"thumbs/photo-jpg/c-120x80@2.webp",
+		"thumbs/photo-jpg/200x200@2.webp",
 		"thumbs/other-jpg/thumb.webp",
 	}
 	for _, k := range keys {

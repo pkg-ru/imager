@@ -19,9 +19,7 @@ server:
   addr: ":9090"
 http:
   cache-control: "public, max-age=2592000"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 processing:
   default-quality: 80
 source:

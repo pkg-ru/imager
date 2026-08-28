@@ -84,7 +84,7 @@ func TestSourceFallbackParseError(t *testing.T) {
 
 	// Неканонический URL (недопустимый dpr): Parse вернёт ошибку, но
 	// исходник существует.
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -113,7 +113,7 @@ func TestHandlerSourceFallbackDisabled(t *testing.T) {
 	cfg.Sources = src
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -131,7 +131,7 @@ func TestHandlerSourceFallbackStatus200(t *testing.T) {
 
 	h := newTestHandler(t, gen, fallbackConfig(src, http.StatusOK))
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -148,7 +148,7 @@ func TestHandlerSourceFallbackHead(t *testing.T) {
 
 	h := newTestHandler(t, gen, fallbackConfig(src, http.StatusNotFound))
 
-	req := httptest.NewRequest(http.MethodHead, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodHead, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -167,7 +167,7 @@ func TestHandlerSourceFallbackSourceNotFound(t *testing.T) {
 
 	h := newTestHandler(t, gen, fallbackConfig(src, http.StatusNotFound))
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -213,7 +213,7 @@ func TestHandlerAssetErrorMetrics(t *testing.T) {
 	h := newTestHandler(t, gen, cfg)
 
 	// Parse error.
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if got := metrics.count(observability.AssetErrParse); got != 1 {
 		t.Errorf("parse errors = %d, want 1", got)
@@ -238,7 +238,7 @@ func TestHandlerAssetErrorMetricsDisabled(t *testing.T) {
 	cfg.AssetErrors = AssetErrorConfig{Enabled: false}
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if got := metrics.count(observability.AssetErrParse); got != 0 {
 		t.Errorf("parse errors = %d, want 0 (disabled)", got)
@@ -346,7 +346,7 @@ func TestHandlerServeOriginalCanonicalURLStillFallback(t *testing.T) {
 
 	h := newTestHandler(t, gen, serveOriginalConfig(src, true, http.StatusNotFound))
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -382,7 +382,7 @@ func TestHandlerServeOriginalWithoutSourceFallback(t *testing.T) {
 	}
 
 	// Канонический URL — 400 (source-fallback выключен).
-	req = httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req = httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -408,7 +408,7 @@ func TestHandlerSourceFallbackCanonicalDisabled(t *testing.T) {
 	cfg.Sources = src
 	h := newTestHandler(t, gen, cfg)
 
-	req := httptest.NewRequest(http.MethodGet, "/img-png/c-120x80@5.png", nil)
+	req := httptest.NewRequest(http.MethodGet, "/img-png/200x200@5.png", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 

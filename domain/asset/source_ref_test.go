@@ -13,7 +13,7 @@ func TestExtractSourceBestEffort(t *testing.T) {
 	}{
 		{
 			name:       "canonical with path",
-			raw:        "/photos/photo-1-jpg/c-120x80@2.webp",
+			raw:        "/photos/photo-1-jpg/200x200@2.webp",
 			wantPath:   "photos",
 			wantName:   "photo-1",
 			wantFormat: "jpg",
@@ -21,7 +21,7 @@ func TestExtractSourceBestEffort(t *testing.T) {
 		},
 		{
 			name:       "canonical no path",
-			raw:        "/img-png/c-120x80@2.png",
+			raw:        "/img-png/200x200@2.png",
 			wantPath:   "",
 			wantName:   "img",
 			wantFormat: "png",
@@ -45,7 +45,7 @@ func TestExtractSourceBestEffort(t *testing.T) {
 		},
 		{
 			name:       "uppercase format normalized",
-			raw:        "/img-JPG/c-120x80.webp",
+			raw:        "/img-JPG/200x200.webp",
 			wantPath:   "",
 			wantName:   "img",
 			wantFormat: "jpg",
@@ -53,7 +53,7 @@ func TestExtractSourceBestEffort(t *testing.T) {
 		},
 		{
 			name:       "nested path",
-			raw:        "/a/b/c/photo-1-jpg/c-120x80.webp",
+			raw:        "/a/b/c/photo-1-jpg/200x200.webp",
 			wantPath:   "a/b/c",
 			wantName:   "photo-1",
 			wantFormat: "jpg",
@@ -93,9 +93,9 @@ func TestExtractSourceBestEffortInvalid(t *testing.T) {
 		"/../etc/passwd",        // traversal
 		"/a/../b/img-png/x.png", // traversal в пути
 		"/img-png/%2f/x.png",    // encoded separator
-		"/img-png/c-120x80@2",   // нет output format
-		"/-png/c-120x80.png",    // пустое имя
-		"/img-/c-120x80.png",    // пустой формат
+		"/img-png/200x200@2",   // нет output format
+		"/-png/200x200.png",    // пустое имя
+		"/img-/200x200.png",    // пустой формат
 		"/img-png/",             // пустой rest после slash
 	}
 

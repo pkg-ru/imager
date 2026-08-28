@@ -169,7 +169,6 @@ func TestParseInvalid(t *testing.T) {
 		"/photos/photo-1-jpg/@2.webp",         // empty segment
 		"/photos/photo-1-jpg/.webp",           // empty segment
 		// Transform-коды больше не поддерживаются.
-		"/photos/photo-1-jpg/c-120x80@2.webp",                  // transform code
 		"/photos/photo-1-jpg/t-x50@3.png",                      // transform code
 		"/photos/photo-1-jpg/ct-180x@2.avif",                   // transform code
 		"/photos/photo-1-jpg/sc-120x80@2.webp",                 // transform code
@@ -183,10 +182,10 @@ func TestParseInvalid(t *testing.T) {
 		"/photos/photo-1-jpg/trim-120x80@2.webp",               // word "trim"
 		"/photos/photo-1-jpg/foo-120x80@2.webp",                // unknown
 		"/photos/photo-1-jpg/c-@2.webp",                        // empty size
-		"/photos/photo-1-jpg/c-120x80@1.webp",                  // explicit @1
-		"/photos/photo-1-jpg/c-120x80@0.webp",                  // explicit @0
-		"/photos/photo-1-jpg/c-120x80@-1.webp",                 // negative dpr
-		"/photos/photo-1-jpg/c-120x80@4.webp",                  // dpr > MaxDPR
+		"/photos/photo-1-jpg/120x80@1.webp",                    // explicit @1
+		"/photos/photo-1-jpg/120x80@0.webp",                    // explicit @0
+		"/photos/photo-1-jpg/120x80@-1.webp",                   // negative dpr
+		"/photos/photo-1-jpg/120x80@4.webp",                    // dpr > MaxDPR
 		"/photos/photo-1-jpg/c-99999999999999999999x80@2.webp", // dimension overflow
 		"/photos/photo-1-jpg/thumb@0.webp",                     // segment name dpr @0 недопустим
 		"/photos/photo-1-jpg/thumb@4.webp",                     // segment name dpr @4 недопустим

@@ -84,7 +84,7 @@ curl -o out.png http://localhost:8080/test-jpg/x400.png
 curl -o out.avif http://localhost:8080/test-jpg/x.avif
 
 # Центрированный crop 120x80, DPR 2 (реально 240x160)
-curl -o out.webp http://localhost:8080/test-jpg/c-120x80@2.webp
+curl -o out.webp http://localhost:8080/test-jpg/120x80@2.webp
 
 # Trim + центрированный crop 300x300
 curl -o out.avif http://localhost:8080/test-jpg/ct-300x300.avif

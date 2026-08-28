@@ -269,7 +269,7 @@ func TestEnqueueGenerateInvalidRequest(t *testing.T) {
 	wantErr(t, err, ErrInvalidRequest)
 
 	// Оба.
-	_, err = svc.EnqueueGenerate("thumbs/photo.jpg", []string{"/thumbs/photo-jpg/c-120x80@2.webp"}, false)
+	_, err = svc.EnqueueGenerate("thumbs/photo.jpg", []string{"/thumbs/photo-jpg/200x200@2.webp"}, false)
 	wantErr(t, err, ErrInvalidRequest)
 }
 
@@ -284,7 +284,8 @@ func TestEnqueueGenerateSourceNotFound(t *testing.T) {
 	wantErr(t, err, ErrSourceNotFound)
 }
 
-// TestEnqueueGenerateUnsafeCannotEnumerate — unsafe без size-rules → 400.
+// TestEnqueueGenerateUnsafeCannotEnumerate — deny-by-default политика без
+// path-policies → перечисление пусто → 400.
 func TestEnqueueGenerateUnsafeCannotEnumerate(t *testing.T) {
 	gen := newFakeGenerator()
 	src := testutil.NewMemSourceStore()
@@ -556,7 +557,7 @@ func TestDeleteBySourcePrefixDeleter(t *testing.T) {
 	src := testutil.NewMemSourceStore()
 	res := newPrefixDeleterResultStore()
 	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
-	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/c-120x80@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
+	res.Publish(context.Background(), object.ObjectKey("thumbs/photo-jpg/200x200@2.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	// Посторонний ассет — не должен удаляться.
 	res.Publish(context.Background(), object.ObjectKey("thumbs/other-jpg/thumb.webp"), testutil.EmptyReader(), object.PublishOptions{})
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})

@@ -123,7 +123,7 @@ func TestIntegrationCacheHitNoRegeneration(t *testing.T) {
 
 // TestIntegrationPresetResultStoredByCanonicalURL проверяет, что preset-запрос
 // /test-jpg/thumb@2.webp после раскрытия пресета сохраняет результат в
-// ResultStore под каноническим URL (test-jpg/c-120x80@2.webp), а не под
+// ResultStore под каноническим URL (test-jpg/thumb@2.webp), а не под
 // SHA-256 хешем. Это regression-тест для перехода с hash-based на
 // canonical-URL-based ключа хранения.
 func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {

@@ -13,9 +13,7 @@ import (
 func TestParseRuntimeConfigDetection(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   face-model: /models/face.onnx
   object-model: /models/obj.onnx
@@ -52,9 +50,7 @@ detection:
 func TestParseRuntimeConfigDetectionDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -87,9 +83,7 @@ func TestParseRuntimeConfigDetectionInvalid(t *testing.T) {
 			name: "threshold>1",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   confidence-threshold: 1.5
 `,
@@ -98,9 +92,7 @@ detection:
 			name: "threshold<0",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   confidence-threshold: -0.1
 `,
@@ -109,9 +101,7 @@ detection:
 			name: "max-objects=0",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   max-objects: 0
 `,
@@ -120,9 +110,7 @@ detection:
 			name: "max-objects negative",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   max-objects: -2
 `,
@@ -131,9 +119,7 @@ detection:
 			name: "margin negative",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   margin: -0.1
 `,
@@ -153,9 +139,7 @@ detection:
 func TestParseRuntimeConfigDetectionUnknownField(t *testing.T) {
 	yaml := `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 detection:
   enabled: true
 `
@@ -169,9 +153,7 @@ detection:
 func TestParseRuntimeConfigMetadataDefault(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -186,9 +168,7 @@ policy:
 func TestParseRuntimeConfigMetadataEnabledFalse(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 metadata:
   enabled: false
 `))
@@ -206,9 +186,7 @@ metadata:
 func TestParseRuntimeConfigMetadataDir(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 metadata:
   dir: /custom/meta
 `))
@@ -228,9 +206,7 @@ metadata:
 // на уровне DI — app.go).
 func TestParseRuntimeConfigMetadataDirDefault(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte("version: \"1\"\n" +
-		"policy:\n" +
-		"  global:\n" +
-		"    authorization: unsafe\n" +
+		"policy: {}\n" +
 		"metadata:\n" +
 		"  enabled: true\n"))
 	if err != nil {
@@ -246,9 +222,7 @@ func TestParseRuntimeConfigMetadataDirDefault(t *testing.T) {
 func TestParseRuntimeConfigMetadataUnknownField(t *testing.T) {
 	yaml := `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 metadata:
   ttl: 60
 `
@@ -262,9 +236,7 @@ metadata:
 func TestParseRuntimeConfigSourceFallback(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   source-fallback:
     enabled: true
@@ -290,9 +262,7 @@ http:
 func TestParseRuntimeConfigSourceFallbackDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -313,9 +283,7 @@ policy:
 func TestParseRuntimeConfigServeOriginal(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   serve-original:
     enabled: true
@@ -333,9 +301,7 @@ http:
 
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   serve-original:
     enabled: false
@@ -354,9 +320,7 @@ http:
 func TestParseRuntimeConfigServeOriginalDefault(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   source-fallback:
     enabled: true
@@ -383,9 +347,7 @@ func TestParseRuntimeConfigSourceFallbackInvalid(t *testing.T) {
 			name: "status=500",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   source-fallback:
     status: 500
@@ -395,9 +357,7 @@ http:
 			name: "status=201",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 http:
   source-fallback:
     status: 201
@@ -418,9 +378,7 @@ http:
 func TestParseRuntimeConfigAssetErrors(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 observability:
   asset-errors:
     enabled: true
@@ -460,9 +418,7 @@ observability:
 func TestParseRuntimeConfigAssetErrorsDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -489,9 +445,7 @@ func TestParseRuntimeConfigAssetErrorsInvalid(t *testing.T) {
 			name: "bad log-level",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 observability:
   asset-errors:
     log-level: verbose
@@ -501,9 +455,7 @@ observability:
 			name: "bad key-mode",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 observability:
   asset-errors:
     top-paths:
@@ -515,9 +467,7 @@ observability:
 			name: "negative max-entries",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 observability:
   asset-errors:
     top-paths:
@@ -529,9 +479,7 @@ observability:
 			name: "negative report-top",
 			yaml: `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 observability:
   asset-errors:
     top-paths:
@@ -554,9 +502,7 @@ observability:
 func TestParseRuntimeConfigAdmin(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
   token: "secret"
@@ -589,9 +535,7 @@ admin:
 func TestParseRuntimeConfigAdminDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -615,9 +559,7 @@ policy:
 func TestParseRuntimeConfigAdminFailFastEmptyToken(t *testing.T) {
 	_, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
 `))
@@ -637,9 +579,7 @@ func TestParseRuntimeConfigAdminInvalid(t *testing.T) {
 			name: "negative workers",
 			yaml: strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
   token: "x"
@@ -650,9 +590,7 @@ admin:
 			name: "negative queue-size",
 			yaml: strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
   token: "x"
@@ -663,9 +601,7 @@ admin:
 			name: "negative wait-timeout",
 			yaml: strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
   token: "x"
@@ -676,9 +612,7 @@ admin:
 			name: "invalid wait-timeout",
 			yaml: strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 admin:
   enabled: true
   token: "x"
@@ -700,9 +634,7 @@ admin:
 func TestParseRuntimeConfigLibvipsEncoders(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-	global:
-		authorization: unsafe
+policy: {}
 libvips:
 	encoders:
 		webp-reduction-effort: 2
@@ -757,9 +689,7 @@ libvips:
 func TestParseRuntimeConfigLibvipsEncodersDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-	global:
-		authorization: unsafe
+policy: {}
 `, "\t", "  ")))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -779,9 +709,7 @@ func TestParseRuntimeConfigLibvipsShrinkOnLoad(t *testing.T) {
 	t.Run("explicit false", func(t *testing.T) {
 		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-	global:
-		authorization: unsafe
+policy: {}
 libvips:
 	shrink-on-load:
 		enabled: false
@@ -796,9 +724,7 @@ libvips:
 	t.Run("explicit true", func(t *testing.T) {
 		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-	global:
-		authorization: unsafe
+policy: {}
 libvips:
 	shrink-on-load:
 		enabled: true
@@ -813,9 +739,7 @@ libvips:
 	t.Run("absent defaults to enabled", func(t *testing.T) {
 		rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
-policy:
-	global:
-		authorization: unsafe
+policy: {}
 `, "\t", "  ")))
 		if err != nil {
 			t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -827,9 +751,7 @@ policy:
 	t.Run("unknown field rejected", func(t *testing.T) {
 		yaml := strings.ReplaceAll(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   shrink-on-load:
     jpeg-quality: 80
@@ -851,9 +773,7 @@ func TestParseRuntimeConfigLibvipsEncodersInvalid(t *testing.T) {
 			name: "webp effort > 6",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 webp-reduction-effort: 7
@@ -863,9 +783,7 @@ libvips:
 			name: "webp effort negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 webp-reduction-effort: -1
@@ -875,9 +793,7 @@ libvips:
 			name: "avif speed > 9",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 avif-speed: 10
@@ -887,9 +803,7 @@ libvips:
 			name: "avif speed negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 avif-speed: -3
@@ -899,9 +813,7 @@ libvips:
 			name: "png compression > 9",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-compression-level: 10
@@ -911,9 +823,7 @@ libvips:
 			name: "png compression negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-compression-level: -1
@@ -923,9 +833,7 @@ libvips:
 			name: "jxl effort > 9",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 jxl-effort: 10
@@ -935,9 +843,7 @@ libvips:
 			name: "jxl effort negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 jxl-effort: -1
@@ -947,9 +853,7 @@ libvips:
 			name: "png palette colors > 256",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-palette-colors: 257
@@ -959,9 +863,7 @@ libvips:
 			name: "png palette colors negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-palette-colors: -4
@@ -971,9 +873,7 @@ libvips:
 			name: "png palette bit depth > 8",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-palette-bit-depth: 16
@@ -983,9 +883,7 @@ libvips:
 			name: "png palette bit depth negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 png-palette-bit-depth: -2
@@ -995,9 +893,7 @@ libvips:
 			name: "gif bit depth > 8",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 gif-bit-depth: 9
@@ -1007,9 +903,7 @@ libvips:
 			name: "gif bit depth negative",
 			yaml: `
 version: "1"
-policy:
-		global:
-			 authorization: unsafe
+policy: {}
 libvips:
 		encoders:
 			 gif-bit-depth: -1
@@ -1030,9 +924,7 @@ libvips:
 func TestParseRuntimeConfigLibvipsEncodersUnknownField(t *testing.T) {
 	yaml := `
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   encoders:
     jpeg-quality: 90
@@ -1047,9 +939,7 @@ libvips:
 func TestParseRuntimeConfigLibvipsDetectionSem(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    detection:
      concurrency: 3
@@ -1075,9 +965,7 @@ libvips:
 func TestParseRuntimeConfigLibvipsDetectionSemDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips: {}
 `))
 	if err != nil {
@@ -1102,9 +990,7 @@ func TestParseRuntimeConfigLibvipsDetectionSemInvalid(t *testing.T) {
 			name: "negative concurrency",
 			yaml: `
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    detection:
      concurrency: -1
@@ -1114,9 +1000,7 @@ libvips:
 			name: "negative max-wait",
 			yaml: `
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    detection:
      max-wait: "-5s"
@@ -1126,9 +1010,7 @@ libvips:
 			name: "bad max-wait duration",
 			yaml: `
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    detection:
      max-wait: "soon"
@@ -1138,9 +1020,7 @@ libvips:
 			name: "negative metrics-interval",
 			yaml: `
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    metrics-interval: "-15s"
 `,
@@ -1149,9 +1029,7 @@ libvips:
 			name: "unknown detection key",
 			yaml: `
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
    detection:
      enabled: true
@@ -1174,9 +1052,7 @@ func TestParseRuntimeConfigLibvipsColor(t *testing.T) {
 	// transform.
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-   global:
-     authorization: unsafe
+policy: {}
 libvips:
   color:
     mode: transform
@@ -1191,9 +1067,7 @@ libvips:
 	// keep.
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   color:
     mode: keep
@@ -1208,9 +1082,7 @@ libvips:
 	// Дефолт: пустая секция → strip.
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips: {}
 `))
 	if err != nil {
@@ -1226,9 +1098,7 @@ libvips: {}
 func TestParseRuntimeConfigLibvipsColorInvalid(t *testing.T) {
 	_, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   color:
     mode: icm
@@ -1244,9 +1114,7 @@ func TestParseRuntimeConfigLibvipsOperationCache(t *testing.T) {
 	// Явное false → отключено.
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   operation-cache:
     enabled: false
@@ -1261,9 +1129,7 @@ libvips:
 	// Явное true → включено.
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips:
   operation-cache:
     enabled: true
@@ -1278,9 +1144,7 @@ libvips:
 	// Дефолт: пустая секция → включено (обратная совместимость).
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
-policy:
-  global:
-    authorization: unsafe
+policy: {}
 libvips: {}
 `))
 	if err != nil {
