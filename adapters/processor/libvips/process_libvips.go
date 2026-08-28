@@ -659,9 +659,13 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		}
 	case processing.OpCrop:
 		// Центрированная обрезка до точного размера (с premultiply для
-		// альфы — см. OpResize).
+		// альфы — см. OpResize). SizeBoth + crop=centre: пропорциональное
+		// уменьшение/увеличение до заполнения целевого размера с
+		// последующей обрезкой до ТОЧНОГО WxH. SizeForce здесь нельзя:
+		// он растягивает изображение до WxH, игнорируя пропорции
+		// (сплющивание).
 		err := premultiplyResize(img, func() error {
-			return img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeForce)
+			return img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeBoth)
 		})
 		if err != nil {
 			return fmt.Errorf("libvips: crop: %w", err)
@@ -669,9 +673,10 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	case processing.OpSmartCrop:
 		// Умная обрезка: внимание (attention) libvips — центр тяжести
 		// изображения; масштаб и кроп до точного размера одним проходом
-		// (с premultiply для альфы — см. OpResize).
+		// (с premultiply для альфы — см. OpResize). SizeBoth (не Force):
+		// см. комментарий OpCrop.
 		err := premultiplyResize(img, func() error {
-			return img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeForce)
+			return img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeBoth)
 		})
 		if err != nil {
 			return fmt.Errorf("libvips: smart-crop: %w", err)
@@ -900,9 +905,11 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		return fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
 	}
 	// Финальный ресайз после кропа — тоже с premultiply для альфы
-	// (консистентно с applyOperation).
+	// (консистентно с applyOperation). SizeBoth (не Force): область кропа
+	// может иметь пропорции, отличные от целевых, — нужен пропорциональный
+	// масштаб до заполнения + центрированная обрезка до точного WxH.
 	err := premultiplyResize(img, func() error {
-		return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeForce)
+		return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeBoth)
 	})
 	if err != nil {
 		return fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)

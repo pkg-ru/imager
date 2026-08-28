@@ -190,13 +190,24 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 
 	req, err := asset.Parse(path)
 	if err != nil {
-		h.recordAssetError(observability.AssetErrParse, path, "", err.Error())
+		// Служебные/мусорные пути (favicon.ico, .well-known/*, robots.txt и
+		// т.п.) не являются валидными asset URL и не должны засорять лог
+		// WARN-сообщениями: обрабатываем их тихо (DEBUG) и не считаем в
+		// метриках/top-paths.
+		noise := isNoisePath(path)
+		if !noise {
+			h.recordAssetError(observability.AssetErrParse, path, "", err.Error())
+		}
 		// Source fallback: если исходник существует, отдаём его вместо
 		// ошибки (неканонический URL).
 		if h.serveSourceFallback(w, r, path) {
 			return
 		}
-		h.log.Warnf("httpapi: invalid asset url: %v", err)
+		if noise {
+			h.log.Debugf("httpapi: invalid asset url: %v", err)
+		} else {
+			h.log.Warnf("httpapi: invalid asset url: %v", err)
+		}
 		h.writeError(w, r, http.StatusBadRequest, "invalid", "invalid asset url")
 		return
 	}
@@ -653,6 +664,38 @@ func (h *Handler) originAllowed(origin string) bool {
 			return true
 		}
 		if strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNoisePath сообщает, является ли путь служебным/мусорным запросом
+// (favicon.ico, .well-known/*, robots.txt и т.п.), который не является
+// валидным asset URL. Такие запросы приходят от браузеров/сканеров и не
+// должны засорять лог WARN-сообщениями и метрики ошибок asset URL.
+func isNoisePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	// Нормализуем: срезаем ведущий "/" и приводим к нижнему регистру
+	// (пути регистронезависимы для служебных файлов).
+	p := strings.ToLower(strings.TrimPrefix(path, "/"))
+	if p == "" {
+		return false
+	}
+	// Точные имена служебных файлов в корне.
+	switch p {
+	case "favicon.ico", "favicon.png", "robots.txt", "sitemap.xml",
+		"humans.txt", "security.txt", "apple-touch-icon.png",
+		"apple-touch-icon-precomposed.png", "browserconfig.xml",
+		"site.webmanifest", "manifest.json", "crossdomain.xml",
+		"ads.txt", "app-ads.txt", "404.html", "index.html":
+		return true
+	}
+	// Служебные каталоги: .well-known/*, .git/*, .svn/*, .hg/*.
+	for _, prefix := range []string{".well-known/", ".git/", ".svn/", ".hg/"} {
+		if strings.HasPrefix(p, prefix) {
 			return true
 		}
 	}

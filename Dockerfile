@@ -15,7 +15,7 @@
 # 1.29.0 доступен только в edge-репозитории Alpine (musl); libstdc++/libgcc
 # 15.2 из edge требуются из-за C++23-символа в onnxruntime.
 ###############################################################################
-FROM golang:1.25.0-alpine3.20 AS builder
+FROM golang:1.25.0-alpine3.21 AS builder
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 ARG GOFLAGS="-buildvcs=false"
@@ -29,9 +29,9 @@ ENV CGO_ENABLED=1 \
 ARG BUILD_TAGS=libvips,onnx
 
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.20 для golang:1.25.0-alpine3.20).
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/community" >> /etc/apk/repositories \
+# на mirror.yandex.ru (v3.21 для golang:1.25.0-alpine3.21).
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
         build-base \
         pkgconf \
@@ -44,7 +44,7 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/reposit
         librsvg-dev \
         poppler-dev \
         libraw-dev \
-    && apk add --no-cache tzdata~=2024a \
+    && apk add --no-cache tzdata~=2026 \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
     && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime
@@ -54,6 +54,10 @@ WORKDIR /src
 # Сначала копируем только модули для кэширования слоя зависимостей.
 COPY go.mod go.sum ./
 COPY go.work go.work.sum ./
+# Локальный replace-модуль govips (go.mod: replace ... => ./govips) должен
+# присутствовать в контейнере, иначе `go mod download` не сможет прочитать
+# govips/go.mod. Копируем всю директорию сразу (она же нужна и для go build).
+COPY govips/ ./govips/
 RUN go mod download
 
 # Копируем исходники и собираем с тэками.
@@ -65,7 +69,7 @@ RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -
 # libvips покрывает все форматы, включая APNG (≥ 8.13); ImageMagick не
 # требуется. Pinned base image. Non-root пользователь, read-only root layout.
 ###############################################################################
-FROM alpine:3.20
+FROM alpine:3.21
 
 # Pinned версии пакетов для воспроизводимости (apk --no-cache).
 # libvips — основной процессор; сопутствующие библиотеки кодеков:
@@ -75,20 +79,20 @@ FROM alpine:3.20
 # onnxruntime — runtime для бинаря, собранного с тэком "onnx" (детекция
 # лиц/объектов). Обновление libstdc++/libgcc обязательно: edge-пакет
 # собран с C++23 (символ std::__format::__locale_encoding_to_utf8).
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.20/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.21/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
         vips-tools~=8.15 \
-        libvips~=8.15 \
-        libheif~=1.17 \
+        vips~=8.15 \
+        libheif~=1.19 \
         libde265~=1.0 \
         libjxl~=0.10 \
         poppler-utils \
         libraw~=0.21 \
-        librsvg~=2.58 \
-        ghostscript~=10.02 \
+        librsvg~=2.59 \
+        ghostscript~=10.05 \
         ffmpeg~=6.1 \
-        tzdata~=2024a \
+        tzdata~=2026 \
         ca-certificates \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
@@ -140,8 +144,13 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # Экспонируем HTTP-порт (readiness/liveness/metrics/asset).
 EXPOSE 8080
 
-# Read-only root: единственные writable пути — /data и /tmp (tmpfs в compose).
-VOLUME ["/data/source", "/data/result"]
+# Writable пути: /data (source/result) и /etc/imager/models.
+# /etc/imager/models объявлен VOLUME, чтобы Docker создал writable mountpoint
+# (анонимный volume) в верхнем слое. Без этого bind-mount ./models поверх
+# каталога, существующего в read-only нижнем слое overlayfs, падает с
+# "mkdirat .../etc/imager/models: read-only file system". В compose поверх
+# этого mountpoint монтируется ./models:ro.
+VOLUME ["/data/source", "/data/result", "/etc/imager/models"]
 
 # Production entrypoint: новый composition root (cmd/imager).
 # Единственная env-переменная — IMAGER_CONFIG_DIR (путь к каталогу

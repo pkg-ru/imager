@@ -8,9 +8,14 @@ services:
     stop_signal: INT
     stop_grace_period: 15s
 
-    # Production hardening: non-root (в Dockerfile), read-only root fs,
-    # dropped capabilities, no-new-privileges, tmpfs для /tmp.
-    read_only: true
+    # Production hardening: non-root (в Dockerfile), dropped capabilities,
+    # no-new-privileges, tmpfs для /tmp.
+    # ВАЖНО: read_only: true НЕ используется. При read-only rootfs Docker не
+    # может создать mountpoint для bind-mount ./models:/etc/imager/models
+    # (mkdirat .../etc/imager/models: read-only file system), т.к. каталог
+    # лежит в read-only слое. Без read_only rootfs writable, mountpoint
+    # создаётся, а сами модели/конфиг монтируются :ro (неизменяемы).
+    # Writable остаются только /data и /tmp (tmpfs).
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     security_opt:
@@ -41,21 +46,23 @@ services:
     ports:
       - "8080:8080"
 
-    # Конфигурация монтируется read-only. Внутри каталога лежат
-    # setting.yaml (обязательный) и setting-local.yaml (опциональный).
-    # Модели ONNX монтируются отдельно (./models), чтобы их можно было
-    # обновлять без пересборки образа (в Dockerfile также запечены копии).
+    # Конфигурация монтируется read-only в ОТДЕЛЬНЫЙ каталог /etc/imager/config.
+    # ВАЖНО: нельзя монтировать ./config в /etc/imager — это перекрыло бы
+    # /etc/imager/models из образа и не позволило бы создать mountpoint для
+    # bind-mount ./models (mkdirat .../etc/imager/models: read-only file system).
+    # Модели ONNX монтируются отдельно (./models) в /etc/imager/models, чтобы
+    # их можно было обновлять без пересборки образа (в Dockerfile также
+    # запечены копии).
     volumes:
-      - ./config:/etc/imager:ro
+      - ./config:/etc/imager/config:ro
       - ./models:/etc/imager/models:ro
-      - imager_source:/data/source
-      - imager_result:/data/result
+      - ./data/source:/data/source:ro
+      - ./data/result:/data/result:rw
 
     environment:
       # Единственная env-переменная: путь к каталогу с настройками.
       # Все остальные настройки — в YAML (setting.yaml / setting-local.yaml),
-      # включая путь к библиотеке ONNX Runtime (detection.onnx-runtime-lib).
-      IMAGER_CONFIG_DIR: /etc/imager
+      IMAGER_CONFIG_DIR: /etc/imager/config
 
     networks:
       - default

@@ -668,7 +668,7 @@ observability:
     # Тип: секция. Дефолт: выключен.
     top-paths:
       # enabled — включать ли учёт top-paths. Тип: bool. Дефолт: false.
-      enabled: false
+      enabled: true
       # max-entries — максимальное число отслеживаемых путей (LRU).
       # Тип: int. Дефолт: 1024.
       max-entries: 1024

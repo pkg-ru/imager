@@ -215,10 +215,12 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 			plan.Operation == processing.OpSmartCrop ||
 			plan.Operation == processing.OpFaceCrop ||
 			plan.Operation == processing.OpObjectCrop
-		resize := resizeString(plan.Size.Width, plan.Size.Height, crop)
+		resize, extent := resizeStrings(plan.Size.Width, plan.Size.Height, crop)
 		args = append(args, "-thumbnail", resize)
 		// -extent применяется только для crop-операций: для OpResize
 		// letterboxing нежелателен, т.к. добавляет поля с фоном по умолчанию.
+		// Геометрия extent — БЕЗ суффикса "^": он нужен только в -thumbnail
+		// (заполнить с сохранением пропорций); в -extent "^" недопустим.
 		if crop {
 			// Явный фон для extent: none = прозрачный для PNG/WebP/GIF, для
 			// JPEG прозрачность невозможна — используем белый.
@@ -227,7 +229,7 @@ func buildArgv(plan *processing.ProcessingPlan, caps *Capabilities, limits Limit
 				bg = "white"
 			}
 			args = append(args, "-background", bg)
-			args = append(args, "-extent", resize)
+			args = append(args, "-extent", extent)
 		}
 	}
 
@@ -303,8 +305,15 @@ func limitArgs(limits Limits, im7 bool) []string {
 	return args
 }
 
-// resizeString строит аргумент -thumbnail/-extent: "WxH^" при crop.
-func resizeString(w, h int, crop bool) string {
+// resizeString строит геометрию для -thumbnail/-extent.
+//
+// crop=true возвращает ДВЕ строки: resize-геометрию "WxH^" (заполнить
+// целевой размер с сохранением пропорций) и extent-геометрию "WxH"
+// (обрезать до точного размера). Суффикс "^" допустим ТОЛЬКО в -thumbnail:
+// в -extent он игнорируется/искажает результат.
+//
+// crop=false возвращает одну пропорциональную геометрию "WxH".
+func resizeStrings(w, h int, crop bool) (resize, extent string) {
 	var sb strings.Builder
 	if w > 0 {
 		sb.WriteString(strconv.Itoa(w))
@@ -313,10 +322,11 @@ func resizeString(w, h int, crop bool) string {
 	if h > 0 {
 		sb.WriteString(strconv.Itoa(h))
 	}
-	if crop {
-		sb.WriteString("^")
+	resize = sb.String()
+	if !crop {
+		return resize, ""
 	}
-	return sb.String()
+	return resize + "^", resize
 }
 
 // watermarkGravity маппит CSS-подобную позицию ватермарки в значение

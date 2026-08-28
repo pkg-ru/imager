@@ -505,20 +505,93 @@ func TestBuildArgv_JpegSizeNoSwap(t *testing.T) {
 	}
 }
 
-func TestResizeString(t *testing.T) {
+func TestResizeStrings(t *testing.T) {
 	cases := []struct {
-		w, h int
-		crop bool
-		want string
+		w, h       int
+		crop       bool
+		wantResize string
+		wantExtent string
 	}{
-		{800, 600, false, "800x600"},
-		{800, 0, false, "800x"},
-		{0, 600, false, "x600"},
-		{800, 600, true, "800x600^"},
+		{800, 600, false, "800x600", ""},
+		{800, 0, false, "800x", ""},
+		{0, 600, false, "x600", ""},
+		// crop: resize-геометрия с "^" (заполнить), extent-геометрия БЕЗ "^"
+		// (обрезать до точного размера; "^" в -extent недопустим).
+		{800, 600, true, "800x600^", "800x600"},
+		{400, 400, true, "400x400^", "400x400"},
+		{800, 0, true, "800x^", "800x"},
+		{0, 600, true, "x600^", "x600"},
 	}
 	for _, c := range cases {
-		if got := resizeString(c.w, c.h, c.crop); got != c.want {
-			t.Errorf("resizeString(%d,%d,%v) = %q, want %q", c.w, c.h, c.crop, got, c.want)
+		resize, extent := resizeStrings(c.w, c.h, c.crop)
+		if resize != c.wantResize {
+			t.Errorf("resizeStrings(%d,%d,%v) resize = %q, want %q", c.w, c.h, c.crop, resize, c.wantResize)
 		}
+		if extent != c.wantExtent {
+			t.Errorf("resizeStrings(%d,%d,%v) extent = %q, want %q", c.w, c.h, c.crop, extent, c.wantExtent)
+		}
+	}
+}
+
+// TestBuildArgv_CropExtentGeometryNoCaret проверяет, что для ВСЕХ crop-режимов
+// (crop/smart-crop/face-crop/object-crop) -extent получает геометрию БЕЗ
+// суффикса "^", а -thumbnail — с "^". Суффикс "^" в -extent искажал результат
+// кропа (изображение сплющивалось вместо обрезки).
+func TestBuildArgv_CropExtentGeometryNoCaret(t *testing.T) {
+	ops := []processing.Operation{
+		processing.OpCrop,
+		processing.OpSmartCrop,
+		processing.OpFaceCrop,
+		processing.OpObjectCrop,
+	}
+	for _, op := range ops {
+		plan, err := processing.NewProcessingPlan(
+			op, processing.FormatPNG, processing.FormatWebP,
+			processing.Size{Width: 400, Height: 400}, 1, 80, nil, 0, 0,
+		)
+		if err != nil {
+			t.Fatalf("plan %q: %v", op, err)
+		}
+		args, err := buildArgv(plan, nil, Limits{})
+		if err != nil {
+			t.Fatalf("buildArgv %q: %v", op, err)
+		}
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "-thumbnail 400x400^") {
+			t.Errorf("%s: missing -thumbnail 400x400^, got: %s", op, joined)
+		}
+		if !strings.Contains(joined, "-extent 400x400") {
+			t.Errorf("%s: missing -extent 400x400, got: %s", op, joined)
+		}
+		// "^" допустим только в -thumbnail, не в -extent.
+		if strings.Contains(joined, "-extent 400x400^") {
+			t.Errorf("%s: -extent must not carry caret suffix, got: %s", op, joined)
+		}
+	}
+}
+
+// TestBuildArgv_ResizeNoExtent проверяет, что OpResize (transform "" и "t")
+// не получает -extent: пропорциональный resize без letterbox.
+func TestBuildArgv_ResizeNoExtent(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatPNG, processing.FormatWebP,
+		processing.Size{Width: 400, Height: 400}, 1, 80, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	args, err := buildArgv(plan, nil, Limits{})
+	if err != nil {
+		t.Fatalf("buildArgv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-thumbnail 400x400") {
+		t.Errorf("missing -thumbnail 400x400, got: %s", joined)
+	}
+	if strings.Contains(joined, "-extent") {
+		t.Errorf("resize must not use -extent, got: %s", joined)
+	}
+	if strings.Contains(joined, "^") {
+		t.Errorf("resize geometry must not carry caret, got: %s", joined)
 	}
 }
