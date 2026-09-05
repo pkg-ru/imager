@@ -19,7 +19,7 @@ build:
 
 .PHONY: run
 run: build
-	IMAGER_CONFIG_DIR=./config ./imager
+	IMAGER_CONFIG_DIR=./setting ./imager
 
 .PHONY: stop
 stop:

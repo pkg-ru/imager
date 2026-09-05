@@ -135,6 +135,58 @@ func TestNewProcessingPlanInvalid(t *testing.T) {
 	}
 }
 
+// TestProcessingPlanEncodingOverrides проверяет, что variadic-параметр
+// encOverrides попадает в план, а Validate() проверяет native-параметры
+// по реестру domain/encoding (формат/параметр/диапазон).
+func TestProcessingPlanEncodingOverrides(t *testing.T) {
+	loop := true
+	over := map[string]map[string]any{
+		"webp": {"quality": 90, "reduction-effort": 6},
+		"png":  {"compression-level": 9},
+	}
+	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 85, &loop, 0, 0, over)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan error: %v", err)
+	}
+	if plan.EncodingOverrides["webp"]["quality"] != 90 {
+		t.Errorf("EncodingOverrides webp quality = %v, want 90", plan.EncodingOverrides["webp"]["quality"])
+	}
+	if plan.EncodingOverrides["png"]["compression-level"] != 9 {
+		t.Errorf("EncodingOverrides png compression-level = %v, want 9", plan.EncodingOverrides["png"]["compression-level"])
+	}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("Validate error: %v", err)
+	}
+}
+
+// TestProcessingPlanEncodingOverridesInvalid проверяет fail-fast валидацию
+// native-параметров в Validate(): неизвестный формат/параметр, выход за
+// диапазон и per-format quality для lossless-формата.
+func TestProcessingPlanEncodingOverridesInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		over map[string]map[string]any
+	}{
+		{"unknown format", map[string]map[string]any{"bogus": {"quality": 80}}},
+		{"unknown param", map[string]map[string]any{"webp": {"bogus": 1}}},
+		{"reduction-effort out of range", map[string]map[string]any{"webp": {"reduction-effort": 7}}},
+		{"compression-level out of range", map[string]map[string]any{"png": {"compression-level": 0}}},
+		{"quality out of range", map[string]map[string]any{"webp": {"quality": 0}}},
+		{"lossless per-format quality", map[string]map[string]any{"png": {"quality": 90}}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, nil, 0, 0, tt.over)
+			if err != nil {
+				t.Fatalf("NewProcessingPlan error: %v", err)
+			}
+			if err := plan.Validate(); err == nil {
+				t.Errorf("Validate(+%v) expected error", tt.over)
+			}
+		})
+	}
+}
+
 func TestSizeValid(t *testing.T) {
 	if err := (Size{Width: 120, Height: 80}).Valid(); err != nil {
 		t.Errorf("expected valid size, got %v", err)

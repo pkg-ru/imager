@@ -12,10 +12,10 @@ import (
 // File names внутри каталога конфигурации.
 const (
 	// BaseConfigFile — обязательный базовый конфиг слоя setting.
-	BaseConfigFile = "setting.yaml"
+	BaseConfigFile = "server.yaml"
 	// LocalConfigFile — опциональный локальный конфиг слоя setting (глубоко
 	// переопределяет базовый). Отсутствие файла — нормальная ситуация.
-	LocalConfigFile = "setting-local.yaml"
+	LocalConfigFile = "server-local.yaml"
 	// GenerateConfigFile — опциональный базовый конфиг слоя generate.
 	GenerateConfigFile = "generate.yaml"
 	// GenerateLocalFile — опциональный локальный конфиг слоя generate.

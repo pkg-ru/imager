@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg-ru/dynamic"
@@ -14,6 +15,7 @@ import (
 	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
 	"gitverse.ru/pkg-ru/imager/app/generatev2"
 	"gitverse.ru/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/domain/encoding"
 )
 
 // DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
@@ -22,7 +24,7 @@ const DefaultBufferMaxBytes int64 = 500 * 1024 * 1024
 
 // RuntimeConfig — единый typed runtime-конфиг всего приложения.
 //
-// Собирается из YAML-файлов (setting.yaml + setting-local.yaml) через
+// Собирается из YAML-файлов (server.yaml + server-local.yaml) через
 // ParseRuntimeConfig. Содержит все настройки приложения: pipeline
 // (policy/processing), HTTP-адаптер, HTTP-сервер, хранилища source/result,
 // libvips processor и observability.
@@ -51,6 +53,10 @@ type RuntimeConfig struct {
 	// Libvips — конфигурация libvips processor (единственный движок;
 	// in-process через govips). Требует сборки с тэком "libvips".
 	Libvips LibvipsConfig
+	// Encoders — единая секция настроек кодирования (encoders): default-quality
+	// + per-format глобальные параметры. Источник для libvips.EncodersConfig
+	// (build) и для generatev2 Deps.Quality (default-quality).
+	Encoders libvips.EncodersConfig
 	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
 	// Пустые пути к моделям = face-crop/object-crop отключены (запрос с
 	// такими операциями вернёт понятную ошибку).
@@ -103,11 +109,11 @@ type ServerConfig struct {
 type LibvipsConfig struct {
 	// Limits — resource limits обработчика libvips.
 	Limits libvips.Limits
-	// Encoders — per-format параметры сжатия кодировщиков (WebP effort,
-	// AVIF speed, PNG compression, JXL effort, JPEG progressive, PNG
-	// interlace/quantization, GIF bit-depth). Нулевые поля = встроенные
-	// умолчания.
-	Encoders libvips.EncoderParams
+	// EncodersConfig — полное per-format представление единой секции
+	// encoders (default-quality + нативные параметры по форматам). Хранит
+	// ГЛОБАЛЬНЫЕ значения; эффективные параметры каждого экспорта
+	// разрешаются per-request через domain/encoding.Resolve (S4).
+	EncodersConfig libvips.EncodersConfig
 	// ShrinkOnLoad — настройки shrink-on-load (предварительное уменьшение
 	// при декодировании JPEG/WebP/GIF/HEIF/AVIF).
 	ShrinkOnLoad libvips.ShrinkOnLoadOpts
@@ -128,6 +134,13 @@ type LibvipsConfig struct {
 	// (0 = дефолт 15s).
 	VipsMetricsInterval time.Duration
 }
+
+// ModelsDirEnv — env-переменная с каталогом ONNX-моделей (префикс-каталог).
+// Используется как fallback для detection.face-model / detection.object-model:
+// если путь в YAML не задан, он строится как <IMAGER_MODELS_DIR>/<имя_модели>.
+// Явный путь в конфиг-файле имеет приоритет. Задаётся в docker-compose как
+// /etc/imager/models (см. models/README.md).
+const ModelsDirEnv = "IMAGER_MODELS_DIR"
 
 // DetectionConfig — конфигурация детектора лиц/объектов для операций
 // face-crop ("fc") и object-crop ("oc") на libvips.
@@ -208,6 +221,9 @@ type RuntimeConfigFile struct {
 	Result StorageYAML `yaml:"result"`
 	// Libvips — конфигурация libvips processor.
 	Libvips LibvipsYAML `yaml:"libvips"`
+	// Encoders — ЕДИНАЯ top-level секция настроек кодирования (default-quality
+	// + per-format параметры).
+	Encoders EncodersYAML `yaml:"encoders"`
 	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
 	Detection DetectionYAML `yaml:"detection"`
 	// Application — прикладные лимиты.
@@ -308,8 +324,6 @@ type StorageYAML struct {
 type LibvipsYAML struct {
 	// Limits — resource limits обработчика libvips.
 	Limits LibvipsLimitsYAML `yaml:"limits"`
-	// Encoders — per-format параметры сжатия кодировщиков.
-	Encoders LibvipsEncodersYAML `yaml:"encoders"`
 	// ShrinkOnLoad — настройки shrink-on-load при декодировании.
 	ShrinkOnLoad ShrinkOnLoadYAML `yaml:"shrink-on-load"`
 	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
@@ -364,34 +378,120 @@ type ShrinkOnLoadYAML struct {
 	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
 }
 
-// LibvipsEncodersYAML — YAML-представление libvips.EncoderParams.
-type LibvipsEncodersYAML struct {
-	// WebPReductionEffort — reduction effort WebP [0..6] (больше = лучше
-	// сжатие, медленнее; 0 = умолчание 4).
-	WebPReductionEffort dynamic.Int64 `yaml:"webp-reduction-effort"`
-	// AVIFSpeed — speed/effort AVIF [0..9] (больше = быстрее, хуже сжатие;
-	// 0 = умолчание govips).
-	AVIFSpeed dynamic.Int64 `yaml:"avif-speed"`
-	// PNGCompressionLevel — уровень сжатия PNG [0..9] (0 = умолчание 6).
-	PNGCompressionLevel dynamic.Int64 `yaml:"png-compression-level"`
-	// JXLEffort — effort JPEG XL [0..9] (больше = лучше сжатие, медленнее;
-	// 0 = умолчание govips, 7).
-	JXLEffort dynamic.Int64 `yaml:"jxl-effort"`
-	// JPEGProgressive — прогрессивный (interlaced) JPEG. false = baseline.
-	JPEGProgressive dynamic.Bool `yaml:"jpeg-progressive"`
-	// PNGInterlace — чересстрочный (interlaced/Adam7) PNG. false = обычный.
-	PNGInterlace dynamic.Bool `yaml:"png-interlace"`
-	// PNGPalette — включить PNG-квантование (палитровый экспорт). По
-	// умолчанию выключено (применяется ТОЛЬКО при явном включении).
-	PNGPalette dynamic.Bool `yaml:"png-palette"`
-	// PNGPaletteColors — максимальное число цветов палитры [2..256]
-	// (0 = 256). Значимо при png-palette=true.
-	PNGPaletteColors dynamic.Int64 `yaml:"png-palette-colors"`
-	// PNGPaletteBitDepth — битность палитры [1..8] (0 = 8). Позволяет
-	// сохранить палитровую битность исходника. Значимо при png-palette=true.
-	PNGPaletteBitDepth dynamic.Int64 `yaml:"png-palette-bit-depth"`
-	// GIFBitDepth — битность палитры GIF [1..8] (0 = умолчание govips, 8).
-	GIFBitDepth dynamic.Int64 `yaml:"gif-bit-depth"`
+// EncodersYAML — YAML-представление ЕДИНОЙ top-level секции encoders
+// (per-format параметры кодирования + default-quality).
+//
+// Подразделы используют указатели на значения, чтобы отличать «не задано»
+// (nil) от дефолта. Валидация диапазонов сверяется с реестром
+// domain/encoding (те же min/max); нулевые/nil значения = «не задано»
+// (применяются registry-дефолты / автомаппинг от quality).
+type EncodersYAML struct {
+	// DefaultQuality — качество сжатия по умолчанию [1,100]; 0 = дефолт 80.
+	DefaultQuality dynamic.Int64 `yaml:"default-quality"`
+	// JPEG — параметры JPEG.
+	JPEG EncoderFormatYAML `yaml:"jpeg"`
+	// WebP — параметры WebP.
+	WebP EncoderFormatWebPYAML `yaml:"webp"`
+	// AVIF — параметры AVIF.
+	AVIF EncoderFormatAVIFYAML `yaml:"avif"`
+	// HEIF — параметры HEIF.
+	HEIF EncoderFormatHEIFYAML `yaml:"heif"`
+	// JXL — параметры JPEG XL.
+	JXL EncoderFormatJXLYAML `yaml:"jxl"`
+	// PNG — параметры PNG.
+	PNG EncoderFormatPNGYAML `yaml:"png"`
+	// APNG — параметры APNG.
+	APNG EncoderFormatAPNGYAML `yaml:"apng"`
+	// GIF — параметры GIF.
+	GIF EncoderFormatGIFYAML `yaml:"gif"`
+}
+
+// EncoderFormatYAML — общие параметры формата с прямым quality
+// (lossy: jpeg/heif). Quality nil = «не задано глобально» → из запроса
+// или encoders.default-quality.
+type EncoderFormatYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+
+	// Progressive — прогрессивный (interlaced) JPEG. false = baseline.
+	Progressive *bool `yaml:"progressive"`
+}
+
+// EncoderFormatWebPYAML — параметры WebP.
+type EncoderFormatWebPYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// ReductionEffort — reduction effort [0..6] (больше = лучше сжатие,
+	// медленнее). nil = дефолт 4.
+	ReductionEffort *int `yaml:"reduction-effort"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+	// NearLossless — near-lossless. nil = false.
+	NearLossless *bool `yaml:"near-lossless"`
+}
+
+// EncoderFormatAVIFYAML — параметры AVIF.
+type EncoderFormatAVIFYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// Speed — speed [0..9] (меньше = медленнее, лучше сжатие). 0 ВАЛИДЕН.
+	// nil = дефолт 6.
+	Speed *int `yaml:"speed"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+}
+
+// EncoderFormatHEIFYAML — параметры HEIF (только quality).
+type EncoderFormatHEIFYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+}
+
+// EncoderFormatJXLYAML — параметры JPEG XL.
+type EncoderFormatJXLYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// Effort — effort [3,9] (больше = лучше сжатие, медленнее). nil = 7.
+	// 0 НЕВАЛИДЕН (в старом конфиге 0 означал «дефолт govips 7»).
+	Effort *int `yaml:"effort"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+}
+
+// EncoderFormatPNGYAML — параметры PNG.
+type EncoderFormatPNGYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// CompressionLevel — уровень сжатия [1,9]. nil = 6.
+	CompressionLevel *int `yaml:"compression-level"`
+	// Interlace — чересстрочный (Adam7). nil = false.
+	Interlace *bool `yaml:"interlace"`
+	// Palette — палитровый (quantized) экспорт. nil = false.
+	Palette *bool `yaml:"palette"`
+	// PaletteColors — максимум цветов палитры [2,256]. nil = 256.
+	PaletteColors *int `yaml:"palette-colors"`
+	// PaletteBitDepth — битность палитры [1,8]. nil = 8.
+	PaletteBitDepth *int `yaml:"palette-bit-depth"`
+	// Dither — дизеринг [0,1]; nil = дефолт 1.0.
+	Dither *float64 `yaml:"dither"`
+}
+
+// EncoderFormatAPNGYAML — параметры APNG.
+type EncoderFormatAPNGYAML struct {
+	// CompressionLevel — уровень сжатия [1,9]. nil = 6.
+	CompressionLevel *int `yaml:"compression-level"`
+	// Interlace — чересстрочный. nil = false.
+	Interlace *bool `yaml:"interlace"`
+}
+
+// EncoderFormatGIFYAML — параметры GIF.
+type EncoderFormatGIFYAML struct {
+	// Effort — effort [1,10]. nil = 7 (дефолт libvips).
+	Effort *int `yaml:"effort"`
+	// BitDepth — битность палитры [1,8]. nil = 8.
+	BitDepth *int `yaml:"bit-depth"`
+	// Dither — дизеринг [0,1]; nil = дефолт 1.0.
+	Dither *float64 `yaml:"dither"`
 }
 
 // LibvipsLimitsYAML — YAML-представление libvips.Limits.
@@ -742,6 +842,16 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		return nil, fmt.Errorf("composition: libvips: %w", err)
 	}
 
+	// Единая секция encoders: сборка в libvips.EncodersConfig (валидация по
+	// реестру domain/encoding). Эффективные параметры каждого экспорта
+	// разрешаются через domain/encoding.Resolve в exportImage (S4):
+	// preset override > encoders yaml > автомаппинг от quality > дефолт.
+	enc, err := buildEncoders(raw.Encoders)
+	if err != nil {
+		return nil, fmt.Errorf("composition: encoders: %w", err)
+	}
+	lv.EncodersConfig = enc
+
 	// Детектор лиц/объектов (face-crop/object-crop).
 	det, err := raw.Detection.build()
 	if err != nil {
@@ -787,6 +897,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 		Source:          source,
 		Result:          result,
 		Libvips:         lv,
+		Encoders:        enc,
 		Detection:       det,
 		MetadataEnabled: metadataEnabled,
 		MetadataDir:     metadataDir,
@@ -819,6 +930,170 @@ func buildApplicationLimits(raw ApplicationLimitsYAML) (generatev2.Limits, error
 		Duration:    raw.Duration.Unwrap(),
 		Concurrency: raw.Concurrency.Unwrap(),
 	}, nil
+}
+
+// buildEncoders собирает libvips.EncodersConfig из YAML-представления секции
+// encoders. Каждый параметр валидируется по реестру domain/encoding:
+// nil/не задано = «не задано» (ок), значение вне диапазона реестра —
+// fail-fast ошибка старта. Неизвестные ключи отсекаются строгим
+// декодированием (KnownFields) на уровне ParseRuntimeConfig.
+func buildEncoders(raw EncodersYAML) (libvips.EncodersConfig, error) {
+	formatSet := map[encoding.Format]bool{
+		encoding.FormatJPEG: true, encoding.FormatWebP: true,
+		encoding.FormatAVIF: true, encoding.FormatHEIF: true,
+		encoding.FormatJXL: true, encoding.FormatPNG: true,
+		encoding.FormatAPNG: true, encoding.FormatGIF: true,
+	}
+
+	dq := int(raw.DefaultQuality.Unwrap())
+	if dq == 0 {
+		dq = 80
+	}
+	if dq < 1 || dq > 100 {
+		return libvips.EncodersConfig{}, fmt.Errorf("default-quality: must be in [1,100], got %d", dq)
+	}
+	cfg := libvips.EncodersConfig{
+		DefaultQuality: dq,
+		Formats:        map[string]libvips.FormatEncodersConfig{},
+	}
+	// JPEG.
+	if err := addEncoderGroup(cfg, encoding.FormatJPEG, libvips.FormatEncodersConfig{
+		Quality:     raw.JPEG.Quality,
+		Progressive: raw.JPEG.Progressive,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// WebP.
+	if err := addEncoderGroup(cfg, encoding.FormatWebP, libvips.FormatEncodersConfig{
+		Quality:         raw.WebP.Quality,
+		ReductionEffort: raw.WebP.ReductionEffort,
+		Lossless:        raw.WebP.Lossless,
+		NearLossless:    raw.WebP.NearLossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// AVIF.
+	if err := addEncoderGroup(cfg, encoding.FormatAVIF, libvips.FormatEncodersConfig{
+		Quality:  raw.AVIF.Quality,
+		Speed:    raw.AVIF.Speed,
+		Lossless: raw.AVIF.Lossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// HEIF.
+	if err := addEncoderGroup(cfg, encoding.FormatHEIF, libvips.FormatEncodersConfig{
+		Quality: raw.HEIF.Quality,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// JXL.
+	if err := addEncoderGroup(cfg, encoding.FormatJXL, libvips.FormatEncodersConfig{
+		Quality:  raw.JXL.Quality,
+		Effort:   raw.JXL.Effort,
+		Lossless: raw.JXL.Lossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// PNG.
+	if err := addEncoderGroup(cfg, encoding.FormatPNG, libvips.FormatEncodersConfig{
+		Quality:          raw.PNG.Quality,
+		CompressionLevel: raw.PNG.CompressionLevel,
+		Interlace:        raw.PNG.Interlace,
+		Palette:          raw.PNG.Palette,
+		PaletteColors:    raw.PNG.PaletteColors,
+		PaletteBitDepth:  raw.PNG.PaletteBitDepth,
+		Dither:           raw.PNG.Dither,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// APNG.
+	if err := addEncoderGroup(cfg, encoding.FormatAPNG, libvips.FormatEncodersConfig{
+		CompressionLevel: raw.APNG.CompressionLevel,
+		Interlace:        raw.APNG.Interlace,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// GIF.
+	if err := addEncoderGroup(cfg, encoding.FormatGIF, libvips.FormatEncodersConfig{
+		Effort:   raw.GIF.Effort,
+		BitDepth: raw.GIF.BitDepth,
+		Dither:   raw.GIF.Dither,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	return cfg, nil
+}
+
+// addEncoderGroup валидирует параметры формата по реестру domain/encoding и
+// кладёт их в cfg.Formats. Неизвестный для реестра параметр — ошибка.
+func addEncoderGroup(cfg libvips.EncodersConfig, format encoding.Format, meta libvips.FormatEncodersConfig, formatSet map[encoding.Format]bool) error {
+	if !formatSet[format] {
+		return fmt.Errorf("encoders: unknown format %q", format)
+	}
+	def, ok := encoding.LookupFormat(format.String())
+	if !ok {
+		return fmt.Errorf("encoders.%s: unknown format in domain/encoding registry", format)
+	}
+	// Итерация по заданным полям: каждый параметр должен принадлежать формату
+	// в domain/encoding, а значение — лежать в диапазоне реестра.
+	for _, p := range []struct {
+		name string
+		get  func() (float64, bool)
+	}{
+		{"quality", func() (float64, bool) { return ptrInt(meta.Quality) }},
+		{"progressive", func() (float64, bool) { return ptrBool(meta.Progressive) }},
+		{"reduction-effort", func() (float64, bool) { return ptrInt(meta.ReductionEffort) }},
+		{"lossless", func() (float64, bool) { return ptrBool(meta.Lossless) }},
+		{"near-lossless", func() (float64, bool) { return ptrBool(meta.NearLossless) }},
+		{"speed", func() (float64, bool) { return ptrInt(meta.Speed) }},
+		{"effort", func() (float64, bool) { return ptrInt(meta.Effort) }},
+		{"compression-level", func() (float64, bool) { return ptrInt(meta.CompressionLevel) }},
+		{"interlace", func() (float64, bool) { return ptrBool(meta.Interlace) }},
+		{"palette", func() (float64, bool) { return ptrBool(meta.Palette) }},
+		{"palette-colors", func() (float64, bool) { return ptrInt(meta.PaletteColors) }},
+		{"palette-bit-depth", func() (float64, bool) { return ptrInt(meta.PaletteBitDepth) }},
+		{"dither", func() (float64, bool) { return ptrFloat(meta.Dither) }},
+		{"bit-depth", func() (float64, bool) { return ptrInt(meta.BitDepth) }},
+	} {
+		v, set := p.get()
+		if !set {
+			continue
+		}
+		pm, ok := def.Param(p.name)
+		if !ok {
+			return fmt.Errorf("encoders.%s.%s: parameter %q is not defined in domain/encoding registry for format %q", format, p.name, p.name, format)
+		}
+		// Для KindBool диапазон реестра не используется (0/0): проверяем
+		// только признак принадлежности параметра формату (см. выше).
+		if pm.Kind != encoding.KindBool && (v < pm.Min || v > pm.Max) {
+			return fmt.Errorf("encoders.%s.%s: must be in [%v,%v], got %v", format, p.name, pm.Min, pm.Max, v)
+		}
+	}
+	cfg.Formats[format.String()] = meta
+	return nil
+}
+
+// ptrInt/ptrBool/ptrFloat — разыменование указателей в (значение, задано).
+func ptrInt(v *int) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	return float64(*v), true
+}
+func ptrBool(v *bool) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	if *v {
+		return 1, true
+	}
+	return 0, true
+}
+func ptrFloat(v *float64) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	return *v, true
 }
 
 // toRemoteStorageConfig конвертирует YAML-конфигурацию в RemoteStorageConfig.
@@ -1017,41 +1292,6 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		}
 		cfg.Limits.Timeout = d
 	}
-	// Per-format параметры кодировщиков: fail-fast валидация диапазонов
-	// на старте (невалидное значение — ошибка конфигурации, не runtime).
-	cfg.Encoders = libvips.EncoderParams{
-		WebPReductionEffort: int(l.Encoders.WebPReductionEffort.Unwrap()),
-		AVIFSpeed:           int(l.Encoders.AVIFSpeed.Unwrap()),
-		PNGCompression:      int(l.Encoders.PNGCompressionLevel.Unwrap()),
-		JXLEffort:           int(l.Encoders.JXLEffort.Unwrap()),
-		JPEGProgressive:     l.Encoders.JPEGProgressive.Unwrap(),
-		PNGInterlace:        l.Encoders.PNGInterlace.Unwrap(),
-		PNGPalette:          l.Encoders.PNGPalette.Unwrap(),
-		PNGPaletteColors:    int(l.Encoders.PNGPaletteColors.Unwrap()),
-		PNGPaletteBitDepth:  int(l.Encoders.PNGPaletteBitDepth.Unwrap()),
-		GIFBitDepth:         int(l.Encoders.GIFBitDepth.Unwrap()),
-	}
-	if v := cfg.Encoders.WebPReductionEffort; v < 0 || v > 6 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.webp-reduction-effort: must be in [0,6], got %d", v)
-	}
-	if v := cfg.Encoders.AVIFSpeed; v < 0 || v > 9 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.avif-speed: must be in [0,9], got %d", v)
-	}
-	if v := cfg.Encoders.PNGCompression; v < 0 || v > 9 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.png-compression-level: must be in [0,9], got %d", v)
-	}
-	if v := cfg.Encoders.JXLEffort; v < 0 || v > 9 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.jxl-effort: must be in [0,9], got %d", v)
-	}
-	if v := cfg.Encoders.PNGPaletteColors; v < 0 || v > 256 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.png-palette-colors: must be in [0,256], got %d", v)
-	}
-	if v := cfg.Encoders.PNGPaletteBitDepth; v < 0 || v > 8 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.png-palette-bit-depth: must be in [0,8], got %d", v)
-	}
-	if v := cfg.Encoders.GIFBitDepth; v < 0 || v > 8 {
-		return LibvipsConfig{}, fmt.Errorf("encoders.gif-bit-depth: must be in [0,8], got %d", v)
-	}
 	// Shrink-on-load: nil (ключ не задан) = включено по умолчанию.
 	if l.ShrinkOnLoad.Enabled.Set {
 		cfg.ShrinkOnLoad = libvips.NewShrinkOnLoadOpts(l.ShrinkOnLoad.Enabled.Value.Unwrap(), true)
@@ -1133,6 +1373,18 @@ func (d DetectionYAML) build() (DetectionConfig, error) {
 		ConfidenceThreshold: 0.5,
 		MaxObjects:          5,
 		Margin:              0.1,
+	}
+	// Fallback по env IMAGER_MODELS_DIR: если путь к модели в YAML не задан,
+	// строим его как <IMAGER_MODELS_DIR>/<имя_файла>. Явный YAML-путь имеет
+	// приоритет. Это позволяет задать только каталог (например в compose) и
+	// не хардкодить имена файлов в конфиге.
+	if mdir := os.Getenv(ModelsDirEnv); mdir != "" {
+		if cfg.FaceModel == "" {
+			cfg.FaceModel = filepath.Join(mdir, "face_detection_yunet_2023mar.onnx")
+		}
+		if cfg.ObjectModel == "" {
+			cfg.ObjectModel = filepath.Join(mdir, "ssd_mobilenet_v1_12.onnx")
+		}
 	}
 	// Set = false (ключ не задан) → дефолт. Явное значение (включая 0)
 	// валидируется.

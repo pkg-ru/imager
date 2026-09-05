@@ -629,63 +629,85 @@ admin:
 	}
 }
 
-// TestParseRuntimeConfigLibvipsEncoders проверяет декодирование секции
-// libvips.encoders (per-format параметры кодировщиков).
+// TestParseRuntimeConfigLibvipsEncoders проверяет декодирование ЕДИНОЙ
+// top-level секции encoders в libvips.EncodersConfig.
 func TestParseRuntimeConfigLibvipsEncoders(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
 policy: {}
-libvips:
-	encoders:
-		webp-reduction-effort: 2
-		avif-speed: 8
-		png-compression-level: 9
-		jxl-effort: 3
-		jpeg-progressive: true
-		png-interlace: true
-		png-palette: true
-		png-palette-colors: 128
-		png-palette-bit-depth: 4
-		gif-bit-depth: 4
+encoders:
+	default-quality: 85
+	jpeg:
+		progressive: true
+	webp:
+		reduction-effort: 2
+	avif:
+		speed: 8
+	jxl:
+		effort: 3
+	png:
+		compression-level: 9
+		interlace: true
+		palette: true
+		palette-colors: 128
+		palette-bit-depth: 4
+	apng:
+		compression-level: 7
+	gif:
+		effort: 5
+		bit-depth: 4
 `, "\t", "  ")))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
 	}
-	e := rc.Libvips.Encoders
-	if e.WebPReductionEffort != 2 {
-		t.Errorf("WebPReductionEffort = %d, want 2", e.WebPReductionEffort)
+	// Default-quality из новой секции.
+	if rc.Encoders.DefaultQuality != 85 {
+		t.Errorf("Encoders.DefaultQuality = %d, want 85", rc.Encoders.DefaultQuality)
 	}
-	if e.AVIFSpeed != 8 {
-		t.Errorf("AVIFSpeed = %d, want 8", e.AVIFSpeed)
+	// Проброс в libvips.EncodersConfig: глобальные параметры из YAML.
+	e := rc.Libvips.EncodersConfig
+	if got := ptrOr(e.Formats["webp"].ReductionEffort, -1); got != 2 {
+		t.Errorf("webp.reduction-effort = %d, want 2", got)
 	}
-	if e.PNGCompression != 9 {
-		t.Errorf("PNGCompression = %d, want 9", e.PNGCompression)
+	if got := ptrOr(e.Formats["avif"].Speed, -1); got != 8 {
+		t.Errorf("avif.speed = %d, want 8", got)
 	}
-	if e.JXLEffort != 3 {
-		t.Errorf("JXLEffort = %d, want 3", e.JXLEffort)
+	if got := ptrOr(e.Formats["png"].CompressionLevel, -1); got != 9 {
+		t.Errorf("png.compression-level = %d, want 9", got)
 	}
-	if !e.JPEGProgressive {
-		t.Error("JPEGProgressive must be true")
+	if got := ptrOr(e.Formats["jxl"].Effort, -1); got != 3 {
+		t.Errorf("jxl.effort = %d, want 3", got)
 	}
-	if !e.PNGInterlace {
-		t.Error("PNGInterlace must be true")
+	if e.Formats["jpeg"].Progressive == nil || !*e.Formats["jpeg"].Progressive {
+		t.Error("jpeg.progressive must be true")
 	}
-	if !e.PNGPalette {
-		t.Error("PNGPalette must be true")
+	if e.Formats["png"].Interlace == nil || !*e.Formats["png"].Interlace {
+		t.Error("png.interlace must be true")
 	}
-	if e.PNGPaletteColors != 128 {
-		t.Errorf("PNGPaletteColors = %d, want 128", e.PNGPaletteColors)
+	if e.Formats["png"].Palette == nil || !*e.Formats["png"].Palette {
+		t.Error("png.palette must be true")
 	}
-	if e.PNGPaletteBitDepth != 4 {
-		t.Errorf("PNGPaletteBitDepth = %d, want 4", e.PNGPaletteBitDepth)
+	if got := ptrOr(e.Formats["png"].PaletteColors, -1); got != 128 {
+		t.Errorf("png.palette-colors = %d, want 128", got)
 	}
-	if e.GIFBitDepth != 4 {
-		t.Errorf("GIFBitDepth = %d, want 4", e.GIFBitDepth)
+	if got := ptrOr(e.Formats["png"].PaletteBitDepth, -1); got != 4 {
+		t.Errorf("png.palette-bit-depth = %d, want 4", got)
+	}
+	if got := ptrOr(e.Formats["gif"].BitDepth, -1); got != 4 {
+		t.Errorf("gif.bit-depth = %d, want 4", got)
+	}
+	if got := ptrOr(e.Formats["gif"].Effort, -1); got != 5 {
+		t.Errorf("gif.effort = %d, want 5", got)
+	}
+	if got := ptrOr(e.Formats["apng"].CompressionLevel, -1); got != 7 {
+		t.Errorf("apng.compression-level = %d, want 7", got)
 	}
 }
 
-// TestParseRuntimeConfigLibvipsEncodersDefaults проверяет дефолты секции
-// libvips.encoders при её отсутствии.
+// TestParseRuntimeConfigLibvipsEncodersDefaults проверяет дефолты ЕДИНОЙ
+// секции encoders при её отсутствии: EncodersConfig.DefaultQuality = 80,
+// группы форматов присутствуют с nil-параметрами (дефолты применяются на
+// этапе разрешения через domain/encoding).
 func TestParseRuntimeConfigLibvipsEncodersDefaults(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(strings.ReplaceAll(`
 version: "1"
@@ -694,11 +716,35 @@ policy: {}
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
 	}
-	e := rc.Libvips.Encoders
-	if e.WebPReductionEffort != 0 || e.AVIFSpeed != 0 || e.PNGCompression != 0 ||
-		e.JXLEffort != 0 || e.JPEGProgressive || e.PNGInterlace || e.PNGPalette ||
-		e.PNGPaletteColors != 0 || e.PNGPaletteBitDepth != 0 || e.GIFBitDepth != 0 {
-		t.Errorf("encoders = %+v, want zero values (= встроенные умолчания движка)", e)
+	// Default-quality: отсутствие в YAML = дефолт кода 80.
+	if rc.Encoders.DefaultQuality != 80 {
+		t.Errorf("Encoders.DefaultQuality = %d, want 80", rc.Encoders.DefaultQuality)
+	}
+	// Без заданных параметров группы форматов содержат только nil — дефолты
+	// применяются на этапе разрешения (domain/encoding.Resolve + автомаппинг).
+	e := rc.Libvips.EncodersConfig
+	if e.DefaultQuality != 80 {
+		t.Errorf("EncodersConfig.DefaultQuality = %d, want 80", e.DefaultQuality)
+	}
+	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "apng", "gif"} {
+		fc, ok := e.Formats[f]
+		if !ok {
+			t.Errorf("EncodersConfig.Formats[%q] missing", f)
+			continue
+		}
+		if fc.Quality != nil || fc.Progressive != nil || fc.ReductionEffort != nil ||
+			fc.Lossless != nil || fc.NearLossless != nil || fc.Speed != nil ||
+			fc.Effort != nil || fc.CompressionLevel != nil || fc.Interlace != nil ||
+			fc.Palette != nil || fc.PaletteColors != nil || fc.PaletteBitDepth != nil ||
+			fc.Dither != nil || fc.BitDepth != nil {
+			t.Errorf("EncodersConfig.Formats[%q] = %+v, want all nil (unset) with empty yaml", f, fc)
+		}
+	}
+	// Все группы форматов присутствуют в формате EncodersConfig.
+	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "apng", "gif"} {
+		if _, ok := rc.Encoders.Formats[f]; !ok {
+			t.Errorf("Encoders.Formats[%q] missing", f)
+		}
 	}
 }
 
@@ -763,30 +809,69 @@ libvips:
 }
 
 // TestParseRuntimeConfigLibvipsEncodersInvalid — fail-fast валидация
-// диапазонов: невалидное значение — ошибка старта, не runtime.
+// диапазонов ЕДИНОЙ секции encoders по реестру domain/encoding: невалидное
+// значение — ошибка старта, не runtime.
 func TestParseRuntimeConfigLibvipsEncodersInvalid(t *testing.T) {
 	cases := []struct {
 		name string
 		yaml string
 	}{
 		{
-			name: "webp effort > 6",
+			name: "default-quality > 100",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 webp-reduction-effort: 7
+encoders:
+	default-quality: 101
 `,
 		},
 		{
-			name: "webp effort negative",
+			name: "default-quality negative",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 webp-reduction-effort: -1
+encoders:
+	default-quality: -5
+`,
+		},
+		{
+			name: "jpeg quality > 100",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	jpeg:
+		quality: 101
+`,
+		},
+		{
+			name: "jpeg quality negative",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	jpeg:
+		quality: -1
+`,
+		},
+		{
+			name: "webp reduction-effort > 6",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	webp:
+		reduction-effort: 7
+`,
+		},
+		{
+			name: "webp reduction-effort negative",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	webp:
+		reduction-effort: -1
 `,
 		},
 		{
@@ -794,9 +879,9 @@ libvips:
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 avif-speed: 10
+encoders:
+	avif:
+		speed: 10
 `,
 		},
 		{
@@ -804,29 +889,29 @@ libvips:
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 avif-speed: -3
+encoders:
+	avif:
+		speed: -3
 `,
 		},
 		{
-			name: "png compression > 9",
+			name: "png compression-level > 9",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-compression-level: 10
+encoders:
+	png:
+		compression-level: 10
 `,
 		},
 		{
-			name: "png compression negative",
+			name: "png compression-level negative",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-compression-level: -1
+encoders:
+	png:
+		compression-level: -1
 `,
 		},
 		{
@@ -834,79 +919,129 @@ libvips:
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 jxl-effort: 10
+encoders:
+	jxl:
+		effort: 10
 `,
 		},
 		{
-			name: "jxl effort negative",
+			name: "jxl effort < 3",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 jxl-effort: -1
+encoders:
+	jxl:
+		effort: 2
 `,
 		},
 		{
-			name: "png palette colors > 256",
+			name: "png palette-colors > 256",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-palette-colors: 257
+encoders:
+	png:
+		palette-colors: 257
 `,
 		},
 		{
-			name: "png palette colors negative",
+			name: "png palette-colors negative",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-palette-colors: -4
+encoders:
+	png:
+		palette-colors: -4
 `,
 		},
 		{
-			name: "png palette bit depth > 8",
+			name: "png palette-bit-depth > 8",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-palette-bit-depth: 16
+encoders:
+	png:
+		palette-bit-depth: 16
 `,
 		},
 		{
-			name: "png palette bit depth negative",
+			name: "png palette-bit-depth negative",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 png-palette-bit-depth: -2
+encoders:
+	png:
+		palette-bit-depth: -2
 `,
 		},
 		{
-			name: "gif bit depth > 8",
+			name: "png dither > 1",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 gif-bit-depth: 9
+encoders:
+	png:
+		dither: 1.5
 `,
 		},
 		{
-			name: "gif bit depth negative",
+			name: "png dither negative",
 			yaml: `
 version: "1"
 policy: {}
-libvips:
-		encoders:
-			 gif-bit-depth: -1
+encoders:
+	png:
+		dither: -0.1
+`,
+		},
+		{
+			name: "gif effort < 1",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	gif:
+		effort: 0
+`,
+		},
+		{
+			name: "gif effort > 10",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	gif:
+		effort: 11
+`,
+		},
+		{
+			name: "gif bit-depth > 8",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	gif:
+		bit-depth: 9
+`,
+		},
+		{
+			name: "gif bit-depth negative",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	gif:
+		bit-depth: -1
+`,
+		},
+		{
+			name: "apng compression-level > 9",
+			yaml: `
+version: "1"
+policy: {}
+encoders:
+	apng:
+		compression-level: 10
 `,
 		},
 	}
@@ -920,17 +1055,17 @@ libvips:
 }
 
 // TestParseRuntimeConfigLibvipsEncodersUnknownField — strict-декодирование:
-// неизвестный ключ в libvips.encoders — ошибка старта.
+// неизвестный ключ в top-level секции encoders — ошибка старта.
 func TestParseRuntimeConfigLibvipsEncodersUnknownField(t *testing.T) {
 	yaml := `
 version: "1"
 policy: {}
-libvips:
-  encoders:
-    jpeg-quality: 90
+encoders:
+  bogus-format:
+    quality: 90
 `
 	if _, err := ParseRuntimeConfig([]byte(yaml)); err == nil {
-		t.Fatal("expected error for unknown libvips.encoders.jpeg-quality field")
+		t.Fatal("expected error for unknown encoders.bogus-format field")
 	}
 }
 
@@ -1153,4 +1288,13 @@ libvips: {}
 	if !rc.Libvips.OperationCache.Enabled() {
 		t.Error("absent operation-cache must default to enabled")
 	}
+}
+
+// ptrOr — значение указателя или дефолт (хелпер тестов для
+// libvips.FormatEncodersConfig).
+func ptrOr(v *int, def int) int {
+	if v == nil {
+		return def
+	}
+	return *v
 }

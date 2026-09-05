@@ -116,7 +116,7 @@ func TestPresetResolveDPRConflict(t *testing.T) {
 // пресета имеет приоритет над @dpr в имени.
 func TestPresetResolveDPRFieldPriority(t *testing.T) {
 	// Пресет "thumb@2" с полем dpr=3: применяется dpr=3.
-	p, err := NewPreset("thumb@2", TransformCrop, mustSize(t, "240x160"), []Format{mustFormat(t, "webp")}, DPR(3), true, 0, 0, 0, nil)
+	p, err := NewPreset("thumb@2", TransformCrop, mustSize(t, "240x160"), []Format{mustFormat(t, "webp")}, DPR(3), true, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestPresetResolveDPRFieldPriority(t *testing.T) {
 // пресета пробрасываются в результирующий запрос.
 func TestPresetResolveProcessingOptions(t *testing.T) {
 	loop := true
-	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 80, 10, 5000, &loop)
+	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 80, 10, 5000, &loop, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -269,7 +269,7 @@ func mustNewPresetFormats(t *testing.T, name string, tr Transform, size string, 
 	for _, f := range outFmts {
 		formats = append(formats, mustFormat(t, f))
 	}
-	p, err := NewPreset(name, tr, mustSize(t, size), formats, 0, false, 0, 0, 0, nil)
+	p, err := NewPreset(name, tr, mustSize(t, size), formats, 0, false, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestPresetResolveNoOrientation(t *testing.T) {
 // TestPresetDPRSet проверяет различение «dpr не задан» от «dpr: 0/1».
 func TestPresetDPRSet(t *testing.T) {
 	// dpr не задан: DPRSet=false, DPR=0.
-	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil)
+	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestPresetDPRSet(t *testing.T) {
 		t.Errorf("expected dpr not set, got DPRSet=%v DPR=%d", p.DPRSet(), p.DPR())
 	}
 	// dpr: 0 задан явно: DPRSet=true, DPR=0.
-	p2, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, true, 0, 0, 0, nil)
+	p2, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, true, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -387,11 +387,54 @@ func TestPresetDPRSet(t *testing.T) {
 		t.Errorf("expected dpr set to 0, got DPRSet=%v DPR=%d", p2.DPRSet(), p2.DPR())
 	}
 	// dpr: 2 задан явно.
-	p3, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 2, true, 0, 0, 0, nil)
+	p3, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 2, true, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
 	if !p3.DPRSet() || p3.DPR() != 2 {
 		t.Errorf("expected dpr set to 2, got DPRSet=%v DPR=%d", p3.DPRSet(), p3.DPR())
+	}
+}
+
+// TestPresetEncodingOverridesPropagation проверяет, что native overrides
+// пресета пробрасываются через Resolve в канонический запрос.
+func TestPresetEncodingOverridesPropagation(t *testing.T) {
+	over := map[string]map[string]any{
+		"webp": {"quality": 90, "reduction-effort": 6},
+		"png":  {"compression-level": 9},
+	}
+	p, err := NewPreset("thumb", TransformCrop, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 85, 0, 0, nil, over)
+	if err != nil {
+		t.Fatalf("NewPreset: %v", err)
+	}
+	if got := p.EncodingOverrides(); len(got["webp"]) != 2 || len(got["png"]) != 1 {
+		t.Fatalf("EncodingOverrides() = %v, want webp[quality,reduction-effort]+png[compression-level]", got)
+	}
+	set, err := NewPresetSet([]*Preset{p})
+	if err != nil {
+		t.Fatalf("NewPresetSet: %v", err)
+	}
+	req, err := Parse("/photos/photo-1-jpg/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := set.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got := resolved.EncodingOverrides()
+	if got == nil {
+		t.Fatal("resolved.EncodingOverrides() = nil, want propagated overrides")
+	}
+	if got["webp"]["quality"] != 90 || got["webp"]["reduction-effort"] != 6 {
+		t.Errorf("webp overrides = %v, want quality=90, reduction-effort=6", got["webp"])
+	}
+	if got["png"]["compression-level"] != 9 {
+		t.Errorf("png overrides = %v, want compression-level=9", got["png"])
+	}
+	// Иммутабельность: внешняя модификация не влияет на пресет.
+	over["webp"]["quality"] = 1
+	if p.EncodingOverrides()["webp"]["quality"] != 90 {
+		t.Error("Preset.EncodingOverrides() mutated by external map modification")
 	}
 }

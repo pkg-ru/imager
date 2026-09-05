@@ -13,3 +13,10 @@ imager.exe
 # Логи и временные файлы
 *.log
 *.tmp
+
+# Модели (ONNX и тестовые изображения) не попадают в образ: при старте
+# контейнера entrypoint скачивает их в смонтированный rw-каталог
+# (docker-compose: ./models:/etc/imager/models:rw).
+models
+docker/*.tmp*
+docker/*.log

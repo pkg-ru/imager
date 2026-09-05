@@ -6,6 +6,7 @@ import (
 
 	"github.com/pkg-ru/dynamic"
 	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/encoding"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
@@ -62,6 +63,27 @@ type PathPolicyConfig struct {
 // не применять). Комбинация crop+trim кодируется в transform код:
 // при trim=true — "t"/"ct"/"sct"/"fct"/"oct", иначе — ""/"c"/"sc"/"fc"/"oc".
 // Фактическое применение — сначала trim, затем кроп.
+// PresetConfig — конфигурация пресета/custom.
+//
+// Native-параметры форматов задаются ПЛОСКО, на одном уровне с quality:
+// ключ = "{формат}-{параметр}" (kebab-case), где {параметр} — ключ реестра
+// domain/encoding без префикса. Имена нативных параметров уникальны между
+// форматами, поэтому вложенные группы не требуются. Пример:
+//
+//	presets:
+//	  thumb:
+//	    width: 200
+//	    quality: 85
+//	    png-compression-level: 9   # native override PNG
+//	    webp-reduction-effort: 6   # native override WebP
+//	    webp-quality: 90           # per-format quality override WebP
+//
+// Per-format quality (jpeg-quality/webp-quality/avif-quality/heif-quality/
+// jxl-quality) допустим только для lossy-форматов и переопределяет скалярный
+// quality для этого формата. Lossless-форматам (png/apng/gif) quality-ключи
+// формата НЕ задаются (png-quality и т.п. отсутствуют в структуре — их
+// задание даёт неизвестное поле при строгом парсинге). Указатели отличают
+// «не задано» от нулевого значения.
 type PresetConfig struct {
 	Width         dynamic.Uint32                   `yaml:"width"`
 	Height        dynamic.Uint32                   `yaml:"height"`
@@ -77,6 +99,40 @@ type PresetConfig struct {
 	AutoOrient    dynamic.Nullable[dynamic.Bool]   `yaml:"auto-orient"`
 	Rotate        dynamic.String                   `yaml:"rotate"`
 	Flip          dynamic.String                   `yaml:"flip"`
+
+	// Native-параметры форматов (плоские, kebab-case; nil = не задан).
+	// JPEG.
+	JPEGQuality     *int  `yaml:"jpeg-quality"`
+	JPEGProgressive *bool `yaml:"jpeg-progressive"`
+	// WebP.
+	WebPQuality         *int  `yaml:"webp-quality"`
+	WebPReductionEffort *int  `yaml:"webp-reduction-effort"`
+	WebPLossless        *bool `yaml:"webp-lossless"`
+	WebPNearLossless    *bool `yaml:"webp-near-lossless"`
+	// AVIF.
+	AVIFQuality  *int  `yaml:"avif-quality"`
+	AVIFSpeed    *int  `yaml:"avif-speed"`
+	AVIFLossless *bool `yaml:"avif-lossless"`
+	// HEIF.
+	HEIFQuality *int `yaml:"heif-quality"`
+	// JPEG XL.
+	JXLQuality  *int  `yaml:"jxl-quality"`
+	JXLEffort   *int  `yaml:"jxl-effort"`
+	JXLLossless *bool `yaml:"jxl-lossless"`
+	// PNG (lossless: quality только из скаляра).
+	PNGCompressionLevel *int     `yaml:"png-compression-level"`
+	PNGInterlace        *bool    `yaml:"png-interlace"`
+	PNGPalette          *bool    `yaml:"png-palette"`
+	PNGPaletteColors    *int     `yaml:"png-palette-colors"`
+	PNGPaletteBitDepth  *int     `yaml:"png-palette-bit-depth"`
+	PNGDither           *float64 `yaml:"png-dither"`
+	// APNG (lossless: quality только из скаляра).
+	APNGCompressionLevel *int  `yaml:"apng-compression-level"`
+	APNGInterlace        *bool `yaml:"apng-interlace"`
+	// GIF (lossless: quality только из скаляра).
+	GIFEffort   *int     `yaml:"gif-effort"`
+	GIFBitDepth *int     `yaml:"gif-bit-depth"`
+	GIFDither   *float64 `yaml:"gif-dither"`
 }
 
 // ValidationError описывает ошибку валидации конфигурации с путём к полю.
@@ -287,6 +343,14 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 	if _, err := processing.ParseFlip(flip); err != nil {
 		*errs = append(*errs, &ValidationError{Path: base + ".flip", Reason: err.Error()})
 	}
+
+	// Native-параметры кодирования (плоские ключи "<формат>-<параметр>"):
+	// собираются в overrides и валидируются по реестру domain/encoding
+	// (известный формат/параметр, диапазон, per-format quality только для
+	// lossy-форматов). Ошибки — fail-fast на этапе ValidateConfig.
+	if _, err := encodingOverridesFromConfig(p); err != nil {
+		*errs = append(*errs, &ValidationError{Path: base, Reason: err.Error()})
+	}
 }
 
 // validateNameDPR проверяет соответствие фиксированного @N-суффикса имени
@@ -446,6 +510,10 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 		return nil, err
 	}
 	dpr, dprSet := dprFromConfig(cfg.DPR)
+	encOverrides, err := encodingOverridesFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("preset %q: %w", name, err)
+	}
 	preset, err := asset.NewPreset(
 		name,
 		transformFromCropTrim(cfg.Crop.Unwrap(), cfg.Trim.Unwrap()),
@@ -457,6 +525,7 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 		int(cfg.Frames.Unwrap()),
 		int(cfg.Duration.Unwrap()),
 		loopFromConfig(cfg.Loop),
+		encOverrides,
 	)
 	if err != nil {
 		return nil, err
@@ -472,6 +541,110 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 	return preset, nil
 }
 
+// encodingOverridesFromConfig собирает map[формат]map[нативный ключ]значение
+// из плоских нативных полей PresetConfig. Формат в карте — каноническое имя
+// реестра (jpeg/webp/avif/heif/jxl/png/apng/gif). Возвращает nil, если ни
+// одного нативного поля не задано.
+//
+// Ключи внутри формата — реестровые имена БЕЗ префикса (compression-level,
+// reduction-effort, ...): они совпадают с ожиданиями encoding.Resolve.
+// per-format quality (jpeg-quality и т.п.) ложится под ключом "quality".
+func encodingOverridesFromConfig(cfg PresetConfig) (map[string]map[string]any, error) {
+	type setup struct {
+		format string
+		params map[string]any
+	}
+	var out map[string]map[string]any
+	put := func(s setup) {
+		if len(s.params) == 0 {
+			return
+		}
+		if out == nil {
+			out = make(map[string]map[string]any)
+		}
+		out[s.format] = s.params
+	}
+	intPtr := func(p *int) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	boolPtr := func(p *bool) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	floatPtr := func(p *float64) any {
+		if p == nil {
+			return nil
+		}
+		return *p
+	}
+	fill := func(m map[string]any, k string, v any) {
+		if v != nil {
+			m[k] = v
+		}
+	}
+
+	// Канонические имена реестра без префикса формата (см. domain/encoding).
+	jpeg := map[string]any{}
+	fill(jpeg, "quality", intPtr(cfg.JPEGQuality))
+	fill(jpeg, "progressive", boolPtr(cfg.JPEGProgressive))
+	put(setup{"jpeg", jpeg})
+
+	webp := map[string]any{}
+	fill(webp, "quality", intPtr(cfg.WebPQuality))
+	fill(webp, "reduction-effort", intPtr(cfg.WebPReductionEffort))
+	fill(webp, "lossless", boolPtr(cfg.WebPLossless))
+	fill(webp, "near-lossless", boolPtr(cfg.WebPNearLossless))
+	put(setup{"webp", webp})
+
+	avif := map[string]any{}
+	fill(avif, "quality", intPtr(cfg.AVIFQuality))
+	fill(avif, "speed", intPtr(cfg.AVIFSpeed))
+	fill(avif, "lossless", boolPtr(cfg.AVIFLossless))
+	put(setup{"avif", avif})
+
+	heif := map[string]any{}
+	fill(heif, "quality", intPtr(cfg.HEIFQuality))
+	put(setup{"heif", heif})
+
+	jxl := map[string]any{}
+	fill(jxl, "quality", intPtr(cfg.JXLQuality))
+	fill(jxl, "effort", intPtr(cfg.JXLEffort))
+	fill(jxl, "lossless", boolPtr(cfg.JXLLossless))
+	put(setup{"jxl", jxl})
+
+	png := map[string]any{}
+	fill(png, "compression-level", intPtr(cfg.PNGCompressionLevel))
+	fill(png, "interlace", boolPtr(cfg.PNGInterlace))
+	fill(png, "palette", boolPtr(cfg.PNGPalette))
+	fill(png, "palette-colors", intPtr(cfg.PNGPaletteColors))
+	fill(png, "palette-bit-depth", intPtr(cfg.PNGPaletteBitDepth))
+	fill(png, "dither", floatPtr(cfg.PNGDither))
+	put(setup{"png", png})
+
+	apng := map[string]any{}
+	fill(apng, "compression-level", intPtr(cfg.APNGCompressionLevel))
+	fill(apng, "interlace", boolPtr(cfg.APNGInterlace))
+	put(setup{"apng", apng})
+
+	gif := map[string]any{}
+	fill(gif, "effort", intPtr(cfg.GIFEffort))
+	fill(gif, "bit-depth", intPtr(cfg.GIFBitDepth))
+	fill(gif, "dither", floatPtr(cfg.GIFDither))
+	put(setup{"gif", gif})
+
+	for format, params := range out {
+		if err := encoding.ValidateOverrides(format, params); err != nil {
+			return nil, fmt.Errorf("%s: %w", format, err)
+		}
+	}
+	return out, nil
+}
+
 // compileCustom собирает asset.Preset из custom-настройки. Имя custom = ключ
 // (размер-грамматика, опционально с @dpr). Размер из имени, если width/height
 // не заданы в настройках.
@@ -485,6 +658,10 @@ func compileCustom(name string, cfg PresetConfig, resolveWM func(string, string)
 		return nil, err
 	}
 	dpr, dprSet := dprFromConfig(cfg.DPR)
+	encOverrides, err := encodingOverridesFromConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("custom %q: %w", name, err)
+	}
 	preset, err := asset.NewPreset(
 		name,
 		transformFromCropTrim(cfg.Crop.Unwrap(), cfg.Trim.Unwrap()),
@@ -496,6 +673,7 @@ func compileCustom(name string, cfg PresetConfig, resolveWM func(string, string)
 		int(cfg.Frames.Unwrap()),
 		int(cfg.Duration.Unwrap()),
 		loopFromConfig(cfg.Loop),
+		encOverrides,
 	)
 	if err != nil {
 		return nil, err

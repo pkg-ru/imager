@@ -105,12 +105,21 @@ func TestOnnxDetectorRuntimeLibOption(t *testing.T) {
 // ── Реальный инференс (требует libonnxruntime + модели в models/) ──────────
 
 // realModelsPaths возвращает (yunetPath, ssdPath, imgPath, ok) для тестов
-// реального инференса: модели и тестовое изображение из каталога models/.
+// реального инференса: модели и тестовое изображение из каталога моделей.
 // ok=false, если файлы отсутствуют — тесты пропускаются.
+//
+// Каталог можно задать через env IMAGER_MODELS_DIR (как в Docker/compose,
+// см. models/README.md); иначе — стандартные кандидаты: локальный ./models
+// и смонтированный /etc/imager/models.
 func realModelsPaths() (yunet, ssd, img string, ok bool) {
-	candidates := []string{
-		"../../../models/face_detection_yunet_2023mar.onnx",
-		"/etc/imager/models/face_detection_yunet_2023mar.onnx",
+	var candidates []string
+	if dir := os.Getenv("IMAGER_MODELS_DIR"); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, "face_detection_yunet_2023mar.onnx"))
+	} else {
+		candidates = []string{
+			"../../../models/face_detection_yunet_2023mar.onnx",
+			"/etc/imager/models/face_detection_yunet_2023mar.onnx",
+		}
 	}
 	for _, c := range candidates {
 		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {

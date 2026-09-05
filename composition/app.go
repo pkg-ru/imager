@@ -57,6 +57,9 @@ type AppOptions struct {
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
+	// DefaultQuality — качество сжатия по умолчанию [1,100] (encoders.
+	// default-quality из runtime config). 0 = дефолт кода 80.
+	DefaultQuality int
 
 	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset
 	MetadataEnabled bool
@@ -214,7 +217,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Presets:                  compiled.Presets,
 		Buffers:                  buffers,
 		Limits:                   &opt.Limits,
-		Quality:                  int(compiled.DefaultQuality),
+		Quality:                  opt.DefaultQuality,
 		DefaultWatermark:         compiled.DefaultWatermark,
 		DefaultOrientation:       compiled.DefaultOrientation,
 		DefaultTrim:              compiled.DefaultTrim,

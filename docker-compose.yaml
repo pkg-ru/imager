@@ -43,20 +43,31 @@ services:
     ports:
       - "8080:8080"
 
-    # Конфиг монтируется :ro в ОТДЕЛЬНЫЙ каталог /etc/imager/config (нельзя
-    # монтировать ./config в /etc/imager — перекроет /etc/imager/models из
-    # образа). Модели ./models — отдельно в /etc/imager/models, чтобы обновлять
-    # их без пересборки образа (в Dockerfile также запечены копии).
     volumes:
-      - ./config:/etc/imager/config:ro
-      - ./models:/etc/imager/models:ro
+      # Модели монтируются RW: при старте контейнера entrypoint сам скачивает
+      # модели (docker/download-models.sh) в ./models, поэтому файлы сохраняются
+      # на хосте и при следующем запуске не перекачиваются. Хост-каталог ./models
+      # должен быть доступен на запись uid 10001 (imager) — например chmod -R a+rwX ./models.
+      - ./setting:/etc/imager/setting:ro
+      - ./models:/etc/imager/models:rw
       - ./data/source:/data/source:ro
       - ./data/result:/data/result:rw
 
     environment:
-      # Единственная env-переменная: путь к каталогу с настройками;
-      # остальное — в YAML (setting.yaml / setting-local.yaml).
-      IMAGER_CONFIG_DIR: /etc/imager/config
+      # Путь к каталогу с настройками (обязательный).
+      IMAGER_CONFIG_DIR: /etc/imager/setting
+      # Каталог с ONNX-моделями, смонтированный из ./models (rw). Используется
+      # как каталог автоскачивания (entrypoint) и fallback для
+      # detection.face-model / detection.object-model в конфиге: если путь в YAML
+      # не задан, он строится как <IMAGER_MODELS_DIR>/<имя_модели>. Явное
+      # значение в YAML имеет приоритет. Подробнее: models/README.md.
+      IMAGER_MODELS_DIR: /etc/imager/models
+      # Источники моделей для автоскачивания при старте (опционально,
+      # по умолчанию — официальные OpenCV Zoo / ONNX Model Zoo). Полезно для
+      # приватных зеркал или локальных HTTP-кэшей.
+      # IMAGER_MODEL_FACE_URL: https://...
+      # IMAGER_MODEL_OBJECT_URL: https://...
+      # IMAGER_SKIP_MODELS: "0"   # "1" — отключить скачивание (offline)
 
     networks:
       - default

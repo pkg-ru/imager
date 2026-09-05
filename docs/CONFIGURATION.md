@@ -1,20 +1,26 @@
 # Конфигурация
 
-Все настройки задаются в YAML. Прикладных env-переменных и CLI-флагов нет.
+Все настройки задаются в YAML. CLI-флагов нет; допускается несколько
+прикладных env-переменных (см. таблицы ниже и секцию `detection`).
 
 ## Загрузка конфигурации
 
-Единственная переменная окружения:
+Прикладные env-переменные:
 
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
 | `IMAGER_CONFIG_DIR` | `.` | Каталог с файлами конфигурации |
+| `IMAGER_MODELS_DIR` | пусто | Каталог с ONNX-моделями: **и** каталог автоскачивания (entrypoint, см. `docker/entrypoint.sh`), **и** fallback для пустых `detection.face-model`/`object-model` (пути строятся как `<dir>/<имя_файла>`) |
+| `IMAGER_MODEL_FACE_URL` | OpenCV Zoo | URL модели YuNet (лица) для автоскачивания (`docker/download-models.sh`); переопределение полезно для приватных зеркал |
+| `IMAGER_MODEL_OBJECT_URL` | ONNX Model Zoo | URL модели SSD MobileNet v1 (объекты) для автоскачивания |
+| `IMAGER_MODEL_SELFIE_URL` | пусто | URL тестового изображения `selfie.jpg`; скачивается только при задании (нужно лишь для тестов реального инференса, в prod не требуется) |
+| `IMAGER_SKIP_MODELS` | `0` | `1` — полностью отключить автоскачивание моделей (offline-режим) |
 
 Конфигурация разделена на **три слоя**, каждый из которых состоит из пары файлов «base + local»:
 
 | Слой | Файлы | Назначение | Частота изменений |
 |------|-------|-----------|-------------------|
-| **setting** (фундамент) | `setting.yaml` + `setting-local.yaml` | Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, подключения к стораджам, observability/logging, serve-original, безопасность, admin | Редко |
+| **setting** (фундамент) | `server.yaml` + `server-local.yaml` | Инфраструктура сервера: HTTP-порт/таймауты, пути хранения, подключения к стораджам, observability/logging, serve-original, безопасность, admin | Редко |
 | **generate** (генерация) | `generate.yaml` + `generate-local.yaml` | Настройки генерации ассетов: пресеты, policy, форматы/энкодеры, ресайз, watermark, orientation, trim, color, detection | Часто |
 | **failback** (резервы) | `failback.yaml` + `failback-local.yaml` | Резервные/необязательные fallback-механизмы: not-found, source-fallback | Почти никогда |
 
@@ -29,10 +35,10 @@
 
 **Обязательность файлов:**
 
-- `setting.yaml` — **обязателен**; отсутствие или невалидность останавливает старт.
-- `setting-local.yaml`, `generate.yaml`, `generate-local.yaml`, `failback.yaml`, `failback-local.yaml` — **опциональны**; их отсутствие — нормальная ситуация (значения берутся из умолчаний схемы или из `setting.yaml`).
+- `server.yaml` — **обязателен**; отсутствие или невалидность останавливает старт.
+- `server-local.yaml`, `generate.yaml`, `generate-local.yaml`, `failback.yaml`, `failback-local.yaml` — **опциональны**; их отсутствие — нормальная ситуация (значения берутся из умолчаний схемы или из `server.yaml`).
 
-**Ключ `version`** (актуальна `"1"`): обязателен только в `setting.yaml`. В `generate.yaml` / `failback.yaml` опционален; если присутствует — должен равняться `"1"`, иначе ошибка старта (защита от рассинхронизации версий слоёв).
+**Ключ `version`** (актуальна `"1"`): обязателен только в `server.yaml`. В `generate.yaml` / `failback.yaml` опционален; если присутствует — должен равняться `"1"`, иначе ошибка старта (защита от рассинхронизации версий слоёв).
 
 Секреты (пароли, ключи S3/SFTP, `admin.token`) рекомендуется размещать в `*-local.yaml` (не коммитятся, см. `.gitignore`). Для S3 также доступны env `IMAGER_S3_ACCESS_KEY` / `IMAGER_S3_SECRET_KEY`.
 
@@ -40,31 +46,32 @@
 
 | Секция | Слой | Файл |
 |--------|------|------|
-| `version` | setting | `setting.yaml` |
-| `server` | setting | `setting.yaml` |
-| `http.allowed-origins`, `allow-credentials`, `cache-control`, `referrer-policy`, `csp`, `max-url-len`, `generate-timeout`, `max-concurrent-requests` | setting | `setting.yaml` |
-| `http.serve-original` | setting | `setting.yaml` |
+| `version` | setting | `server.yaml` |
+| `server` | setting | `server.yaml` |
+| `http.allowed-origins`, `allow-credentials`, `cache-control`, `referrer-policy`, `csp`, `max-url-len`, `generate-timeout`, `max-concurrent-requests` | setting | `server.yaml` |
+| `http.serve-original` | setting | `server.yaml` |
 | `http.not-found`, `not-found-cache-control`, `source-fallback` | failback | `failback.yaml` |
-| `source`, `result` | setting | `setting.yaml` |
-| `libvips.limits`, `libvips.operation-cache`, `libvips.metrics-interval` | setting | `setting.yaml` |
-| `libvips.encoders`, `shrink-on-load`, `color`, `watermark-cache`, `detection` | generate | `generate.yaml` |
-| `metadata` | setting | `setting.yaml` |
-| `application.buffer-max-bytes` | setting | `setting.yaml` |
-| `application.limits` | setting + generate | `setting.yaml` (дефолт для всех слоёв) / `generate.yaml` (переопределение) |
-| `observability` | setting | `setting.yaml` |
-| `admin` | setting | `setting.yaml` |
+| `source`, `result` | setting | `server.yaml` |
+| `libvips.limits`, `libvips.operation-cache`, `libvips.metrics-interval` | setting | `server.yaml` |
+| `encoders` (единая top-level секция кодирования) | setting | `server.yaml` |
+| `shrink-on-load`, `color`, `watermark-cache`, `detection` (внутри `libvips`) | generate | `generate.yaml` |
+| `metadata` | setting | `server.yaml` |
+| `application.buffer-max-bytes` | setting | `server.yaml` |
+| `application.limits` | setting + generate | `server.yaml` (дефолт для всех слоёв) / `generate.yaml` (переопределение) |
+| `observability` | setting | `server.yaml` |
+| `admin` | setting | `server.yaml` |
 | `policy` (presets, path-policies, learning-mode) | generate | `generate.yaml` |
 | `watermarks` | generate | `generate.yaml` |
 | `processing` | generate | `generate.yaml` |
 | `detection` | generate | `generate.yaml` |
 
-> Секция `http` — единственная, чьи подсекции расходятся по слоям: транспортные/security-ключи и `serve-original` живут в `setting.yaml`, а fallback-подсекции (`not-found`, `not-found-cache-control`, `source-fallback`) — в `failback.yaml`. Благодаря deep merge подсекции одного top-level ключа из разных файлов корректно объединяются.
+> Секция `http` — единственная, чьи подсекции расходятся по слоям: транспортные/security-ключи и `serve-original` живут в `server.yaml`, а fallback-подсекции (`not-found`, `not-found-cache-control`, `source-fallback`) — в `failback.yaml`. Благодаря deep merge подсекции одного top-level ключа из разных файлов корректно объединяются.
 
-Полные самодокументированные примеры — [`config/setting.yaml`](../config/setting.yaml), [`config/generate.yaml`](../config/generate.yaml), [`config/failback.yaml`](../config/failback.yaml); локальные переопределения — [`config/setting-local.yaml`](../config/setting-local.yaml), [`config/generate-local.yaml`](../config/generate-local.yaml), [`config/failback-local.yaml`](../config/failback-local.yaml).
+Полные самодокументированные примеры — [`setting/server.yaml`](../setting/server.yaml), [`setting/generate.yaml`](../setting/generate.yaml), [`setting/failback.yaml`](../setting/failback.yaml); локальные переопределения — [`setting/server-local.yaml`](../setting/server-local.yaml), [`setting/generate-local.yaml`](../setting/generate-local.yaml), [`setting/failback-local.yaml`](../setting/failback-local.yaml).
 
 ## Обратная совместимость
 
-Старый монолитный `setting.yaml`, содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `setting.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог.
+Старый монолитный `server.yaml` (ранее `setting.yaml`), содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `server.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог.
 
 > **Исключение — новая policy-грамматика.** Старые ключи `policy.global` (`authorization`, `allowed-presets`, `size-rules`, `limits`), `policy.presets[].size` (вместо `width`/`height`), строковый `output-formats` и slice-формат `presets`/`watermarks` (список с полем `name`; вместо него — map, где имя = ключ) больше **не поддерживаются**: strict-декодирование отклоняет их как неизвестные поля. При миграции перепишите policy-секцию по новому формату (см. [policy](#policy)) и перенесите лимиты в `application.limits`.
 
@@ -187,7 +194,7 @@ Deny-by-default политика. Всё запрещено, кроме явно
 | `dpr` | uint32 | ключ отсутствует | Множитель плотности пикселей. Имя с суффиксом `@N` — поле ОБЯЗАТЕЛЬНО и равно `N`. Имя без суффикса: не задан = wildcard-режим (`P.webp`, `P@2.webp`, `P@3.webp` допустимы в URL), `1` = фиксированный множитель (`@dpr` в URL запрещён), `2`/`3` = ошибка конфигурации. Подробнее — [правила dpr](#правила-dpr) |
 | `crop` | string | `""` | `""`=resize, `center`=crop, `smart`=smart-crop, `face`=face-crop, `object`=object-crop |
 | `trim` | bool | `false` | Обрезка однотонных полей. `crop`+`trim` — независимые фильтры: применяется сначала trim, затем кроп. Transform-код в URL не кодируется |
-| `quality` | uint32 | `0` | 0–100; 0 = `processing.default-quality` |
+| `quality` | uint32 | `0` | 0–100; 0 = `encoders.default-quality` (см. [encoders](#encoders)); для lossy-форматов передаётся кодеру как качество потери, для lossless (png/apng/gif) управляет только усилием упаковки/палитрой |
 | `frames` | uint32 | `0` | Максимум кадров анимации; 0 = без ограничения |
 | `duration` | uint32 | `0` | Максимум длительности анимации (мс); 0 = без ограничения |
 | `loop` | bool* | nil | nil = `processing.default-loop`; true = бесконечная анимация |
@@ -219,6 +226,46 @@ presets:
     output-formats: [jpeg]
     dpr: 1
 ```
+
+#### Нативные ключи кодеков в пресетах
+
+Помимо скалярного `quality`, пресет/custom может содержать **плоские нативные ключи** вида `<формат>-<параметр>` — имена параметров реестра `domain/encoding` с префиксом формата. Заданный ключ — **explicit override**: он отменяет автомаппинг от quality (и переопределяет глобальное значение секции `encoders`) ровно для этого параметра.
+
+| Ключ | Формат | Тип/диапазон | Авто* | Описание |
+|------|--------|--------------|-------|----------|
+| `jpeg-quality` | jpeg | int `[1,100]` | — | Per-format quality (lossy), переопределяет скалярный `quality` для jpeg |
+| `jpeg-progressive` | jpeg | bool | — | Прогрессивный (interlaced) JPEG; `false` = baseline |
+| `webp-quality` | webp | int `[1,100]` | — | Per-format quality (lossy) |
+| `webp-reduction-effort` | webp | int `[0,6]` | ✅ | Reduction effort WebP: больше = лучше сжатие, медленнее |
+| `webp-lossless` | webp | bool | — | Lossless-режим WebP |
+| `webp-near-lossless` | webp | bool | — | Near-lossless WebP |
+| `avif-quality` | avif | int `[1,100]` | — | Per-format quality (lossy) |
+| `avif-speed` | avif | int `[0,9]` | ✅ | Speed AVIF (инверсия: меньше = медленнее, лучше сжатие); `0` валиден |
+| `avif-lossless` | avif | bool | — | Lossless-режим AVIF |
+| `heif-quality` | heif | int `[1,100]` | — | Per-format quality (lossy) |
+| `jxl-quality` | jxl | int `[1,100]` | — | Per-format quality (lossy) |
+| `jxl-effort` | jxl | int `[3,9]` | ✅ | Effort JPEG XL: больше = лучше сжатие, медленнее |
+| `jxl-lossless` | jxl | bool | — | Lossless-режим JPEG XL |
+| `png-compression-level` | png | int `[1,9]` | ✅ | Уровень сжатия PNG (применяется и к APNG при apng-экспорте — формат выбирает свой ключ) |
+| `png-interlace` | png | bool | — | Чересстрочный (Adam7) PNG |
+| `png-palette` | png | bool | ✅ | Палитровый (quantized) экспорт |
+| `png-palette-colors` | png | int `[2,256]` | ✅ | Максимум цветов палитры |
+| `png-palette-bit-depth` | png | int `[1,8]` | ✅ | Битность палитры (снап к 1/2/4/8) |
+| `png-dither` | png | float `[0,1]` | — | Дизеринг палитрового PNG (дефолт 1.0) |
+| `apng-compression-level` | apng | int `[1,9]` | ✅ | Уровень сжатия APNG |
+| `apng-interlace` | apng | bool | — | Чересстрочный APNG |
+| `gif-effort` | gif | int `[1,10]` | ✅ | Effort GIF (дефолт libvips 7) |
+| `gif-bit-depth` | gif | int `[1,8]` | — | Битность палитры GIF (дефолт 8) |
+| `gif-dither` | gif | float `[0,1]` | — | Дизеринг палитры GIF (дефолт 1.0) |
+
+\* **Авто** — параметр участвует в якорном автомаппинге от `quality`, когда он **не задан** ни в пресете, ни глобально в `encoders` (см. [encoders](#encoders)).
+
+Семантика:
+
+- **Explicit override отменяет автомаппинг**: заданный нативный ключ применяется как есть (с валидацией диапазона при старте — fail-fast); якорная формула от quality для этого параметра не вызывается.
+- **Per-format quality** (`webp-quality` и т.п.) — только для **lossy-форматов** (jpeg/webp/avif/heif/jxl): переопределяет скалярный `quality` именно для этого формата. Для **lossless-форматов** (png/apng/gif) задание quality-ключа формата (`png-quality` и т.п.) — **ошибка конфигурации**: их упаковка управляется только скалярным `quality`.
+- **Скалярный `quality`** (0–100): применяется к выходному качеству для всех lossy-форматов пресета; для lossless-форматов потерь не вводит — влияет только на усилие упаковки (compression-level/effort) и палитровую автоматику.
+- Все ключи сверяются с реестром `domain/encoding`: неизвестный ключ, ключ чужого формата или значение вне диапазона — ошибка старта.
 
 ### policy.path-policies
 
@@ -340,7 +387,6 @@ watermarks:
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `default-quality` | int | — | Качество по умолчанию (0–100) для lossy-форматов, когда quality не задан |
 | `default-loop` | bool* | `true` | Зацикливание анимаций GIF/WebP/APNG/HEIF по умолчанию |
 | `default-watermark` | string | пусто | Водяной знак по умолчанию (имя из `watermarks`) |
 | `default-auto-orient` | bool* | `true` | Автоповорот по EXIF Orientation |
@@ -357,6 +403,109 @@ watermarks:
 Порядок применения ориентации: auto-orient → rotate → flip, затем resize/crop/trim.
 
 **Видео-источники** (`mp4`, `webm`, `mov`, `mkv`, `avi`, `m4v`): ассет строится из **одного кадра** видео, извлечённого через ffmpeg (видео процессоры не декодируют). Кадр сохраняется в result как `<видео-ключ>/x.jpg` и фиксируется в метаданных — следующие запросы используют сохранённый кадр, видео не открывается. При недостаточной контрастности кадра (`default-video-min-contrast`) поиск идёт с шагом `default-video-frame-step`, максимум `default-video-attempts` попыток.
+
+## encoders
+
+Единая **top-level** секция настроек кодирования — заменила старые `processing.default-quality` и `libvips.encoders.*` (удалены полностью, без совместимости; любой из них — ошибка старта). Живёт в `server.yaml`; переопределения возможны через `*-local.yaml` и более специализированные слои (deep merge).
+
+Структура: `default-quality` + именованные группы форматов (`jpeg`, `webp`, `avif`, `heif`, `jxl`, `png`, `apng`, `gif`) с нативными параметрами реестра `domain/encoding`. Эффективные параметры **каждого экспорта** разрешаются через `domain/encoding.Resolve` на каждый экспорт по строгому приоритету:
+
+> **preset override (плоские нативные ключи) > `encoders` YAML > якорный автомаппинг от quality > реестровый дефолт**
+
+Качество экспорта (для lossy-форматов):
+
+> **per-format quality пресета > `encoders.<формат>.quality` > скалярный `quality` пресета/запроса (`0` = `encoders.default-quality`)**
+
+### encoders.default-quality
+
+| Ключ | Тип | По умолчанию | Описание |
+|------|-----|--------------|----------|
+| `default-quality` | int `[1,100]` | `80` (дефолт кода при `0`; в примере `server.yaml` — `85`) | Качество сжатия по умолчанию, когда `quality` не задан в пресете/запросе. Fallback для **lossy**-форматов (передаётся кодеру как качество потери) и **якорь автомаппинга** для lossless-форматов (усилие упаковки/палитра — потерь не вводит). Вне `[1,100]` — ошибка старта |
+
+### Таблица per-format ключей
+
+| Ключ | Диапазон | Дефолт | Авто* | Описание |
+|------|----------|--------|-------|----------|
+| `jpeg.progressive` | bool | `false` | — | Прогрессивный (interlaced) JPEG; `false` = baseline |
+| `webp.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества WebP; `null` = из запроса/`default-quality` |
+| `webp.reduction-effort` | int `[0,6]` | `4` | ✅ | Reduction effort WebP: больше = лучше сжатие, медленнее. Якорь q75→4 |
+| `webp.lossless` | bool | `false` | — | Lossless-режим WebP |
+| `webp.near-lossless` | bool | `false` | — | Near-lossless WebP |
+| `avif.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества AVIF |
+| `avif.speed` | int `[0,9]` | `6` | ✅ | Speed AVIF (инверсия: меньше = медленнее, лучше сжатие); `0` валиден. Якорь q80→6 |
+| `avif.lossless` | bool | `false` | — | Lossless-режим AVIF |
+| `heif.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества HEIF/HEIC |
+| `jxl.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества JPEG XL |
+| `jxl.effort` | int `[3,9]` | `7` | ✅ | Effort JPEG XL. Якорь q75→7. `0` невалиден (в прежнем плоском конфиге `0` означал «дефолт govips») |
+| `jxl.lossless` | bool | `false` | — | Lossless-режим JPEG XL |
+| `png.quality` | int `[1,100]` | `null` | — | Якорное качество PNG: влияет только на упаковку/палитру, потерь не вводит |
+| `png.compression-level` | int `[1,9]` | `6` | ✅ | Уровень сжатия PNG. Якорь q85→6 |
+| `png.interlace` | bool | `false` | — | Чересстрочный (Adam7) PNG |
+| `png.palette` | bool | `false` | ✅ | Палитровый (quantized) экспорт: автоматика q<90→ON, q≥90→OFF (truecolor) |
+| `png.palette-colors` | int `[2,256]` | `256` | ✅ | Максимум цветов палитры. Якорь q85→256 |
+| `png.palette-bit-depth` | int `[1,8]` | `8` | ✅ | Битность палитры (снап к 1/2/4/8), из числа цветов |
+| `png.dither` | float `[0,1]` | `1.0` | — | Дизеринг палитрового PNG (значим при palette=true) |
+| `apng.compression-level` | int `[1,9]` | `6` | ✅ | Уровень сжатия APNG |
+| `apng.interlace` | bool | `false` | — | Чересстрочный APNG |
+| `gif.effort` | int `[1,10]` | `7` (libvips) | ✅ | Effort GIF. Якорь q75→7 |
+| `gif.bit-depth` | int `[1,8]` | `8` | — | Битность палитры GIF |
+| `gif.dither` | float `[0,1]` | `1.0` | — | Дизеринг палитры GIF |
+
+\* **Авто** — параметр участвует в якорном автомаппинге от `quality`, когда он не задан ни в пресете (override), ни глобально в `encoders`. Остальные параметры — физические переключатели (bool) или константы-дефолты, от качества не зависят.
+
+Все значения валидируются по реестру `domain/encoding` при старте (fail-fast): невалидный диапазон или неизвестный для формата ключ — ошибка конфигурации. `null`/отсутствие ключа = «не задано глобально».
+
+### Якорные формулы автомаппинга
+
+| Параметр | Диапазон | Якорь ↦ значение | Поведение |
+|----------|----------|------------------|-----------|
+| webp `reduction-effort` | `[0,6]` | q75→4, q100→6, q0→0 | линейно, монотонно |
+| avif `speed` | `[0,9]` | q80→6, q100→0, q0→9 | **инверсия**: меньше число = медленнее, лучше сжатие |
+| jxl `effort` | `[3,9]` | q75→7, q100→9, q0→3 | линейно, монотонно |
+| gif `effort` | `[1,10]` | q75→7, q100→10, q0→1 | линейно, монотонно |
+| png/apng `compression-level` | `[1,9]` | q85→6, q100→9, q0→1 | кусочно-линейно: `q≤85`: `1+round(5q/85)`; `q>85`: `6+round((q-85)/5)` |
+| png `palette` | bool | q<90 → ON, q≥90 → OFF | при высоком качестве палитра выключается (защита градиентов) |
+| png `palette-colors` | `[2,256]` | q85→256, q0→2 | `clamp(round(2+(q/85)·254), 2, 256)` |
+| png `palette-bit-depth` | `[1,8]` | colors=256→8 | из `palette-colors`: ≤2→1, ≤4→2, ≤16→4, иначе 8 |
+
+Пример полной секции (совпадает с [`setting/server.yaml`](../setting/server.yaml)):
+
+```yaml
+encoders:
+  default-quality: 85
+  jpeg:
+    progressive: true
+  webp:
+    quality: null            # null = из запроса / encoders.default-quality
+    reduction-effort: 4
+    lossless: false
+    near-lossless: false
+  avif:
+    quality: null
+    speed: 6
+    lossless: false
+  heif:
+    quality: null
+  jxl:
+    quality: null
+    effort: 7
+    lossless: false
+  png:
+    quality: null
+    compression-level: 6
+    interlace: false
+    palette: false
+    palette-colors: 256
+    palette-bit-depth: 8
+    dither: null
+  apng:
+    compression-level: 6
+    interlace: false
+  gif:
+    effort: 7
+    bit-depth: 8
+    dither: null
+```
 
 ## source / result
 
@@ -378,20 +527,7 @@ watermarks:
 | `max-cache-files` | int | default govips | Максимум открытых файлов кэша |
 | `max-cache-size` | int | `100` | Максимум операций в кэше |
 
-Per-format параметры сжатия кодировщиков (`libvips.encoders.*`). Значение `0` = встроенное умолчание движка. Диапазоны валидируются при старте: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
-
-| Ключ (`libvips.encoders.*`) | Тип | По умолчанию | Описание |
-|:---------------------------|------|--------------|----------|
-| `webp-reduction-effort` | int `[0,6]` | `4` | Reduction effort WebP: больше = лучше сжатие, медленнее |
-| `avif-speed` | int `[0,9]` | default govips (`5`) | Speed/effort AVIF: больше = быстрее, хуже сжатие |
-| `png-compression-level` | int `[0,9]` | `6` | Уровень сжатия PNG (применяется и к APNG) |
-| `jxl-effort` | int `[0,9]` | default govips (`7`) | Effort JPEG XL: больше = лучше сжатие, медленнее |
-| `jpeg-progressive` | bool | `false` | Прогрессивный (interlaced) JPEG; `false` = baseline |
-| `png-interlace` | bool | `false` | Чересстрочный (interlaced/Adam7) PNG; `false` = обычный |
-| `png-palette` | bool | `false` | PNG-квантование (палитровый экспорт) для статичных PNG. Выключено по умолчанию: применяется только при явном включении; при ошибке — fallback на обычный PNG, запрос не падает. К APNG не применяется |
-| `png-palette-colors` | int `[2,256]` | `256` | Максимум цветов палитры при `png-palette=true` (`0` = 256) |
-| `png-palette-bit-depth` | int `[1,8]` | `8` | Битность палитры при `png-palette=true`; позволяет сохранить палитровую битность исходника (`0` = 8) |
-| `gif-bit-depth` | int `[1,8]` | default govips (`8`) | Битность палитры GIF (`0` = умолчание govips) |
+Параметры кодировщиков вынесены из `libvips.encoders.*` в единую top-level секцию [encoders](#encoders); `libvips.encoders.*` удалён полностью (без совместимости). Эффективные параметры каждого экспорта разрешаются через `domain/encoding.Resolve` на каждый экспорт: **preset override > `encoders` YAML > автомаппинг от quality > реестровый дефолт**. Диапазоны валидируются при старте по реестру `domain/encoding`: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
 
 DPI-нормализация: при экспорте `xres`/`yres` сбрасываются к 72 DPI (после `stripAllMetadata`), чтобы просмотрщики не масштабировали изображение по DPI-метаданным исходника (например 300 DPI из сканера). Изображения уже с 72 DPI не перекопируются (быстрый путь). Константа не конфигурируется.
 
@@ -429,17 +565,6 @@ libvips:
     concurrency: 2
     threads: 4
     max-cache-mem: 52428800
-  encoders:
-    webp-reduction-effort: 4
-    avif-speed: 6
-    png-compression-level: 6
-    jxl-effort: 0
-    jpeg-progressive: false
-    png-interlace: false
-    png-palette: false
-    png-palette-colors: 0
-    png-palette-bit-depth: 0
-    gif-bit-depth: 0
   shrink-on-load:
     enabled: true
   color:
@@ -505,6 +630,10 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 
 Детектор лиц/объектов для операций `fc`/`oc`. Требует сборки с `-tags onnx`. Включение операции задаётся путём к модели: пустой путь = операция отключена.
 
+Путь к модели можно задать двумя способами (приоритет у первого):
+1. явно в YAML (`face-model` / `object-model`);
+2. через env `IMAGER_MODELS_DIR` (каталог) — если ключ в YAML пуст, путь строится как `<IMAGER_MODELS_DIR>/face_detection_yunet_2023mar.onnx` (и `/ssd_mobilenet_v1_12.onnx`). В Docker (compose) задаётся `/etc/imager/models`, **куда монтируется хостовый `./models` в режиме rw**, а модели скачиваются автоматически при старте контейнера (`docker/entrypoint.sh` → `docker/download-models.sh`). Ручное размещение файлов не требуется; при недоступном источнике контейнер запускается с предупреждением, а операции `fc`/`oc` остаются отключёнными (пустые пути). См. [DEPLOYMENT.md](DEPLOYMENT.md) и `models/README.md`.
+
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
 | `face-model` | string | пусто | Путь к ONNX-модели YuNet (лица) |
@@ -568,7 +697,7 @@ Observability ошибок asset URL (неканонический URL, несу
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `enabled` | bool | `true` | Включать ли учёт ошибок asset URL (счётчики, top-paths, структурные логи). Дефолт `true` задаётся в коде (composition/runtimeconfig.go); в примере `setting.yaml` указан явно |
+| `enabled` | bool | `true` | Включать ли учёт ошибок asset URL (счётчики, top-paths, структурные логи). Дефолт `true` задаётся в коде (composition/runtimeconfig.go); в примере `server.yaml` указан явно |
 | `log-level` | string | `"warn"` | Уровень структурного лога ошибки: `debug\|info\|warn\|error` |
 
 При `enabled: true` ошибки фиксируются:
@@ -621,7 +750,7 @@ observability:
 | `queue-size` | int | `64` | Ёмкость очереди задач; переполнение → HTTP `503`. |
 | `wait-timeout` | duration | `"300s"` | Таймаут режима `wait=true` (ожидания завершения всех ассетов до ответа); превышение → HTTP `504`. |
 
-**Безопасность токена:** `token` — секрет. Храните его в `setting-local.yaml` (не коммитится, см. `.gitignore`) или в секрет-менеджере; не логируйте и не включайте в URL. Рекомендации — [SECURITY.md](SECURITY.md#админ-эндпоинты).
+**Безопасность токена:** `token` — секрет. Храните его в `server-local.yaml` (не коммитится, см. `.gitignore`) или в секрет-менеджере; не логируйте и не включайте в URL. Рекомендации — [SECURITY.md](SECURITY.md#админ-эндпоинты).
 
 ```yaml
 admin:
@@ -636,7 +765,7 @@ admin:
 
 Каждая фича целиком живёт в своём файле-слое. Ниже — минимальный рабочий набор из трёх файлов.
 
-### `setting.yaml` (фундамент)
+### `server.yaml` (фундамент)
 
 ```yaml
 version: "1"
@@ -676,6 +805,15 @@ libvips:
   operation-cache:
     enabled: false
   metrics-interval: "15s"
+
+encoders:
+  default-quality: 85
+  webp:
+    reduction-effort: 4
+  avif:
+    speed: 6
+  png:
+    compression-level: 6
 
 application:
   limits:
@@ -734,14 +872,7 @@ policy:
           output-formats: [webp, avif]
           dpr: 2
 
-processing:
-  default-quality: 85
-
 libvips:
-  encoders:
-    webp-reduction-effort: 4
-    avif-speed: 6
-    png-compression-level: 6
   shrink-on-load:
     enabled: true
   color:
@@ -783,7 +914,7 @@ http:
 
 ### Локальные переопределения
 
-Секреты и локальные отклонения от базовых файлов размещайте в `*-local.yaml`. Например, `setting-local.yaml`:
+Секреты и локальные отклонения от базовых файлов размещайте в `*-local.yaml`. Например, `server-local.yaml`:
 
 ```yaml
 server:

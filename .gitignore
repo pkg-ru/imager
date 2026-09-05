@@ -24,6 +24,17 @@
 # --- Data directories ---
 /data
 
+# --- Model files (ONNX и тестовые изображения) ---
+# Бинарные файлы моделей НЕ хранятся в git: при старте контейнера их
+# скачивает entrypoint во смонтированный rw-каталог (см. models/README.md).
+# В репозитории остаются только README и .gitkeep как шаблон структуры.
+# В Docker каталог монтируется из хоста
+# (docker-compose: ./models:/etc/imager/models:rw).
+/models/*
+!/models/.gitignore
+!/models/README.md
+!/models/.gitkeep
+
 # --- OS files ---
 .DS_Store
 Thumbs.db

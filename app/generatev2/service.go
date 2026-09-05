@@ -600,6 +600,7 @@ func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
 		size,
 		dpr,
 		0, 0, 0, nil, nil, nil,
+		nil, // learning-mode: без native overrides
 	), true
 }
 
@@ -857,6 +858,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	duration := req.Duration()
 	wm := s.resolveWatermark(req)
 	or := s.resolveOrientation(req)
+	encOverrides := req.EncodingOverrides()
 	var w, h int
 	if req.Size().IsOriginal() {
 		// size=x: сохранить исходный размер изображения.
@@ -864,6 +866,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 			op, srcFmt, outFmt,
 			processing.Size{Original: true},
 			dpr, quality, loop, frames, duration,
+			encOverrides,
 		)
 		if err != nil {
 			return nil, err
@@ -891,6 +894,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 		op, srcFmt, outFmt,
 		processing.Size{Width: w, Height: h},
 		dpr, quality, loop, frames, duration,
+		encOverrides,
 	)
 	if err != nil {
 		return nil, err

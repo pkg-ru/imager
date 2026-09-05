@@ -1007,9 +1007,10 @@ func stripAllMetadata(img *vips.ImageRef, keepICC bool) error {
 	return nil
 }
 
-// exportImage экспортирует изображение в целевой формат. Per-format
-// параметры сжатия кодировщиков берутся из конфигурации (b.opts.Encoders;
-// нулевые значения = встроенные умолчания).
+// exportImage экспортирует изображение в целевой формат. Эффективные
+// параметры кодирования разрешаются per-export через domain/encoding
+// (resolveEffective в encoders.go): preset override > encoders yaml (globals)
+// > якорный автомаппинг от plan.Quality > registry-дефолт.
 func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.ProcessingPlan) ([]byte, error) {
 	// Единая принудительная зачистка метаданных на готовом ассете — до
 	// экспорта, независимо от поддержки strip конкретным кодеком. Режим
@@ -1034,28 +1035,33 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		defer norm.Close()
 		img = norm
 	}
-	enc := b.opts.Encoders
+	resolved, err := resolveEffective(b.opts.EncodersConfig, string(plan.OutputFormats), plan.Quality, plan.EncodingOverrides[string(plan.OutputFormats)])
+	if err != nil {
+		return nil, fmt.Errorf("libvips: encode %s: %w", plan.OutputFormats, err)
+	}
 	switch plan.OutputFormats {
 	case processing.FormatJPEG:
 		p := vips.NewJpegExportParams()
-		p.Quality = plan.Quality
+		p.Quality = resolved.Quality
 		p.StripMetadata = true
 		p.SubsampleMode = vips.VipsForeignSubsampleOn
-		// JPEG progressive (Волна 5d): false = baseline (обычный) JPEG.
-		p.Interlace = enc.JPEGProgressive
+		// JPEG progressive: false = baseline (обычный) JPEG.
+		p.Interlace = resolved.Progressive
 		out, _, err := img.ExportJpeg(p)
 		return out, err
 	case processing.FormatPNG:
 		p := vips.NewPngExportParams()
 		p.StripMetadata = true
-		p.Compression = pngCompression(enc.PNGCompression)
-		// PNG interlace (Волна 5d): false = обычный (не-интерлейсный) PNG.
-		p.Interlace = enc.PNGInterlace
-		// PNG quantization (Волна 5c): палитровый экспорт. Применяется
-		// ТОЛЬКО при явном включении (PNGPalette); при ошибке квантования —
-		// fallback на обычный PNG-экспорт без падения запроса.
-		if q := resolvePNGQuantize(enc); q.Palette {
+		p.Compression = resolved.CompressionLevel
+		// PNG interlace: false = обычный (не-интерлейсный) PNG.
+		p.Interlace = resolved.Interlace
+		// PNG quantization: палитровый экспорт. Применяется при
+		// эффективной palette=true (явный override или автомаппинг от
+		// quality); при ошибке квантования — fallback на обычный PNG-экспорт
+		// без падения запроса.
+		if q := resolvePNGQuantize(resolved); q.Palette {
 			p.Palette = true
+			p.Dither = resolved.Dither
 			p.Bitdepth = q.Bitdepth
 			out, _, err := img.ExportPng(p)
 			if err == nil {
@@ -1065,52 +1071,58 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 				"error", err.Error())
 			// Fallback: обычный PNG-экспорт (без палитры).
 			p.Palette = false
+			p.Dither = 0
 			p.Bitdepth = 0
 		}
 		out, _, err := img.ExportPng(p)
 		return out, err
 	case processing.FormatWebP:
 		p := vips.NewWebpExportParams()
-		p.Quality = plan.Quality
+		p.Quality = resolved.Quality
 		p.StripMetadata = true
-		p.ReductionEffort = webpReductionEffort(enc.WebPReductionEffort)
+		p.ReductionEffort = resolved.ReductionEffort
+		p.Lossless = resolved.Lossless
+		p.NearLossless = resolved.NearLossless
 		out, _, err := img.ExportWebp(p)
 		return out, err
 	case processing.FormatGIF:
 		p := vips.NewGifExportParams()
-		p.Dither = 1.0
-		// GIF bit-depth (Волна 5c): govips поддерживает Bitdepth для gifsave
-		// (native gifsave vips ≥ 8.12). 0 = умолчание govips (8).
-		p.Bitdepth = gifBitDepth(enc.GIFBitDepth)
+		// GIF effort/dither (S4): раньше dither=1.0 хардкодился, effort не
+		// управлялся — теперь оба из resolved (дефолты registry 7/1.0
+		// сохраняют текущее поведение при отсутствии override).
+		p.Effort = resolved.Effort
+		p.Dither = resolved.Dither
+		p.Bitdepth = resolved.BitDepth
 		out, _, err := img.ExportGIF(p)
 		return out, err
 	case processing.FormatAVIF:
 		p := vips.NewAvifExportParams()
-		p.Quality = plan.Quality
+		p.Quality = resolved.Quality
 		p.StripMetadata = true
-		if s := avifSpeed(enc.AVIFSpeed); s > 0 {
-			p.Effort = s
-		}
+		// S4: avif speed 0 ВАЛИДЕН (это скорость, а не «не задано») —
+		// ставим всегда из resolved (govips: Speed=0 → Effort из params,
+		// поэтому пишем в Effort).
+		p.Effort = resolved.Speed
+		p.Lossless = resolved.Lossless
 		out, _, err := img.ExportAvif(p)
 		return out, err
 	case processing.FormatHEIF:
 		p := vips.NewHeifExportParams()
-		p.Quality = plan.Quality
+		p.Quality = resolved.Quality
 		// Форк govips (govips) поддерживает для heifsave/jxlsave
 		// общий аргумент VipsForeignSave "strip": при strip=true libvips не
 		// синтезирует технический EXIF-блок из заголовка (vips__exif_update),
 		// который иначе просачивается в выходной файл.
 		p.StripMetadata = true
+		// HEIF effort — libvips-дефолт (не конфигурируется).
 		out, _, err := img.ExportHeif(p)
 		return out, err
 	case processing.FormatJPEGXL:
 		p := vips.NewJxlExportParams()
-		p.Quality = plan.Quality
+		p.Quality = resolved.Quality
 		p.StripMetadata = true
-		// JXL effort (Волна 5d): 0 = умолчание govips (7).
-		if e := jxlEffort(enc.JXLEffort); e > 0 {
-			p.Effort = e
-		}
+		p.Effort = resolved.Effort
+		p.Lossless = resolved.Lossless
 		out, _, err := img.ExportJxl(p)
 		return out, err
 	case processing.FormatAPNG:
@@ -1126,8 +1138,8 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		// несовместима с APNG-чанками) — обычный PNG-экспорт с interlace.
 		p := vips.NewPngExportParams()
 		p.StripMetadata = true
-		p.Compression = pngCompression(enc.PNGCompression)
-		p.Interlace = enc.PNGInterlace
+		p.Compression = resolved.CompressionLevel
+		p.Interlace = resolved.Interlace
 		out, _, err := img.ExportPng(p)
 		return out, err
 	default:

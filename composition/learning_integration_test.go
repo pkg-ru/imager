@@ -24,7 +24,7 @@ policy:
       width: 120
       height: 80
       output-formats: [webp]
-processing:
+encoders:
   default-quality: 80
 http:
   allowed-origins:

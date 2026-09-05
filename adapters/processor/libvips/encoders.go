@@ -1,164 +1,216 @@
-// Параметры кодировщиков (per-format), прокидываемые из конфигурации в
-// exportImage. Файл без build-tag: значения и умолчания не зависят от
-// govips и тестируются в любой сборке.
+// Параметры кодировщиков (per-format) в адаптере libvips.
 //
-// Валидация диапазонов выполняется при загрузке конфигурации
-// (adapters/httpapi/runtimeconfig.go): невалидное значение — ошибка старта,
-// а не runtime-ошибка обработки.
+// S4: глобальные статические EncoderParams заменены на разрешение параметров
+// через domain/encoding на КАЖДЫЙ экспорт: глобальные значения из секции
+// encoders (EncodersConfig) + overrides из ProcessingPlan + якорный
+// автомаппинг от plan.Quality. Единственная точка вычисления — resolveEffective,
+// используемая из exportImage (process_libvips.go).
+//
+// Файл без build-tag: resolveEffective и структуры EncodersConfig не зависят
+// от govips и тестируются в любой сборке.
 package libvips
 
-// Нормализация значений кодировщиков: 0 = «не задано» → встроенное
-// умолчание адаптера (историческое поведение) либо govips. Диапазоны уже
-// проверены при загрузке конфигурации; здесь только подстановка умолчаний
-// и защитный clamp (defense-in-depth для прямых вызовов вне конфигурации).
+import (
+	"gitverse.ru/pkg-ru/imager/domain/encoding"
+)
 
-// webpReductionEffort: 0 → 4 (умолчание govips и историческое значение).
-func webpReductionEffort(v int) int {
-	if v <= 0 {
-		return 4
-	}
-	return v
+// defaultQuality — дефолт encoders.default-quality при 0 (совпадает с
+// историческим дефолтом кода 80; см. composition.buildEncoders).
+const defaultQuality = 80
+
+// EncodersConfig — полное per-format представление единой секции encoders
+// из setting/server.yaml (проброшенной через composition.RuntimeConfig).
+//
+// nil-поле = «не задано глобально»: для этого параметра применяется якорный
+// автомаппинг от quality (если параметр Auto в реестре domain/encoding) либо
+// registry-дефолт.
+type EncodersConfig struct {
+	// DefaultQuality — encoders.default-quality [1,100] (0 = дефолт кода 80).
+	DefaultQuality int
+	// Formats — per-format параметры (ключ — каноническое имя формата
+	// domain/encoding: jpeg/webp/avif/heif/jxl/png/apng/gif).
+	Formats map[string]FormatEncodersConfig
 }
 
-// avifSpeed: 0 → 0 («использовать умолчание govips»).
-func avifSpeed(v int) int { return v }
-
-// pngCompression: 0 → 6 (умолчание govips и историческое значение).
-func pngCompression(v int) int {
-	if v <= 0 {
-		return 6
-	}
-	return v
+// FormatEncodersConfig — параметры группы одного формата в секции encoders.
+// nil-поле = «не задано» для этого формата (применяются registry-дефолты
+// domain/encoding и/или автомаппинг от quality). Значения уже проверены
+// по реестру domain/encoding при загрузке конфигурации.
+type FormatEncodersConfig struct {
+	Quality          *int     // quality [1,100]; nil = из запроса / encoders.default-quality
+	Progressive      *bool    // jpeg
+	ReductionEffort  *int     // webp [0,6]
+	Lossless         *bool    // webp/avif/jxl
+	NearLossless     *bool    // webp
+	Speed            *int     // avif [0,9] (0 валиден)
+	Effort           *int     // jxl [3,9] / gif [1,10]
+	CompressionLevel *int     // png/apng [1,9]
+	Interlace        *bool    // png/apng
+	Palette          *bool    // png
+	PaletteColors    *int     // png [2,256]
+	PaletteBitDepth  *int     // png [1,8]
+	Dither           *float64 // png/gif [0,1]
+	BitDepth         *int     // gif [1,8]
 }
 
-// jxlEffort: 0 → 0 («использовать умолчание govips», Effort=7).
-func jxlEffort(v int) int { return v }
+// resolveEffective вычисляет эффективные параметры кодирования формата для
+// ОДНОГО экспорта через domain/encoding.Resolve.
+//
+// Приоритеты параметров (строго, от высшего к низшему):
+//  1. explicit override из пресета (plan.EncodingOverrides[format]);
+//  2. глобальный параметр секции encoders (EncodersConfig / setting/server.yaml);
+//  3. якорный автомаппинг от quality (Auto-параметры реестра);
+//  4. registry-дефолт domain/encoding.
+//
+// Качество (для DirectQuality-форматов и как усилие для AlwaysLossless):
+//  1. per-format quality override из пресета (plan.EncodingOverrides[format]
+//     ["quality"], только lossy-форматы);
+//  2. encoders.<fmt>.quality (если задан глобально);
+//  3. plan.Quality (скаляр из пресета/запроса; 0 заменён на
+//     encoders.default-quality в generatev2, здесь — defense-in-depth).
+//
+// Реализация: merged-overrides (yaml-глобальные + preset) подаются в
+// encoding.Resolve как ЯВНЫЕ значения (каждое уже провалидировано при
+// загрузке конфигурации/компиляции плана), незаданные покрываются
+// автомаппингом от quality или registry-дефолтами — это даёт ровно
+// приведённую матрицу приоритетов.
+func resolveEffective(cfg EncodersConfig, format string, quality int, overrides map[string]any) (encoding.ResolvedParams, error) {
+	fcfg := cfg.Formats[format]
 
-// pngPaletteColors: 0 → 256 (максимум палитры PNG, «не задано»);
-// отрицательные значения — защитный clamp к 2 (палитра менее 2 цветов
-// бессмысленна), значения > 256 зажимаются (максимум палитры PNG).
-func pngPaletteColors(v int) int {
-	if v == 0 {
-		return 256
+	// Качество: план → глобальный per-format → override пресета.
+	q := quality
+	if q <= 0 {
+		q = cfg.DefaultQuality
 	}
-	if v < 2 {
-		return 2
+	if q <= 0 {
+		q = defaultQuality
 	}
-	if v > 256 {
-		return 256
+	if fcfg.Quality != nil {
+		q = *fcfg.Quality
 	}
-	return v
+
+	// merged-overrides: сначала глобальные значения YAML, затем preset-ы
+	// (на один и тот же реестровый ключ preset побеждает).
+	merged := make(map[string]any, 14)
+	putGlobals(merged, fcfg)
+	for k, v := range overrides {
+		if k == "quality" {
+			// per-format quality из пресета — качество формата (побеждает
+			// всё остальное); в overrides Resolve он не попадает (строго
+			// запрещён реестром).
+			if f, ok := toFloat(v); ok {
+				q = int(f)
+			}
+			continue
+		}
+		merged[k] = v
+	}
+
+	q = clampQuality(q)
+	return encoding.Resolve(format, uint8(q), merged)
 }
 
-// pngPaletteBitdepth: 0 → 8 (стандартная битность палитры, «не задано»);
-// отрицательные значения — защитный clamp к 1, значения > 8 зажимаются
-// (допустимые битности палитры PNG: 1, 2, 4, 8).
-func pngPaletteBitdepth(v int) int {
-	if v == 0 {
-		return 8
+// putGlobals копирует заданные глобальные параметры формата из
+// EncodersConfig в merged (реестровые имена без префикса формата).
+// качества нет — оно разрешается отдельно (см. resolveEffective).
+func putGlobals(m map[string]any, f FormatEncodersConfig) {
+	if f.Progressive != nil {
+		m["progressive"] = *f.Progressive
 	}
-	if v < 1 {
+	if f.ReductionEffort != nil {
+		m["reduction-effort"] = *f.ReductionEffort
+	}
+	if f.Lossless != nil {
+		m["lossless"] = *f.Lossless
+	}
+	if f.NearLossless != nil {
+		m["near-lossless"] = *f.NearLossless
+	}
+	if f.Speed != nil {
+		m["speed"] = *f.Speed
+	}
+	if f.Effort != nil {
+		m["effort"] = *f.Effort
+	}
+	if f.CompressionLevel != nil {
+		m["compression-level"] = *f.CompressionLevel
+	}
+	if f.Interlace != nil {
+		m["interlace"] = *f.Interlace
+	}
+	if f.Palette != nil {
+		m["palette"] = *f.Palette
+	}
+	if f.PaletteColors != nil {
+		m["palette-colors"] = *f.PaletteColors
+	}
+	if f.PaletteBitDepth != nil {
+		m["palette-bit-depth"] = *f.PaletteBitDepth
+	}
+	if f.Dither != nil {
+		m["dither"] = *f.Dither
+	}
+	if f.BitDepth != nil {
+		m["bit-depth"] = *f.BitDepth
+	}
+}
+
+// clampQuality зажимает качество в допустимый диапазон реестра [1,100]
+// (все источники уже валидированы; clamp — defense-in-depth).
+func clampQuality(q int) int {
+	if q < 1 {
 		return 1
 	}
-	if v > 8 {
-		return 8
+	if q > 100 {
+		return 100
 	}
-	return v
+	return q
 }
 
-// gifBitDepth: 0 → 8 (умолчание govips для gifsave, «не задано»);
-// отрицательные значения — защитный clamp к 1, значения > 8 зажимаются
-// (битность палитры GIF).
-func gifBitDepth(v int) int {
-	if v == 0 {
-		return 8
+// toFloat приводит числовое значение override (int/int64/float64) к float64.
+// Типы — строгие из пресетов/реестра (ValidateOverrides), поэтому строки не
+// разбираются.
+func toFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case float64:
+		return t, true
 	}
-	if v < 1 {
-		return 1
-	}
-	if v > 8 {
-		return 8
-	}
-	return v
+	return 0, false
 }
 
 // pngQuantizeDecision — решение о применении PNG-квантования (палитровый
-// экспорт) в exportImage. Вычисляется чистой функцией resolvePNGQuantize.
+// экспорт) в exportImage. Вычисляется чистой функцией resolvePNGQuantize из
+// resolved-параметров domain/encoding.
 type pngQuantizeDecision struct {
 	// Palette — применять ли палитровый (quantized) PNG-экспорт.
 	Palette bool
-	// Colors — максимальное число цветов палитры [2..256].
+	// Colors — максимальное число цветов палитры [2..256]. govips не
+	// поддерживает передачу числа цветов (нет поля в PngExportParams) —
+	// значение резолвится для картографии/диагностики.
 	Colors int
 	// Bitdepth — битность палитры [1..8]. Позволяет сохранить
 	// (воспроизвести) палитровую битность исходника.
 	Bitdepth int
 }
 
-// resolvePNGQuantize формирует решение о PNG-квантовании из параметров
-// кодировщиков.
+// resolvePNGQuantize формирует решение о PNG-квантовании из resolved-параметров.
 //
-// Отказоустойчивость: квантование применяется ТОЛЬКО при явном включении
-// (PNGPalette=true) — по умолчанию выключено, поэтому градиентные
-// изображения (где палитра даёт артефакты) никогда не квантуются случайно.
-// Значения 0 в конфиге заменяются безопасными умолчаниями; некорректные
-// значения зажимаются в допустимые диапазоны.
-func resolvePNGQuantize(enc EncoderParams) pngQuantizeDecision {
-	if !enc.PNGPalette {
+// Отказоустойчивость: квантование применяется только при эффективной
+// palette=true (явный override из пресета/YAML или автомаппинг при q<90), в
+// противном случае — обычный truecolor-экспорт, поэтому градиентные
+// изображения не квантуются случайно. Значения уже нормализованы реестром
+// (PaletteColors/PaletteBitDepth в допустимых диапазонах).
+func resolvePNGQuantize(r encoding.ResolvedParams) pngQuantizeDecision {
+	if !r.Palette {
 		return pngQuantizeDecision{}
 	}
 	return pngQuantizeDecision{
 		Palette:  true,
-		Colors:   pngPaletteColors(enc.PNGPaletteColors),
-		Bitdepth: pngPaletteBitdepth(enc.PNGPaletteBitDepth),
-	}
-}
-
-// EncoderParams — per-format параметры сжатия кодировщиков libvips.
-// Нулевое значение поля = использовать встроенное умолчание движка.
-type EncoderParams struct {
-	// WebPReductionEffort — reduction effort WebP [0..6] (больше = лучше
-	// сжатие, медленнее). 0 = умолчание govips (4).
-	WebPReductionEffort int
-	// AVIFSpeed — speed/effort AVIF [0..9] (больше = быстрее, хуже сжатие).
-	// 0 = умолчание govips (5).
-	AVIFSpeed int
-	// PNGCompression — уровень сжатия PNG [0..9]. 0 = умолчание govips (6).
-	PNGCompression int
-	// JXLEffort — effort JPEG XL [0..9] (больше = лучше сжатие, медленнее).
-	// 0 = умолчание govips (7).
-	JXLEffort int
-	// JPEGProgressive — прогрессивный (interlaced) JPEG. false = обычный
-	// (baseline) JPEG.
-	JPEGProgressive bool
-	// PNGInterlace — чересстрочный (interlaced/Adam7) PNG. false = обычный
-	// (не-интерлейсный) PNG.
-	PNGInterlace bool
-	// PNGPalette — включить PNG-квантование (палитровый экспорт). По
-	// умолчанию выключено: применяется ТОЛЬКО при явном включении, чтобы
-	// не вносить артефакты в градиенты. При ошибке квантования в
-	// exportImage выполняется fallback на обычный PNG-экспорт.
-	PNGPalette bool
-	// PNGPaletteColors — максимальное число цветов палитры [2..256] при
-	// PNGPalette=true. 0 = 256 (максимум палитры PNG).
-	PNGPaletteColors int
-	// PNGPaletteBitDepth — битность палитры [1..8] при PNGPalette=true.
-	// Позволяет сохранить (воспроизвести) палитровую битность исходника
-	// (например 4-битную палитру градаций серого). 0 = 8.
-	PNGPaletteBitDepth int
-	// GIFBitDepth — битность палитры GIF [1..8] (меньше = компактнее,
-	// до 256 цветов). 0 = умолчание govips (8).
-	GIFBitDepth int
-}
-
-// DefaultEncoderParams — параметры по умолчанию (совпадают с историческим
-// поведением адаптера: webp effort=4, png compression=6, jpeg progressive
-// off, png interlace off, png palette off; avif/jxl — умолчания govips).
-func DefaultEncoderParams() EncoderParams {
-	return EncoderParams{
-		WebPReductionEffort: 4,
-		AVIFSpeed:           0, // govips default (5)
-		PNGCompression:      6,
-		JXLEffort:           0, // govips default (7)
-		GIFBitDepth:         0, // govips default (8)
+		Colors:   r.PaletteColors,
+		Bitdepth: r.PaletteBitDepth,
 	}
 }

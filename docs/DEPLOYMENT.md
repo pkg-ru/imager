@@ -8,7 +8,11 @@
 docker compose up -d --build
 ```
 
-Конфигурация монтируется из `./config` в `/etc/imager/config` read-only, модели ONNX — `./models` в `/etc/imager/models` (`:ro`). `IMAGER_CONFIG_DIR=/etc/imager/config` — единственная env-переменная. Три слоя конфигурации (`setting`/`generate`/`failback`) описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации). Порт `8080`.
+Конфигурация монтируется из `./setting` в `/etc/imager/setting` read-only, каталог моделей `./models` — в `/etc/imager/models` **read-write**. Модели **не входят в образ** и **не требуют ручного размещения**: при старте контейнера entrypoint (`docker/entrypoint.sh`) скачивает их в смонтированный каталог (`docker/download-models.sh`, источники — OpenCV Zoo и ONNX Model Zoo по умолчанию) и сохраняет на хосте в `./models`, так что при перезапуске скачивание не повторяется. Если скачивание не удалось (нет сети/зеркала) — контейнер продолжает запуск с предупреждением: детекция опциональна, операции `fc`/`oc` просто недоступны (см. [CONFIGURATION.md](CONFIGURATION.md#detection)).
+
+> **Права на каталог.** Контейнер работает от non-root `imager` (uid 10001). Чтобы entrypoint мог скачивать модели, сделайте хост-каталог `./models` доступным на запись этому uid: `chmod -R a+rwX ./models` (либо `chown 10001:10001 ./models`).
+
+Env-переменные: `IMAGER_CONFIG_DIR=/etc/imager/setting` (каталог конфигурации) и `IMAGER_MODELS_DIR=/etc/imager/models` (каталог ONNX-моделей — **и** для автоскачивания, **и** fallback для пустых `detection.face-model`/`object-model`, см. [CONFIGURATION.md](CONFIGURATION.md#detection)). Опциональные `IMAGER_MODEL_FACE_URL` / `IMAGER_MODEL_OBJECT_URL` переопределяют источники скачивания (приватные зеркала), `IMAGER_SKIP_MODELS=1` отключает автоскачивание. Три слоя конфигурации (`setting`/`generate`/`failback`) описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации). Порт `8080`.
 
 ### Docker вручную
 
@@ -19,11 +23,12 @@ docker run -d \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   -p 8080:8080 \
-  -v /host/config:/etc/imager/config:ro \
-  -v /host/models:/etc/imager/models:ro \
+  -v /host/setting:/etc/imager/setting:ro \
+  -v /host/models:/etc/imager/models:rw \
   -v /host/source:/data/source:ro \
   -v /host/result:/data/result:rw \
-  -e IMAGER_CONFIG_DIR=/etc/imager/config \
+  -e IMAGER_CONFIG_DIR=/etc/imager/setting \
+  -e IMAGER_MODELS_DIR=/etc/imager/models \
   imager:production
 ```
 
@@ -43,7 +48,7 @@ docker run -d \
 | Pinned образы | `golang:1.27.0-alpine3.23` / `alpine:3.23`, pinned версии пакетов |
 | Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
 
-**`read_only: true` не используется.** При read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — только bind-mounts `/data/result` (`:rw`) и tmpfs `/tmp`; `/data/source` монтируется `:ro` (исходники изменяются только через деплой), `/etc/imager/config` и `/etc/imager/models` — `:ro`.
+**`read_only: true` не используется.** При read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` и `/etc/imager/setting` монтируются `:ro`.
 
 ## Ресурсы
 
@@ -115,7 +120,7 @@ Health/metrics остаются доступными при перегрузке
 
 **Три слоя конфигурации**, слияние и приоритеты — [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации). Секреты — только в `*-local.yaml` (не коммитятся).
 
-`setting-local.yaml` (фундамент; секреты не коммитятся):
+`server-local.yaml` (фундамент; секреты не коммитятся):
 
 ```yaml
 server:

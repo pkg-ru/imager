@@ -1,4 +1,4 @@
-package composition
+﻿package composition
 
 import (
 	"path/filepath"
@@ -10,7 +10,7 @@ import (
 )
 
 // TestLoadConfigDirBaseOnly проверяет, что загрузка одного обязательного
-// setting.yaml работает, а отсутствие local-файла — нормальная ситуация.
+// server.yaml работает, а отсутствие local-файла — нормальная ситуация.
 func TestLoadConfigDirBaseOnly(t *testing.T) {
 	dir := t.TempDir()
 	base := `
@@ -20,7 +20,7 @@ server:
 http:
   cache-control: "public, max-age=2592000"
 policy: {}
-processing:
+encoders:
   default-quality: 80
 source:
   storage: fs
@@ -116,16 +116,16 @@ http:
 }
 
 // TestLoadConfigDirMissingBaseFailFast проверяет, что отсутствие
-// обязательного setting.yaml — ошибка (fail-fast).
+// обязательного server.yaml — ошибка (fail-fast).
 func TestLoadConfigDirMissingBaseFail(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := LoadConfigDir(dir); err == nil {
-		t.Fatal("expected error when setting.yaml is missing")
+		t.Fatal("expected error when server.yaml is missing")
 	}
 }
 
 // TestLoadConfigDirBrokenLocalIsError проверяет, что невалидный
-// setting-local.yaml — ошибка (не игнорируется).
+// server-local.yaml — ошибка (не игнорируется).
 func TestLoadConfigDirBrokenLocalIsError(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
@@ -537,7 +537,7 @@ policy:
        width: 200
        height: 200
        output-formats: [webp]
-processing:
+encoders:
    default-quality: 80
 application:
    limits:
@@ -567,8 +567,8 @@ http:
 	if len(rc.Pipeline.Policy.PathPolicies) != 1 {
 		t.Errorf("PathPolicies = %d, want 1", len(rc.Pipeline.Policy.PathPolicies))
 	}
-	if rc.Pipeline.Processing.DefaultQuality != 80 {
-		t.Errorf("DefaultQuality = %d, want 80", rc.Pipeline.Processing.DefaultQuality)
+	if rc.Encoders.DefaultQuality != 80 {
+		t.Errorf("Encoders.DefaultQuality = %d, want 80", rc.Encoders.DefaultQuality)
 	}
 	// Из failback.
 	if !rc.HTTP.NotFound.Pixel {
@@ -586,12 +586,13 @@ func TestLoadConfigDirGenerateLocalOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `version: "1"`)
 	writeConfig(t, filepath.Join(dir, GenerateConfigFile), `
-processing:
+encoders:
   default-quality: 80
+processing:
   default-trim-mode: auto
 `)
 	writeConfig(t, filepath.Join(dir, GenerateLocalFile), `
-processing:
+encoders:
   default-quality: 90
 `)
 
@@ -599,8 +600,8 @@ processing:
 	if err != nil {
 		t.Fatalf("LoadConfigDir: %v", err)
 	}
-	if rc.Pipeline.Processing.DefaultQuality != 90 {
-		t.Errorf("DefaultQuality = %d, want 90 (overridden by local)", rc.Pipeline.Processing.DefaultQuality)
+	if rc.Encoders.DefaultQuality != 90 {
+		t.Errorf("Encoders.DefaultQuality = %d, want 90 (overridden by local)", rc.Encoders.DefaultQuality)
 	}
 	if rc.Pipeline.Processing.DefaultTrimMode != "auto" {
 		t.Errorf("DefaultTrimMode = %q, want auto (kept from base)", rc.Pipeline.Processing.DefaultTrimMode)
@@ -634,7 +635,7 @@ http:
 
 // TestLoadConfigDirMissingGenerateFailback проверяет обратную совместимость:
 // отсутствие generate.yaml / failback.yaml — нормальная ситуация, сервис
-// работает как раньше (только setting.yaml).
+// работает как раньше (только server.yaml).
 func TestLoadConfigDirMissingGenerateFailback(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
@@ -742,7 +743,7 @@ func TestLoadConfigDirUnknownFieldInFailback(t *testing.T) {
 }
 
 // TestLoadConfigDirBackwardCompatSingleFile проверяет обратную совместимость:
-// старый монолитный setting.yaml, содержащий секции, которые "переехали" в
+// старый монолитный server.yaml, содержащий секции, которые "переехали" в
 // generate/failback, продолжает работать без ошибок.
 func TestLoadConfigDirBackwardCompatSingleFile(t *testing.T) {
 	dir := t.TempDir()
@@ -759,7 +760,7 @@ policy:
        width: 200
        height: 200
        output-formats: [webp]
-processing:
+encoders:
    default-quality: 80
 http:
    not-found:

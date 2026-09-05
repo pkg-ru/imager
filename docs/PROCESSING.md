@@ -148,9 +148,37 @@ APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 
 ## Качество и сжатие
 
-- `quality` пресета (0–100; 0 = `processing.default-quality`) применяется ко всем lossy-форматам: JPEG, WebP, AVIF, HEIF/HEIC, JPEG XL;
-- PNG управляется уровнем сжатия: `libvips.encoders.png-compression-level` (0–9);
-- WebP: `libvips.encoders.webp-reduction-effort` (0–6).
+Конфигурация кодирования (единая top-level секция `encoders`, якорный автомаппинг, приоритеты) — [CONFIGURATION.md](CONFIGURATION.md#encoders). Здесь — как `quality` превращается в параметры кодека.
+
+**Скалярный `quality`** пресета (0–100; 0 = `encoders.default-quality`) действует по типу формата:
+
+- **Lossy-форматы** (jpeg/webp/avif/heif/jxl): `quality` передаётся кодеру **напрямую** как качество потери (число качества запроса/пресета = качество выхода). Чем выше — тем больше битов, меньше артефактов; чем ниже — тем меньше размер.
+- **Lossless-форматы** (png/apng/gif): потерь `quality` **никогда не вводит**. Он управляет **усилием упаковки** (compression-level/effort) и **палитровой автоматикой** через якорный автомаппинг — «спрятать» качество в меньший файл: больше `quality` → плотнее упаковка, при `q≥90` PNG-палитра автоматически выключается (truecolor, защита градиентов).
+
+Per-format переопределение качества — **только нативными параметрами**: `webp-quality`, `jxl-quality` и т.п. (только lossy) либо ключами усилия (`webp-reduction-effort`, `jxl-effort`, `gif-effort`, `png-compression-level` и т.д.). Старый механизм глобальных `libvips.encoders.*` и `processing.default-quality` удалён полностью; per-format качество для lossless-форматов (`png-quality`) — ошибка конфигурации.
+
+Приоритеты параметров на каждом экспорте (разрешаются через `domain/encoding.Resolve` на каждый экспорт):
+
+> **preset override (плоские нативные ключи) > `encoders` YAML > якорный автомаппинг от quality > реестровый дефолт**
+
+Качество экспорта: **per-format quality пресета > `encoders.<формат>.quality` > скалярный `quality` (`0` = `encoders.default-quality`)**.
+
+### Соответствие quality → параметры
+
+Автомаппинг применяется только когда параметр не задан ни в пресете, ни глобально в `encoders` (заданный ключ — explicit override, отменяет формулу):
+
+| Формат | Параметр | Диапазон | Якорь ↦ значение |
+|--------|----------|----------|------------------|
+| webp | `reduction-effort` | `[0,6]` | q75→4, q100→6, q0→0 |
+| avif | `speed` | `[0,9]` | q80→6, q100→0, q0→9 (инверсия: меньше = медленнее, лучше сжатие) |
+| jxl | `effort` | `[3,9]` | q75→7, q100→9, q0→3 |
+| gif | `effort` | `[1,10]` | q75→7, q100→10, q0→1 |
+| png/apng | `compression-level` | `[1,9]` | q85→6, q100→9, q0→1 |
+| png | `palette` | bool | q<90 → ON, q≥90 → OFF (truecolor) |
+| png | `palette-colors` | `[2,256]` | q85→256, q0→2 |
+| png | `palette-bit-depth` | `[1,8]` | из `palette-colors`: 256→8, ≤16→4, ≤4→2, ≤2→1 |
+
+Якорь = качество, при котором нативные параметры дают текущее дефолтное поведение движка (webp/jxl — 75, jpeg/avif/heif — 80, png/apng — 85); при отклонении от якоря параметры масштабируются линейно к границам диапазона.
 
 ## Лимиты обработки
 

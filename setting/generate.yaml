@@ -1,0 +1,266 @@
+########################################
+# Imager — слой GENERATE (генерация ассетов).
+#
+# Всё, что настраивается при работе над картинками: пресеты, policy,
+# форматы/энкодеры, ресайз, watermark, ориентация, trim, цвет, detection.
+# Меняется часто.
+#
+# Файл ОПЦИОНАЛЕН: если отсутствует — используются умолчания схемы.
+# Переопределение: generate-local.yaml глубоко мержится поверх этого файла.
+########################################
+
+########################################
+# policy — deny-by-default политика разрешённых пресетов/customs.
+#
+# Всё запрещено по умолчанию; разрешается только то, что явно перечислено
+# в path-policies. Политика применяется к ассет-URL вида
+#   /{path}/{source_name}-{source_format}/{segment}@{dpr}.{output}
+# где segment — ИМЯ ПРЕСЕТА или custom-имя (размер-грамматика).
+# Transform-коды (c-, t-, ct-, sc-, fc-, oc-) в URL отсутствуют: операция
+# (resize/crop/smart-crop/face-crop/object-crop) определяется ТОЛЬКО полем
+# crop пресета/custom.
+#
+# Структура:
+#   presets — глобальные именованные пресеты (на них ссылаются path-policies);
+#   path-policies — MAP: ключ = префикс пути (longest-prefix match, "/" =
+#   fallback), значение = {presets: [имена], customs: {имя: настройки}}.
+#
+# Ключ policy.global (authorization/allowed-presets/size-rules/limits) УДАЛЁН:
+# лимиты перенесены в application.limits, а «safe/unsafe» и size-rules больше
+# не существуют — разрешение определяется только path-policies (deny-by-default).
+########################################
+policy:
+  # learning-mode — режим обучения: ассеты генерируются/отдаются, но НЕ
+  # сохраняются в result; наблюдаемые пути накапливаются в generate-local.yaml.
+  learning-mode: false
+
+  # presets — MAP именованных конфигураций обработки (ключ = имя пресета:
+  # ≤64 символа, без дефисов; "_-." и суффикс @2/@3 допустимы, @0/@1 нет).
+  # Каждый пресет:
+  #   width/height — размер (0 = не задан, вычисляется пропорционально);
+  #   output-formats — МАССИВ выходных форматов (whitelist, непустой):
+  #     jpeg | png | webp | gif | avif | heif | apng | jxl;
+  #   dpr — множитель плотности пикселей. Правила:
+  #     - пресет с суффиксом @N в имени (например "thumb@2") ОБЯЗАН иметь
+  #       dpr: N (2/3). Отсутствие или другое значение — ошибка конфига;
+  #     - пресет без @N в имени — только dpr: 1 (фиксированный множитель 1;
+  #       @dpr-суффикс в URL запрещён). Значения 2/3 без @N — ошибка конфига
+  #       (для @dpr-вариантов нужен отдельный пресет name@N);
+  #     - width/height пресета — БАЗОВЫЕ (логические): итоговый размер =
+  #       width*height*dpr (например 200x200 + dpr: 2 -> 400x400);
+  #     - у пресетов без @N, для которых по задумке допустимы варианты
+  #       thumb@2.webp/thumb@3.webp, заводите отдельные пресеты thumb@2/thumb@3;
+  #   crop — "" = resize | center = crop | smart = smart-crop | face =
+  #     face-crop | object = object-crop (по умолчанию "" = resize);
+  #   trim — независимый фильтр обрезки однотонных полей (по умолчанию false);
+  #     сначала trim, затем crop/resize; transform-код в URL не кодируется;
+  #   quality — 0-100 (0 = encoders.default-quality из единой top-level
+  #     секции encoders; см. server.yaml);
+  #   native-ключи кодирования (ПЛОСКИЕ, имя = "<формат>-<параметр>" из реестра
+  #     domain/encoding): jpeg-quality, jpeg-progressive, webp-quality,
+  #     webp-reduction-effort, webp-lossless, webp-near-lossless, avif-quality,
+  #     avif-speed, avif-lossless, heif-quality, jxl-quality, jxl-effort,
+  #     jxl-lossless, png-compression-level, png-interlace, png-palette,
+  #     png-palette-colors, png-palette-bit-depth, png-dither,
+  #     apng-compression-level, apng-interlace, gif-effort, gif-bit-depth,
+  #     gif-dither. Диапазоны проверяются по реестру при старте (fail-fast).
+  #     per-format quality (webp-quality и т.п.) — ТОЛЬКО для lossy-форматов
+  #     (jpeg/webp/avif/heif/jxl), переопределяет скалярный quality для этого
+  #     формата; для lossless (png/apng/gif) задавать его — ошибка конфига —
+  #     их упаковка управляется скалярным quality.
+  #   frames/duration — макс. кадры/длительность анимации (0 = без лимита);
+  #   loop — nil = processing.default-loop; true/false — явно;
+  #   watermark — имя из секции watermarks (приоритет выше default-watermark);
+  #   auto-orient — nil = глобальный дефолт; true/false — явно;
+  #   rotate/flip — "" = наследовать дефолт; "none" = явно отключить;
+  #     rotate: "90"|"180"|"270"; flip: horizontal|vertical.
+  #   Порядок ориентации: auto-orient → rotate → flip, ДО resize/crop/trim.
+  # Полная семантика и правила dpr — docs/CONFIGURATION.md (policy).
+  presets:
+    # пресет "thumb" — маленький resize-центр 200x200. dpr: 1 = фиксированный
+    # множитель 1 (итоговый размер 200x200); @dpr-суффикс в URL запрещён —
+    # для thumb@2.webp/thumb@3.webp существуют отдельные пресеты thumb@2.
+    thumb:
+      width: 200
+      height: 200
+      output-formats: [webp, avif]
+      quality: 85
+      dpr: 1
+
+    # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
+    # @2 в имени фиксирует dpr=2: в URL допустим ТОЛЬКО thumb@2.webp.
+    thumb@2:
+      width: 200
+      height: 200
+      output-formats: [webp, avif]
+      quality: 85
+      dpr: 2
+
+    # пресет "banner" — анимационный WebP-баннер 1200x400. dpr: 1 =
+    # фиксированный множитель 1 (итоговый размер 1200x400); @dpr-суффикс в
+    # URL запрещён — для banner@2.webp существует отдельный пресет banner@2.
+    banner:
+      width: 1200        # 0 = не задан (вычисляется пропорционально)
+      height: 400
+      output-formats: [webp, avif]
+      quality: 80        # 0 = default-quality
+      frames: 0          # 0 = без ограничения кадров
+      duration: 0        # 0 = без ограничения длительности
+      loop: true         # зацикленная анимация (nil = по default-loop)
+      dpr: 1
+
+    # пресет "banner@2" — та же геометрия (ширина 2400 = 1200×2, высота
+    # 800 = 400×2) для экранов с DPR 2. @2 в имени фиксирует dpr=2: в URL
+    # допустим ТОЛЬКО /banners/.../banner@2.{webp|avif}.
+    banner@2:
+      width: 1200
+      height: 400
+      output-formats: [webp, avif]
+      quality: 80
+      frames: 0
+      duration: 0
+      loop: true
+      dpr: 2
+
+    # Примеры режимов crop/ориентации (раскомментируйте при необходимости):
+    # avatar:                   # центрированный кроп
+    #   crop: center
+    #   width: 100
+    #   height: 100
+    #   output-formats: [webp]
+    #
+    # hero:                     # умный кроп (smart-crop)
+    #   crop: smart
+    #   width: 800
+    #   height: 600
+    #   output-formats: [webp]
+    #
+    # portrait:                 # кроп по лицу + trim
+    #   crop: face
+    #   trim: true
+    #   width: 300
+    #   height: 300
+    #   output-formats: [jpeg]
+    #
+    # product:                  # кроп по объекту + trim
+    #   crop: object
+    #   trim: true
+    #   width: 500
+    #   height: 500
+    #   output-formats: [webp]
+    #
+    # exif-strip:               # явная ориентация
+    #   width: 0
+    #   height: 1200
+    #   output-formats: [jpeg]
+    #   auto-orient: false
+    #   rotate: "none"
+    #   flip: horizontal
+    #
+    # Пример native-ключей кодирования (плоские, "<формат>-<параметр>"):
+    # thumb-lossy:
+    #   width: 320
+    #   height: 200
+    #   output-formats: [webp, png, jpeg]
+    #   quality: 85              # скалярный quality (0 = default-quality)
+    #   png-compression-level: 9 # lossless-формат: НЕЛЬЗЯ png-quality
+    #   webp-reduction-effort: 6
+    #   webp-quality: 90         # per-format quality: только lossy-форматы,
+    #                            # переопределяет скалярный quality для webp
+    #   jxl-effort: 9
+    #   jpeg-progressive: true
+
+  # path-policies — политики по префиксам пути ассет-URL. MAP: ключ = префикс
+  # пути (выбор — LONGEST prefix match; "/" = fallback).
+  # Поля:
+  #   presets — имена глобальных пресетов (policy.presets), доступных на пути;
+  #   customs — MAP: ключ = custom-имя (размер-грамматика "x"/"x200"/"200x"/
+  #     "200x200", опционально @2/@3), значение = настройки как у пресетов;
+  #     размер custom берётся из имени, width/height переопределяют его.
+  #     Правила dpr для customs те же, что для пресетов: имя с @N в суффиксе
+  #     ОБЯЗАНО иметь dpr: N (отсутствие или другое значение — ошибка конфига);
+  #     имя без @N — wildcard: dpr не фиксирован (в URL допустимы x.webp,
+  #     x@2.webp, x@3.webp), а если поле dpr задано — только dpr: 1.
+  # При разрешении customs имеют приоритет над presets пути. deny-by-default:
+  # сегмент вне customs/presets пути (и не покрытый "/") отклоняется.
+  path-policies:
+    # / — fallback для всех путей. Разрешены пресеты thumb/thumb@2 и
+    # custom-размеры из секции customs ниже.
+    /:
+      presets: ["thumb", "thumb@2"]
+      customs:
+        # custom-имя = размер: "x" = оригинальный размер.
+        x:
+          output-formats: [webp]
+        # "x200" = только высота 200 (ширина пропорционально).
+        x200:
+          output-formats: [webp, avif]
+        # "200x" = только ширина 200 (высота пропорционально).
+        200x:
+          output-formats: [webp]
+        # "200x200" = точный размер; dpr не задан → допустимы 200x200.webp,
+        # 200x200@2.webp, 200x200@3.webp.
+        200x200:
+          output-formats: [webp]
+
+    # /thumbs — специфичный префикс: только пресет thumb и один custom.
+    /thumbs:
+      presets: ["thumb"]
+      customs:
+        100x100:
+          output-formats: [webp, avif]
+
+    # /banners — баннеры: пресеты banner/banner@2 + кастомный вариант
+    # 200x100 с явным @2 в имени (фиксирует dpr=2; в URL допустим только
+    # 200x100@2.{webp|avif}). Имя с @N требует dpr: N — отсутствие поля dpr
+    # было бы ошибкой конфигурации.
+    /banners:
+      presets: ["banner", "banner@2"]
+      customs:
+        200x100@2:
+          output-formats: [webp, avif]
+          dpr: 2
+
+    # /originals — только custom "x" (оригинальный размер), все форматы.
+    /originals:
+      customs:
+        x:
+          output-formats: [jpeg, png, webp, gif, avif, heif, apng, jxl]
+
+    # /admin — отдельный путь с пресетом thumb.
+    /admin:
+      presets: ["thumb"]
+
+    # Примеры других path-policies (раскомментируйте при необходимости):
+    # /avatars:
+    #   presets: ["avatar"]
+    #   customs:
+    #     100x100:
+    #       output-formats: [webp, jpeg]
+    # /news:
+    #   presets: ["hero"]
+    #   customs:
+    #     800x600:
+    #       output-formats: [webp]
+
+########################################
+# watermarks — MAP именованных деклараций ватермарок (ключ = имя). Применяются
+# по имени из пресетов/customs или processing.default-watermark.
+# Поля:
+#   path     — обязательный путь к файлу изображения (должен существовать
+#              на старте, иначе fail-fast);
+#   position — top | bottom | left | right | center (дефолт center);
+#   repeat   — no-repeat | repeat | repeat-x | repeat-y | round | space
+#              (дефолт no-repeat);
+#   size     — contain | cover | "{w}px {h}px" (дефолт contain).
+# Анимированные выходы (GIF/WebP/APNG) с ватермаркой на libvips дают ошибку
+# обработки. Секция опциональна; примеры — docs/CONFIGURATION.md.
+########################################
+watermarks: {}
+# Пример:
+# watermarks:
+#   water-test:
+#     path: "/etc/imager/watermarks/test.png"
+#     position: center
+#     repeat: no-repeat
+#     size: contain

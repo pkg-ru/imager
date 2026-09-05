@@ -42,6 +42,10 @@ type Request struct {
 	loop         *bool
 	watermark    *processing.WatermarkSpec
 	orientation  *processing.OrientationSpec
+	// encOverrides — native-параметры форматов (формат → нативные параметры
+	// kebab-case), заполняется при разрешении пресета/custom. nil = не заданы.
+	// Передаётся в buildPlanForSource и далее в ProcessingPlan.EncodingOverrides.
+	encOverrides map[string]map[string]any
 	resolved     bool
 }
 
@@ -125,7 +129,7 @@ func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, p
 // Path возвращает канонический путь.
 func (r *Request) Path() string { return r.path }
 
-// Quality возвращает качество сжатия (0 = default-quality из processing).
+// Quality возвращает качество сжатия (0 = default-quality из секции encoders).
 // Заполняется при разрешении пресета; пусто для канонических запросов.
 func (r *Request) Quality() int { return r.quality }
 
@@ -149,6 +153,13 @@ func (r *Request) Watermark() *processing.WatermarkSpec { return r.watermark }
 // используется глобальный дефолт processing.default-* на уровне use case).
 // Заполняется при разрешении пресета.
 func (r *Request) Orientation() *processing.OrientationSpec { return r.orientation }
+
+// EncodingOverrides возвращает native-параметры форматов (формат → нативные
+// параметры kebab-case). Возвращаемая копия защищает внутреннее состояние.
+// nil = не заданы. Заполняется при разрешении пресета/custom.
+func (r *Request) EncodingOverrides() map[string]map[string]any {
+	return cloneEncOverrides(r.encOverrides)
+}
 
 // SourceName возвращает имя исходника.
 func (r *Request) SourceName() SourceName { return r.sourceName }
@@ -249,9 +260,10 @@ func (r *Request) String() string {
 }
 
 // WithProcessingOptions возвращает копию запроса с параметрами обработки
-// (quality/frames/duration/loop/watermark). Используется при разрешении
-// пресета: параметры не являются частью URL-грамматики и не влияют на Build().
-func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec) *Request {
+// (quality/frames/duration/loop/watermark/encOverrides). Используется при
+// разрешении пресета: параметры не являются частью URL-грамматики и не
+// влияют на Build().
+func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, encOverrides map[string]map[string]any) *Request {
 	if r == nil {
 		return nil
 	}
@@ -261,6 +273,7 @@ func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *boo
 	cp.duration = duration
 	cp.loop = loop
 	cp.watermark = watermark
+	cp.encOverrides = cloneEncOverrides(encOverrides)
 	return &cp
 }
 
@@ -281,7 +294,7 @@ func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
 // пресета/custom. segmentName сохраняется: канонический URL строится из
 // него. resolved=true помечает запрос разрешённым (Authorize не резолвит
 // повторно).
-func (r *Request) WithResolved(transform Transform, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec) *Request {
+func (r *Request) WithResolved(transform Transform, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec, encOverrides map[string]map[string]any) *Request {
 	if r == nil {
 		return nil
 	}
@@ -295,6 +308,7 @@ func (r *Request) WithResolved(transform Transform, size Size, dpr DPR, quality,
 	cp.loop = loop
 	cp.watermark = watermark
 	cp.orientation = orientation
+	cp.encOverrides = cloneEncOverrides(encOverrides)
 	cp.resolved = true
 	return &cp
 }

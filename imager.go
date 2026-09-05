@@ -30,12 +30,15 @@ import (
 	"gitverse.ru/pkg-ru/imager/observability"
 )
 
-// ConfigDirEnv — единственная env-переменная: путь к каталогу с настройками.
-// Внутри каталога читаются три слоя конфигурации:
+// ConfigDirEnv — env-переменная: путь к каталогу с настройками. Внутри
+// каталога читаются три слоя конфигурации:
 //
-//	setting.yaml + setting-local.yaml   — фундамент (обязателен setting.yaml);
-//	generate.yaml + generate-local.yaml — генерация ассетов (опционально);
-//	failback.yaml + failback-local.yaml — fallback-механизмы (опционально).
+//	server.yaml + server-local.yaml       — фундамент (обязателен server.yaml);
+//	generate.yaml + generate-local.yaml   — генерация ассетов (опционально);
+//	failback.yaml + failback-local.yaml   — fallback-механизмы (опционально).
+//
+// Ещё одна env-переменная — каталог ONNX-моделей IMAGER_MODELS_DIR
+// (константа ModelsDirEnv в composition; см. models/README.md).
 const ConfigDirEnv = "IMAGER_CONFIG_DIR"
 
 // DefaultConfigDir — каталог конфигурации по умолчанию, если IMAGER_CONFIG_DIR
@@ -104,8 +107,8 @@ type Server struct {
 // NewServer собирает и запускает полный HTTP-сервер из YAML-конфига в
 // каталоге cfgDir (сценарий "как cmd/imager").
 //
-// Читает три слоя: setting (setting.yaml + setting-local.yaml, обязателен
-// только setting.yaml), generate (generate.yaml + generate-local.yaml) и
+// Читает три слоя: setting (server.yaml + server-local.yaml, обязателен
+// только server.yaml), generate (generate.yaml + generate-local.yaml) и
 // failback (failback.yaml + failback-local.yaml); собирает pipeline
 // (хранилища, процессоры, детектор, admin, janitor) и создаёт runtime.
 // Сервер ещё не слушает — для запуска вызовите Run(ctx).
@@ -157,16 +160,20 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	// недоступны, извлечение кадра вернёт понятную ошибку на запросе.
 	videoExt := ffmpeg.NewDefault()
 	app, err := composition.Build(context.Background(), composition.AppOptions{
-		Config:          rc.Pipeline,
-		HTTP:            rc.HTTP,
-		ConfigDir:       cfgDir,
-		SourceDir:       rc.SourceDir,
-		ResultDir:       rc.ResultDir,
-		SourceStorage:   rc.Source,
-		ResultStorage:   rc.Result,
-		Processor:       proc.Processor,
-		Limits:          rc.Limits,
-		BufferMaxBytes:  rc.BufferMaxBytes,
+		Config:         rc.Pipeline,
+		HTTP:           rc.HTTP,
+		ConfigDir:      cfgDir,
+		SourceDir:      rc.SourceDir,
+		ResultDir:      rc.ResultDir,
+		SourceStorage:  rc.Source,
+		ResultStorage:  rc.Result,
+		Processor:      proc.Processor,
+		Limits:         rc.Limits,
+		BufferMaxBytes: rc.BufferMaxBytes,
+		// Quality по умолчанию — из единой секции encoders
+		// (encoders.default-quality); старый processing.default-quality
+		// полностью удалён (S2).
+		DefaultQuality:  rc.Encoders.DefaultQuality,
 		MetadataEnabled: rc.MetadataEnabled,
 		MetadataDir:     rc.MetadataDir,
 		Detector:        proc.Detector,

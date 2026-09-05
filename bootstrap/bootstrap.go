@@ -80,7 +80,7 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 			MaxCacheFiles: rc.Libvips.Limits.MaxCacheFiles,
 			MaxCacheSize:  rc.Libvips.Limits.MaxCacheSize,
 		},
-		Encoders:            rc.Libvips.Encoders,
+		EncodersConfig:      rc.Libvips.EncodersConfig,
 		ShrinkOnLoad:        rc.Libvips.ShrinkOnLoad,
 		Color:               rc.Libvips.Color,
 		OperationCache:      rc.Libvips.OperationCache,

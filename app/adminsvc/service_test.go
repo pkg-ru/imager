@@ -205,7 +205,7 @@ func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Pr
 	if err != nil {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
-	p, err := asset.NewPreset(name, asset.TransformCrop, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil)
+	p, err := asset.NewPreset(name, asset.TransformCrop, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset(%q): %v", name, err)
 	}

@@ -352,6 +352,7 @@ func (p *Policy) applyPreset(req *asset.Request, pr *asset.Preset, segment strin
 		pr.Loop(),
 		pr.Watermark(),
 		pr.Orientation(),
+		pr.EncodingOverrides(),
 	)
 	return resolved, Decision{Allowed: true, Reason: ReasonAllowed}
 }

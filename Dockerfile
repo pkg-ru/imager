@@ -85,26 +85,30 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
 
 ENV TZ=Europe/Moscow
 
-# Writable каталоги: source/result и /etc/imager/models (root fs и /tmp —
-# в compose: /tmp — tmpfs).
+# Каталоги source/result (writable) и mountpoint /etc/imager/models. ONNX-модели
+# в образ НЕ копируются: при старте контейнера они скачиваются entrypoint'ом
+# в смонтированный каталог (rw), см. docker/entrypoint.sh и models/README.md.
 RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
     && chown -R imager:imager /data \
     && chmod 0750 /data /data/source /data/result \
     && chown root:imager /etc/imager/models \
     && chmod 0755 /etc/imager/models
 
-# Static binary, базовый конфиг и ONNX-модели (в compose ./models монтируется
-# поверх для обновления без пересборки).
+# Static binary, базовый конфиг и entrypoint-скрипты автоскачивания моделей.
+# Модели в образ не входят (скачиваются в рантайме в rw-каталог).
 COPY --from=builder /out/imager /usr/local/bin/imager
-COPY config/setting.yaml /etc/imager/setting.yaml
-COPY models/face_detection_yunet_2023mar.onnx /etc/imager/models/
-COPY models/ssd_mobilenet_v1_12.onnx /etc/imager/models/
+COPY setting/server.yaml /etc/imager/server.yaml
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/download-models.sh /usr/local/bin/download-models.sh
 
-# Restrictive permissions: бинарь 0755, конфиг 0640, модели 0644.
+# Restrictive permissions: бинарь 0755, конфиг 0640, скрипты 0755 (копируются
+# как root:root, затем chown — entrypoint'у не нужен root для скачивания в
+# смонтированный каталог: uid imager должен иметь запись в ./models:rw).
 RUN chmod 0755 /usr/local/bin/imager \
-    && chmod 0640 /etc/imager/setting.yaml \
-    && chown root:imager /etc/imager/setting.yaml \
-    && chmod 0644 /etc/imager/models/*
+    && chmod 0640 /etc/imager/server.yaml \
+    && chown root:imager /etc/imager/server.yaml \
+    && chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/download-models.sh \
+    && chown root:imager /usr/local/bin/entrypoint.sh /usr/local/bin/download-models.sh
 
 USER imager:imager
 
@@ -115,7 +119,11 @@ EXPOSE 8080
 
 # VOLUME для /etc/imager/models обязателен: иначе bind-mount ./models поверх
 # каталога в read-only нижнем слое overlayfs падает (mkdirat ...: read-only
-# file system). В compose поверх mountpoint монтируется ./models:ro.
+# file system). В compose поверх mountpoint монтируется ./models:rw — каталог
+# доступен на запись, entrypoint скачивает в него модели при старте.
 VOLUME ["/data/source", "/data/result", "/etc/imager/models"]
 
+# ENTRYPOINT сначала скачивает модели (идемпотентно), затем exec'ом запускает
+# imager (CMD) — соблюдается PID-1 сигнальная семантика.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/local/bin/imager"]

@@ -94,7 +94,7 @@ func mustPreset(t *testing.T, name string, tr asset.Transform, size string, outF
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
-	p, err := asset.NewPreset(name, tr, sz, []asset.Format{of}, 0, false, 0, 0, 0, nil)
+	p, err := asset.NewPreset(name, tr, sz, []asset.Format{of}, 0, false, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("preset: %v", err)
 	}
@@ -437,6 +437,41 @@ func TestBuildPlanDetectionTransforms(t *testing.T) {
 				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.tr, plan.Operation, c.want)
 			}
 		})
+	}
+}
+
+// TestBuildPlanEncodingOverrides проверяет проброс native-параметров
+// кодирования из Request (заполняются при разрешении пресета/custom) в
+// ProcessingPlan.EncodingOverrides, а также что скалярный quality из Deps
+// используется, когда в запросе quality == 0 (default-quality семантика).
+func TestBuildPlanEncodingOverrides(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "webp")
+	over := map[string]map[string]any{
+		"webp": {"quality": 90, "reduction-effort": 6},
+		"png":  {"compression-level": 9},
+	}
+	// quality == 0 → default-quality (Deps.Quality = 85); overrides
+	// прокидываются как есть (валидация — на уровне построения плана).
+	req = req.WithProcessingOptions(0, 0, 0, nil, nil, over)
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Quality != env.svc.deps.Quality {
+		t.Errorf("plan.Quality = %d, want default %d", plan.Quality, env.svc.deps.Quality)
+	}
+	if got := plan.EncodingOverrides["webp"]["quality"]; got != 90 {
+		t.Errorf("EncodingOverrides webp quality = %v, want 90", got)
+	}
+	if got := plan.EncodingOverrides["webp"]["reduction-effort"]; got != 6 {
+		t.Errorf("EncodingOverrides webp reduction-effort = %v, want 6", got)
+	}
+	if got := plan.EncodingOverrides["png"]["compression-level"]; got != 9 {
+		t.Errorf("EncodingOverrides png compression-level = %v, want 9", got)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("plan.Validate error: %v", err)
 	}
 }
 

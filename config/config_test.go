@@ -36,7 +36,6 @@ func TestCompileWatermarks(t *testing.T) {
 		},
 		Policy: policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:   dynamic.Int64(80),
 			DefaultWatermark: dynamic.String("logo"),
 		},
 	}
@@ -133,7 +132,7 @@ func TestValidateWatermarkErrors(t *testing.T) {
 				Version:    dynamic.String(SupportedVersion),
 				Watermarks: wmDecls("logo"),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+				Processing: ProcessingConfig{},
 			}
 			tc.mutate(cfg)
 			err := cfg.Validate()
@@ -191,7 +190,6 @@ func TestCompileDefaultOrientation(t *testing.T) {
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:    dynamic.Int64(80),
 			DefaultAutoOrient: dynamic.NewNullable(dynamic.Bool(false)),
 			DefaultRotate:     dynamic.String("90"),
 			DefaultFlip:       dynamic.String("horizontal"),
@@ -215,7 +213,7 @@ func TestCompileDefaultOrientationDefaults(t *testing.T) {
 		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
-		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+		Processing: ProcessingConfig{},
 	}
 	compiled, err := cfg.Compile()
 	if err != nil {
@@ -240,7 +238,7 @@ func TestValidateDefaultOrientationErrors(t *testing.T) {
 			cfg := &Config{
 				Version:    dynamic.String(SupportedVersion),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+				Processing: ProcessingConfig{},
 			}
 			tc.mutate(&cfg.Processing)
 			if err := cfg.Validate(); err == nil {
@@ -256,7 +254,6 @@ func TestCompileDefaultTrim(t *testing.T) {
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:       dynamic.Int64(80),
 			DefaultTrimMode:      dynamic.String("color"),
 			DefaultTrimColor:     dynamic.String("#ffffff"),
 			DefaultTrimTolerance: dynamic.Float64(0.25),
@@ -280,7 +277,7 @@ func TestCompileDefaultTrimDefaults(t *testing.T) {
 		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
-		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+		Processing: ProcessingConfig{},
 	}
 	compiled, err := cfg.Compile()
 	if err != nil {
@@ -314,7 +311,7 @@ func TestValidateDefaultTrimErrors(t *testing.T) {
 			cfg := &Config{
 				Version:    dynamic.String(SupportedVersion),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+				Processing: ProcessingConfig{},
 			}
 			tc.mutate(&cfg.Processing)
 			if err := cfg.Validate(); err == nil {
@@ -331,8 +328,7 @@ func TestDefaultLoopVar(t *testing.T) {
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality: dynamic.Int64(80),
-			DefaultLoop:    loop,
+			DefaultLoop: loop,
 		},
 	}
 	compiled, err := cfg.Compile()
@@ -350,7 +346,6 @@ func TestCompileDefaultVideo(t *testing.T) {
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
 		Processing: ProcessingConfig{
-			DefaultQuality:           dynamic.Int64(80),
 			DefaultVideoFramePercent: 25,
 			DefaultVideoMinContrast:  0.3,
 			DefaultVideoFrameStep:    5,
@@ -380,7 +375,7 @@ func TestCompileDefaultVideoDefaults(t *testing.T) {
 		Version:    dynamic.String(SupportedVersion),
 		Watermarks: wmDecls("logo"),
 		Policy:     policyConfigForTest(),
-		Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+		Processing: ProcessingConfig{},
 	}
 	compiled, err := cfg.Compile()
 	if err != nil {
@@ -411,7 +406,7 @@ func TestValidateDefaultVideoErrors(t *testing.T) {
 			cfg := &Config{
 				Version:    dynamic.String(SupportedVersion),
 				Policy:     policyConfigForTest(),
-				Processing: ProcessingConfig{DefaultQuality: dynamic.Int64(80)},
+				Processing: ProcessingConfig{},
 			}
 			tc.mutate(&cfg.Processing)
 			if err := cfg.Validate(); err == nil {

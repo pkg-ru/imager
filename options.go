@@ -53,6 +53,9 @@ type Options struct {
 	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
 	// (0 = без лимита). По умолчанию 500 МБ.
 	BufferMaxBytes int64
+	// DefaultQuality — качество сжатия по умолчанию [1,100] (encoders.
+	// default-quality; 0 = дефолт кода 80).
+	DefaultQuality int
 
 	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset.
 	MetadataEnabled bool
@@ -99,6 +102,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		Results:         opts.Results,
 		Limits:          opts.Limits,
 		BufferMaxBytes:  opts.BufferMaxBytes,
+		DefaultQuality:  opts.DefaultQuality,
 		MetadataEnabled: opts.MetadataEnabled,
 		MetadataDir:     opts.MetadataDir,
 		Detector:        opts.Detector,

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"gitverse.ru/pkg-ru/imager/domain/encoding"
 )
 
 // Operation — допустимая enum операций обработки кропа/ресайза.
@@ -250,10 +252,19 @@ type ProcessingPlan struct {
 	// из конфигурации (прет → processing.default-*); НЕ является частью
 	// URL-грамматики. Применяется процессорами СТРОГО до кропа.
 	Orientation *OrientationSpec
+	// EncodingOverrides — native-параметры кодирования по форматам
+	// (формат → ключ реестра domain/encoding → значение). nil = не заданы.
+	// Заполняется из пресета/custom (плоские native-ключи YAML) и
+	// передаётся процессору для Resolve; валидируется в Validate
+	// (инвариант: значения уже проверены при компиляции конфигурации).
+	EncodingOverrides map[string]map[string]any
 }
 
 // NewProcessingPlan создаёт ProcessingPlan с валидацией.
-func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool, frames, duration int) (*ProcessingPlan, error) {
+//
+// encOverrides (необязательный variadic-параметр) — native-параметры
+// кодирования по форматам; единственный экземпляр (или nil) допускается.
+func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool, frames, duration int, encOverrides ...map[string]map[string]any) (*ProcessingPlan, error) {
 	if !ValidOperation(op) {
 		return nil, fmt.Errorf("processing plan: invalid operation %q", op)
 	}
@@ -278,16 +289,21 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 	if duration < 0 {
 		return nil, fmt.Errorf("processing plan: duration must be non-negative, got %d", duration)
 	}
+	var enc map[string]map[string]any
+	if len(encOverrides) > 0 {
+		enc = encOverrides[0]
+	}
 	return &ProcessingPlan{
-		Operation:     op,
-		SourceFormat:  sourceFormat,
-		OutputFormats: outputFormat,
-		Size:          size,
-		DPR:           dpr,
-		Quality:       quality,
-		Loop:          loop,
-		Frames:        frames,
-		Duration:      duration,
+		Operation:         op,
+		SourceFormat:      sourceFormat,
+		OutputFormats:     outputFormat,
+		Size:              size,
+		DPR:               dpr,
+		Quality:           quality,
+		Loop:              loop,
+		Frames:            frames,
+		Duration:          duration,
+		EncodingOverrides: enc,
 	}, nil
 }
 
@@ -337,6 +353,15 @@ func (p *ProcessingPlan) Validate() error {
 	}
 	if err := p.Orientation.Validate(); err != nil {
 		return fmt.Errorf("processing plan: %w", err)
+	}
+	// Native-параметры кодирования: валидируются по реестру (известный
+	// формат/параметр, диапазон). Для план-построения значение уже прошло
+	// компиляцию конфигурации; здесь — defense-in-depth для программных
+	// построений плана.
+	for format, params := range p.EncodingOverrides {
+		if err := encoding.ValidateOverrides(format, params); err != nil {
+			return fmt.Errorf("processing plan: encoding overrides for %q: %w", format, err)
+		}
 	}
 	return nil
 }

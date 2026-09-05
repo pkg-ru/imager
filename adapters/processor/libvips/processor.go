@@ -164,11 +164,13 @@ func (o OperationCacheOpts) Enabled() bool {
 type Options struct {
 	// Limits — resource limits обработчика.
 	Limits Limits
-	// Encoders — per-format параметры сжатия кодировщиков (WebP effort,
-	// AVIF speed, PNG compression, JXL effort, JPEG progressive, PNG
-	// interlace/quantization, GIF bit-depth). Нулевые поля = встроенные
-	// умолчания.
-	Encoders EncoderParams
+	// EncodersConfig — полное per-format представление единой секции
+	// encoders (default-quality + нативные параметры по форматам). Хранит
+	// ГЛОБАЛЬНЫЕ значения из setting/server.yaml; эффективные параметры каждого
+	// экспорта разрешаются per-request через domain/encoding.Resolve
+	// (resolveEffective в encoders.go): preset override > encoders yaml >
+	// автомаппинг от quality > дефолт реестра.
+	EncodersConfig EncodersConfig
 	// ShrinkOnLoad — настройки shrink-on-load при декодировании. Нулевое
 	// значение = включено (умолчание).
 	ShrinkOnLoad ShrinkOnLoadOpts

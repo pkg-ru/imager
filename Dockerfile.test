@@ -6,18 +6,26 @@
 #   docker build -f Dockerfile.test -t imager:test .
 #   docker run --rm -v "%cd%":/src -w /src imager:test \
 #       sh -c "go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
-# Модели ONNX и тестовые изображения — в ./models (монтируется в /src/models).
+# Модели ONNX скачиваются самим тестовым контейнером (тот же
+# docker/download-models.sh, примонтирован в rw-каталог); см. models/README.md.
+# Пример с монтированием каталога и env-переменными источников:
+#   docker run --rm -v "%cd%/models":/etc/imager/models -v "%cd%":/src -w /src \
+#       -e IMAGER_MODEL_FACE_URL=... -e IMAGER_MODEL_OBJECT_URL=... imager:test \
+#       sh -c "download-models.sh && go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
 ###############################################################################
 FROM golang:1.27.0-alpine3.23
 
 ENV CGO_ENABLED=1 \
     GOOS=linux \
-    GOARCH=amd64
+    GOARCH=amd64 \
+    IMAGER_MODELS_DIR=/etc/imager/models
 
 # cgo-зависимости (libvips, govips) — те же, что в production builder, без
 # пиннинга (golang:1.27.0-alpine3.23 базируется на Alpine 3.23). onnxruntime и
 # libstdc++/libgcc — из edge (C++23-символ). dl-cdn.alpinelinux.org недоступен
-# из Docker — репозитории переопределены на mirror.yandex.ru.
+# из Docker — репозитории переопределены на mirror.yandex.ru. curl нужен
+# download-models.sh (в production-образе используется busybox wget; здесь
+# ставим curl для надёжного следования редиректам).
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
@@ -33,8 +41,14 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
         poppler-dev \
         libraw-dev \
         tzdata \
+        curl \
+        ca-certificates \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
     && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime
 
 WORKDIR /src
+
+# Скрипт скачивания моделей (тот же, что и в production-образе).
+COPY docker/download-models.sh /usr/local/bin/download-models.sh
+RUN chmod 0755 /usr/local/bin/download-models.sh

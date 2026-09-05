@@ -76,7 +76,7 @@ curl -o out.webp http://localhost:8080/thumbs/photo-jpg/thumb.webp
 curl -I -H "If-None-Match: \"etag-from-first-response\"" http://localhost:8080/test-jpg/thumb.webp   # 304
 ```
 
-Примеры конфигурации пресетов/customs и path-policies — в [config/generate.yaml](../config/generate.yaml).
+Примеры конфигурации пресетов/customs и path-policies — в [setting/generate.yaml](../setting/generate.yaml).
 
 ## Заголовки ответов
 

@@ -56,9 +56,21 @@ func pngBackendPlan(t *testing.T) *processing.ProcessingPlan {
 // TestPNGQuantizationExportsPalettePNG — при включённой опции PNGPalette
 // экспорт PNG не падает и даёт валидный файл с палитровой bit-depth.
 func TestPNGQuantizationExportsPalettePNG(t *testing.T) {
+	palette := true
+	colors := 64
+	bitdepth := 4
 	b, err := newLibvipsBackend(Options{
-		Limits:   Limits{Concurrency: 1},
-		Encoders: EncoderParams{PNGPalette: true, PNGPaletteColors: 64, PNGPaletteBitDepth: 4},
+		Limits: Limits{Concurrency: 1},
+		EncodersConfig: EncodersConfig{
+			DefaultQuality: 85,
+			Formats: map[string]FormatEncodersConfig{
+				"png": {
+					Palette:         &palette,
+					PaletteColors:   &colors,
+					PaletteBitDepth: &bitdepth,
+				},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("newLibvipsBackend: %v", err)

@@ -36,6 +36,12 @@ type Preset struct {
 	loop        *bool
 	watermark   *processing.WatermarkSpec
 	orientation *processing.OrientationSpec
+	// encOverrides — native-параметры форматов: формат (каноническое имя
+	// реестра domain/encoding) → набор нативных параметров (kebab-case, без
+	// префикса формата). nil = не заданы. Формат в URL определяет, какие
+	// overrides применяются; per-format quality хранится под ключом "quality"
+	// (lossy-форматы). Иммутабелен после NewPreset.
+	encOverrides map[string]map[string]any
 }
 
 // NewPreset создаёт Preset с валидацией.
@@ -43,11 +49,16 @@ type Preset struct {
 // dpr — фиксированный DPR пресета (0 = не задан, берётся из имени/URL).
 // dprSet — true, если ключ dpr присутствовал в конфигурации (даже со
 // значением 0/1): в этом случае @dpr-суффикс в URL запрещён.
-// quality — качество сжатия (0 = default-quality из processing).
+// quality — качество сжатия (0 = default-quality из секции encoders).
 // frames — максимальное число кадров анимации (0 = без ограничения).
 // duration — максимальная длительность анимации в мс (0 = без ограничения).
 // loop — зацикливание анимации (nil = default-loop из processing).
-func NewPreset(name string, transform Transform, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool) (*Preset, error) {
+// encOverrides — native-параметры форматов (формат → нативные параметры в
+// kebab-case, без префикса формата). nil = не заданы. per-format quality
+// (lossy-форматы) хранится под ключом "quality". Значения копируются
+// (поверхностное копирование вложенных map), чтобы пресет не разделял
+// состояние с конфигурацией.
+func NewPreset(name string, transform Transform, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool, encOverrides map[string]map[string]any) (*Preset, error) {
 	if name == "" {
 		return nil, fmt.Errorf("preset: empty name")
 	}
@@ -99,7 +110,26 @@ func NewPreset(name string, transform Transform, size Size, outputFormat []Forma
 		frames:       frames,
 		duration:     duration,
 		loop:         loop,
+		encOverrides: cloneEncOverrides(encOverrides),
 	}, nil
+}
+
+// cloneEncOverrides возвращает независимую копию overrides (поверхностное
+// копирование вложенных map): пресет не должен разделять состояние с
+// конфигурацией/планом. nil → nil.
+func cloneEncOverrides(in map[string]map[string]any) map[string]map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]any, len(in))
+	for format, params := range in {
+		cp := make(map[string]any, len(params))
+		for k, v := range params {
+			cp[k] = v
+		}
+		out[format] = cp
+	}
+	return out
 }
 
 // Name возвращает имя пресета.
@@ -164,6 +194,13 @@ func (p *Preset) DPRSet() bool { return p.dprSet }
 
 // Quality возвращает качество сжатия (0 = default-quality).
 func (p *Preset) Quality() int { return p.quality }
+
+// EncodingOverrides возвращает native-параметры форматов (формат →
+// нативные параметры kebab-case). Возвращаемая копия защищает внутреннее
+// состояние. nil = не заданы.
+func (p *Preset) EncodingOverrides() map[string]map[string]any {
+	return cloneEncOverrides(p.encOverrides)
+}
 
 // Frames возвращает максимальное число кадров (0 = без ограничения).
 func (p *Preset) Frames() int { return p.frames }
@@ -378,7 +415,7 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 			Reason:      err.Error(),
 		}
 	}
-	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark)
+	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark, p.encOverrides)
 	if p.orientation != nil {
 		resolved = resolved.WithOrientation(p.orientation)
 	}

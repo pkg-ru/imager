@@ -48,7 +48,7 @@ docker compose up -d --build
 curl http://localhost:8080/healthz   # {"status":"alive"}
 ```
 
-Конфигурация монтируется read-only из `./config` в `/etc/imager/config`
+Конфигурация монтируется read-only из `./setting` в `/etc/imager/setting`
 (подробнее — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
 ### Сборка из исходников
@@ -58,7 +58,7 @@ curl http://localhost:8080/healthz   # {"status":"alive"}
 
 ```bash
 go build -o imager ./cmd/imager
-IMAGER_CONFIG_DIR=./config ./imager
+IMAGER_CONFIG_DIR=./setting ./imager
 ```
 
 Продакшен-сборка включает libvips (нужен CGO):
@@ -99,13 +99,13 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 
 | Слой | Файлы | Содержимое |
 |------|-------|------------|
-| setting | `setting.yaml` + `setting-local.yaml` | Сервер, хранилище, наблюдаемость, admin (обязательный базовый файл) |
-| generate | `generate.yaml` + `generate-local.yaml` | Пресеты, политика, энкодеры, водяные знаки, детекция |
+| setting | `server.yaml` + `server-local.yaml` | Сервер, хранилище, наблюдаемость, admin, единая секция кодирования `encoders` (обязательный базовый файл) |
+| generate | `generate.yaml` + `generate-local.yaml` | Пресеты, политика, native-переопределения кодеков в пресетах, водяные знаки, детекция |
 | failback | `failback.yaml` + `failback-local.yaml` | Обработка not-found, source-fallback |
 
 Секреты хранятся в файлах `*-local.yaml` (не коммитятся). Полный справочник —
 в [docs/CONFIGURATION.md](docs/CONFIGURATION.md), примеры с комментариями —
-в [config/](config/).
+в [setting/](setting/).
 
 ## Структура проекта
 
@@ -126,7 +126,7 @@ ports/                 Interface contracts between layers
 coordination/          In-process singleflight
 observability/         Logging, metrics, middleware
 bootstrap/             Process bootstrap helpers
-config/                Example configuration files
+setting/               Example configuration files
 docs/                  Documentation
 ```
 

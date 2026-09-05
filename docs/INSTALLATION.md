@@ -41,10 +41,10 @@ go build -tags libvips,onnx -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 ## Запуск
 
 ```bash
-IMAGER_CONFIG_DIR=./config ./imager
+IMAGER_CONFIG_DIR=./setting ./imager
 ```
 
-Переменные окружения: `IMAGER_CONFIG_DIR` (путь к каталогу с файлами конфигурации; по умолчанию текущий каталог) и `IMAGER_S3_ACCESS_KEY`/`IMAGER_S3_SECRET_KEY` (S3-credentials; значение из YAML приоритетнее). Обязателен `setting.yaml`; остальные файлы (`setting-local.yaml`, `generate.yaml`/`generate-local.yaml`, `failback.yaml`/`failback-local.yaml`) — опциональны. Три слоя конфигурации описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации).
+Переменные окружения: `IMAGER_CONFIG_DIR` (путь к каталогу с файлами конфигурации; по умолчанию текущий каталог) и `IMAGER_S3_ACCESS_KEY`/`IMAGER_S3_SECRET_KEY` (S3-credentials; значение из YAML приоритетнее). Обязателен `server.yaml`; остальные файлы (`server-local.yaml`, `generate.yaml`/`generate-local.yaml`, `failback.yaml`/`failback-local.yaml`) — опциональны. Три слоя конфигурации описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации).
 
 ## Docker
 
@@ -57,7 +57,7 @@ docker build -t imager:production .
 Образ двухэтапный:
 
 - **builder**: `golang:1.27.0-alpine3.23` + `build-base`, `vips-dev ~=8.17`, `libheif-dev`, `libjxl-dev`, `librsvg-dev`, `poppler-dev`, `libraw-dev`, `onnxruntime` (edge); бинарный файл собирается с `-tags libvips,onnx`;
-- **runtime**: `alpine:3.23` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`, `onnxruntime`; non-root пользователь `imager` (uid 10001); бинарный файл `/usr/local/bin/imager`, каталог конфигурации `/etc/imager` (в compose монтируется `./config` и `./models`, см. [DEPLOYMENT.md](DEPLOYMENT.md#запуск)).
+- **runtime**: `alpine:3.23` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`, `onnxruntime`; non-root пользователь `imager` (uid 10001); бинарный файл `/usr/local/bin/imager`, каталог конфигурации `/etc/imager` (в compose монтируется `./setting` и `./models`, см. [DEPLOYMENT.md](DEPLOYMENT.md#запуск)).
 
 HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 
@@ -71,7 +71,7 @@ HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 docker compose up -d --build
 ```
 
-[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./config` → `/etc/imager/config:ro`, `./models` → `/etc/imager/models:ro`, `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. `read_only: true` не используется — причины и полный разбор hardening в [DEPLOYMENT.md](DEPLOYMENT.md#запуск).
+[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./setting` → `/etc/imager/setting:ro`, `./models` → `/etc/imager/models:ro`, `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. `read_only: true` не используется — причины и полный разбор hardening в [DEPLOYMENT.md](DEPLOYMENT.md#запуск).
 
 ## Локальная разработка
 

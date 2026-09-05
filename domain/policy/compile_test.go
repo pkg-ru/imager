@@ -604,6 +604,128 @@ func TestCompilePresetOrientationNilDefault(t *testing.T) {
 	}
 }
 
+func intPtr2(v int) *int           { return &v }
+func boolPtr2(v bool) *bool        { return &v }
+func floatPtr2(v float64) *float64 { return &v }
+
+// TestCompileEncodingOverrides проверяет, что плоские native-ключи пресета
+// собираются в overrides (формат → нативные параметры реестра без префикса)
+// и прокидываются в asset.Preset. per-format quality (webp-quality) ложится
+// под ключом "quality".
+func TestCompileEncodingOverrides(t *testing.T) {
+	cfg := Config{
+		Presets: map[string]PresetConfig{
+			"thumb": {
+				Width:               dynamic.Uint32(120),
+				Height:              dynamic.Uint32(80),
+				OutputFormats:       dynamic.StringSlice{dynamic.String("webp"), dynamic.String("png")},
+				Quality:             dynamic.Uint32(85),
+				WebPQuality:         intPtr2(90),
+				WebPReductionEffort: intPtr2(6),
+				PNGCompressionLevel: intPtr2(9),
+				JXLEffort:           intPtr2(9),
+			},
+		},
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	over := p.EncodingOverrides()
+	if over == nil {
+		t.Fatal("expected encoding overrides")
+	}
+	if over["webp"]["quality"] != 90 {
+		t.Errorf("webp quality = %v, want 90", over["webp"]["quality"])
+	}
+	if over["webp"]["reduction-effort"] != 6 {
+		t.Errorf("webp reduction-effort = %v, want 6", over["webp"]["reduction-effort"])
+	}
+	if over["png"]["compression-level"] != 9 {
+		t.Errorf("png compression-level = %v, want 9", over["png"]["compression-level"])
+	}
+	if over["jxl"]["effort"] != 9 {
+		t.Errorf("jxl effort = %v, want 9", over["jxl"]["effort"])
+	}
+}
+
+// TestCompileEncodingOverridesYAML проверяет разбор плоских native-ключей из
+// YAML-представления Config (тот же путь, что в composition: yaml.v3) в
+// PresetConfig и проброс в asset.Preset через Compile.
+func TestCompileEncodingOverridesYAML(t *testing.T) {
+	doc := `
+presets:
+  thumb:
+    width: 320
+    height: 200
+    output-formats: [webp, png]
+    quality: 85
+    png-compression-level: 9
+    webp-reduction-effort: 6
+    webp-quality: 90
+    jxl-effort: 9
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(doc), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal error: %v", err)
+	}
+	pcfg, ok := cfg.Presets["thumb"]
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	if pcfg.WebPQuality == nil || *pcfg.WebPQuality != 90 {
+		t.Errorf("WebPQuality = %v, want 90", pcfg.WebPQuality)
+	}
+	if pcfg.WebPReductionEffort == nil || *pcfg.WebPReductionEffort != 6 {
+		t.Errorf("WebPReductionEffort = %v, want 6", pcfg.WebPReductionEffort)
+	}
+	if pcfg.PNGCompressionLevel == nil || *pcfg.PNGCompressionLevel != 9 {
+		t.Errorf("PNGCompressionLevel = %v, want 9", pcfg.PNGCompressionLevel)
+	}
+	compiled, err := Compile(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("thumb")
+	if !ok {
+		t.Fatal("expected preset thumb")
+	}
+	over := p.EncodingOverrides()
+	if over["webp"]["quality"] != 90 {
+		t.Errorf("webp quality = %v, want 90", over["webp"]["quality"])
+	}
+	if over["webp"]["reduction-effort"] != 6 {
+		t.Errorf("webp reduction-effort = %v, want 6", over["webp"]["reduction-effort"])
+	}
+	if over["png"]["compression-level"] != 9 {
+		t.Errorf("png compression-level = %v, want 9", over["png"]["compression-level"])
+	}
+}
+
+// TestValidateConfigInvalidEncodingOverrides проверяет fail-fast валидацию
+// native-параметров: выход за диапазон реестра — ошибка конфигурации.
+func TestValidateConfigInvalidEncodingOverrides(t *testing.T) {
+	invalid := []*Config{
+		// png-compression-level вне [1,9].
+		{Presets: map[string]PresetConfig{"a": {Width: dynamic.Uint32(1), OutputFormats: dynamic.StringSlice{dynamic.String("png")}, PNGCompressionLevel: intPtr2(0)}}},
+		// webp-reduction-effort вне [0,6].
+		{Presets: map[string]PresetConfig{"a": {Width: dynamic.Uint32(1), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, WebPReductionEffort: intPtr2(7)}}},
+		// gif-bit-depth вне [1,8].
+		{Presets: map[string]PresetConfig{"a": {Width: dynamic.Uint32(1), OutputFormats: dynamic.StringSlice{dynamic.String("gif")}, GIFBitDepth: intPtr2(9)}}},
+		// webp-quality: 0 (вне [1,100]).
+		{Presets: map[string]PresetConfig{"a": {Width: dynamic.Uint32(1), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, WebPQuality: intPtr2(0)}}},
+	}
+	for _, c := range invalid {
+		if err := ValidateConfig(c); err == nil {
+			t.Errorf("ValidateConfig(+%v) expected error", c)
+		}
+	}
+}
+
 func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
 	invalid := []*Config{
 		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, Rotate: dynamic.String("45")}}},
