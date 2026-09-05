@@ -42,21 +42,32 @@ SELFIE_URL="${IMAGER_MODEL_SELFIE_URL:-}"
 MIN_SIZE=1024
 
 # -- Helpers -------------------------------------------------------------
-log()  { printf '[models] %s\n' "$*"; }
-warn() { printf '[models] WARNING: %s\n' "$*" >&2; }
+# Общие хелперы (log/warn/fetch) берутся из docker/lib.sh, когда он доступен
+# (клонированный репозиторий / build context). При standalone-развёртывании
+# (скрипт скопирован в runtime-образ без lib.sh) используются локальные
+# определения — поведение идентично.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "${SCRIPT_DIR}/lib.sh" ]; then
+    # shellcheck source=lib.sh
+    LIB_PREFIX="[models]"
+    . "${SCRIPT_DIR}/lib.sh"
+else
+    log()  { printf '[models] %s\n' "$*"; }
+    warn() { printf '[models] WARNING: %s\n' "$*" >&2; }
 
-# Download via curl if available (follows redirects, has retries), else wget
-# (busybox wget is present in the alpine runtime image).
-fetch() { # $1 = tmp file, $2 = url
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o "$1" "$2"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q -T 60 -t 3 -O "$1" "$2"
-    else
-        warn "no curl or wget available; cannot download '$2'"
-        return 1
-    fi
-}
+    # Download via curl if available (follows redirects, has retries), else
+    # wget (busybox wget is present in the alpine runtime image).
+    fetch() { # $1 = tmp file, $2 = url
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 -o "$1" "$2"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -T 60 -t 3 -O "$1" "$2"
+        else
+            warn "no curl or wget available; cannot download '$2'"
+            return 1
+        fi
+    }
+fi
 
 # Download a single file (idempotent, atomic).
 download() { # $1 = file name, $2 = url, $3 = directory

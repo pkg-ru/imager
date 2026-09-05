@@ -20,3 +20,8 @@ imager.exe
 models
 docker/*.tmp*
 docker/*.log
+#
+# Скрипты docker/*.sh (lib.sh, build-deps.sh, entrypoint.sh,
+# download-models.sh, install-*.sh) НЕ исключаются — они обязательны для
+# сборки образа (Dockerfile/install-imager.sh/build-deps.sh) и входят в
+# build context.

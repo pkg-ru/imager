@@ -26,26 +26,18 @@ ENV CGO_ENABLED=1 \
 # из Docker — репозитории переопределены на mirror.yandex.ru. curl нужен
 # download-models.sh (в production-образе используется busybox wget; здесь
 # ставим curl для надёжного следования редиректам).
+#
+# Пакетный список — единый источник docker/build-deps.sh (тот же, что в
+# production Dockerfile): builder-пакеты + edge (onnxruntime). Дополнительно
+# ставим tzdata, curl, ca-certificates для тестов.
+COPY docker/build-deps.sh /tmp/build-deps.sh
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
-    && apk add --no-cache --update \
-        build-base \
-        pkgconf \
-        musl-dev \
-        vips-dev \
-        glib-dev \
-        libheif-dev \
-        libde265-dev \
-        libjxl-dev \
-        librsvg-dev \
-        poppler-dev \
-        libraw-dev \
-        tzdata \
-        curl \
-        ca-certificates \
+    && sh /tmp/build-deps.sh install-builder \
+    && apk add --no-cache tzdata~=2026 curl ca-certificates \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
-    && apk add --no-cache --upgrade libstdc++ libgcc onnxruntime
+    && sh /tmp/build-deps.sh install-edge
 
 WORKDIR /src
 

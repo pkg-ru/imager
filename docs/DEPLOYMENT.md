@@ -2,6 +2,28 @@
 
 ## Запуск
 
+### Pull готового образа (основной путь)
+
+```bash
+docker pull altrap/imager:latest
+# или конкретная версия
+docker pull altrap/imager:1.0.0
+```
+
+Образ `altrap/imager` берётся с Docker Hub (учётка `altrap`, НЕ репозиторий
+кода) и собирается из релизов (`Dockerfile`, target `from-release`):
+бинарь `imager` скачивается fetcher-стадией с `gitverse.ru/pkg-ru/imager`
+(основной; fallback — теги зеркала `github.com/pkg-ru/imager`)
+(`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)),
+runtime-слой идентичен сборке из исходников (pinned `alpine:3.23`, пакетные
+списки — `docker/build-deps.sh`). Теги публикуются через
+`make docker-release IMAGER_VERSION=<tag>` или автоматически при релизе
+(GitVerse CI, джоба `docker-release` в
+[`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml); настройка секрета
+
+Последующие шаги (mounts, пользователь, vars) — одинаковы для pull'нутого и
+для собранного вручную образа:
+
 ### Docker Compose (рекомендуется)
 
 ```bash
@@ -205,4 +227,4 @@ Workflow: [`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml).
 - матрица build tags: `default`/`onnx` на Linux и Windows, `libvips`/`libvips,onnx` на Linux (CGO);
 - `gofmt`, `go vet`, `go test`, `go test -race` (Linux);
 - fuzz smoke: `FuzzParse`, `FuzzParseSize` (domain/asset), `FuzzCleanRelContainment` (storage/fs);
-- `govulncheck`, сборка `cmd/imager`, container build и сканирование Trivy.
+- `govulncheck`, сборка `cmd/imager`, container build и сканирование Trivy;

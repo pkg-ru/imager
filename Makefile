@@ -93,13 +93,54 @@ fuzz:
 
 # --- Production / Docker ---
 
+# Имя образа и версия для docker-build-release/docker-push/docker-release.
+# IMAGER_IMAGE — образ на Docker Hub (altrap/imager); это УЧЁТКА Docker Hub,
+# не репозиторий кода. Репозитории кода: gitverse.ru/pkg-ru/imager (основной)
+# и github.com/pkg-ru/imager (зеркало).
+# IMAGER_VERSION принимает тег релиза ("v1.2.3", "1.0.0") или "latest" —
+# конкретная версия резолвится тем же механизмом, что docker/install-imager.sh
+# (docker/lib.sh: GitHub API releases/latest github.com/pkg-ru/imager,
+# fallback git ls-remote --tags gitverse.ru/pkg-ru/imager).
+IMAGER_IMAGE ?= altrap/imager
+IMAGER_VERSION ?= latest
+
+VERSION_TAG := $(shell sh -c '. "docker/lib.sh" 2>/dev/null && resolve_release_version "$(IMAGER_VERSION)" 2>/dev/null')
+ifeq ($(strip $(VERSION_TAG)),)
+VERSION_TAG := $(IMAGER_VERSION)
+endif
+
 .PHONY: build-prod
 build-prod:
 	cd cmd/imager && go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
 
+# Сборка образа из исходников (исторический таргет, локально/CI).
 .PHONY: docker-build
 docker-build:
 	docker build -t imager:production .
+
+# Сборка прод-образа из GitHub releases (default target from-release); см.
+# Dockerfile. Сборка из исходников — docker-build-from-source.
+# Пример: make docker-build-release IMAGER_VERSION=1.0.0
+.PHONY: docker-build-release
+docker-build-release:
+	docker build --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
+		-t $(IMAGER_IMAGE):latest \
+		-t $(IMAGER_IMAGE):$(VERSION_TAG) .
+
+# Публикация прод-образа в registry (после docker-build-release).
+.PHONY: docker-push
+docker-push:
+	docker push $(IMAGER_IMAGE):latest
+	docker push $(IMAGER_IMAGE):$(VERSION_TAG)
+
+# Сборка + публикация релиза.
+.PHONY: docker-release
+docker-release: docker-build-release docker-push
+
+# Сборка прод-образа из исходников (builder-стадия, target from-source).
+.PHONY: docker-build-from-source
+docker-build-from-source:
+	docker build --target from-source -t $(IMAGER_IMAGE):from-source .
 
 .PHONY: docker-up
 docker-up:
