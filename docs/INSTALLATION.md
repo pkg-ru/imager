@@ -162,11 +162,6 @@ IMAGER_CONFIG_DIR=./setting ./imager
 Переменные окружения: `IMAGER_CONFIG_DIR` (путь к каталогу с файлами конфигурации; по умолчанию текущий каталог) и `IMAGER_S3_ACCESS_KEY`/`IMAGER_S3_SECRET_KEY` (S3-credentials; значение из YAML приоритетнее). Обязателен `server.yaml`; остальные файлы (`server-local.yaml`, `generate.yaml`/`generate-local.yaml`, `failback.yaml`/`failback-local.yaml`) — опциональны. Три слоя конфигурации описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации).
 
 ## Docker (производственный образ)
-
-> Публикация образа на Docker Hub (автоматическая при релизе и ручная),
-> настройка секрета `DOCKERHUB_TOKEN` и проверка тегов — в
-> [DOCKER_HUB.md](DOCKER_HUB.md).
-
 ### Готовый образ (рекомендуется)
 
 ```bash
