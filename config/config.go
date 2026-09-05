@@ -107,6 +107,10 @@ type ProcessingConfig struct {
 // SupportedVersion — поддерживаемая версия конфигурации.
 const SupportedVersion = "1"
 
+// DefaultQuality — качество сжатия по умолчанию, применяемое, если
+// processing.default-quality не задан в конфигурации.
+const DefaultQuality int64 = 80
+
 // Validate проверяет корректность DTO.
 func (c *Config) Validate() error {
 	if c == nil {
@@ -115,8 +119,8 @@ func (c *Config) Validate() error {
 	if c.Version.Unwrap() != SupportedVersion {
 		return fmt.Errorf("config: unsupported version %q, expected %q", c.Version.Unwrap(), SupportedVersion)
 	}
-	if q := c.Processing.DefaultQuality.Unwrap(); q < 0 || q > 100 {
-		return fmt.Errorf("config: default-quality must be in [0,100], got %d", q)
+	if q := c.Processing.DefaultQuality.Unwrap(); q < 1 || q > 100 {
+		return fmt.Errorf("config: default-quality must be in [1,100], got %d", q)
 	}
 	if _, err := processing.ParseRotation(c.Processing.DefaultRotate.Unwrap()); err != nil {
 		return fmt.Errorf("config: processing.default-rotate: %w", err)
@@ -206,10 +210,20 @@ func (c *Config) Normalize() {
 	if c.Version.Unwrap() == "" {
 		c.Version = dynamic.String(SupportedVersion)
 	}
+	// default-quality: если не задан в YAML (0) — безопасный дефолт 80.
+	// Явное 0 отклоняется в Validate ("must be in [1,100]").
+	if c.Processing.DefaultQuality.Unwrap() == 0 {
+		c.Processing.DefaultQuality = dynamic.Int64(DefaultQuality)
+	}
 }
 
 // Compiled — результат компиляции конфигурации в доменные объекты.
 type Compiled struct {
+	// LearningMode — флаг режима обучения (policy.learning-mode): при
+	// включении сервис генерирует ассеты, не подходящие по правилам, но
+	// не сохраняет их в storage, и пополняет path-policies на основе
+	// наблюдаемых URL.
+	LearningMode bool
 	// Policy — скомпилированная политика.
 	Policy *policy.Policy
 	// Presets — набор пресетов.
@@ -296,6 +310,7 @@ func (c *Config) Compile() (*Compiled, error) {
 		defLoop = &loop
 	}
 	return &Compiled{
+		LearningMode:             c.Policy.LearningMode.Unwrap(),
 		Policy:                   compiled.Policy,
 		Presets:                  compiled.Presets,
 		DefaultQuality:           c.Processing.DefaultQuality.Unwrap(),

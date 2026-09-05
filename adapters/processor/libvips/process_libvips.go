@@ -1274,10 +1274,14 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		return nil, fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
 	}
 
-	pts := wm.Layout(W, canvasH, tw, th)
-	if len(pts) > maxWatermarkTiles {
-		return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, len(pts), maxWatermarkTiles)
+	// Проверяем число тайлов ДО материализации среза точек: Layout строит
+	// срез всех позиций, что при патологическом тайлинге (крошечный файл +
+	// repeat на большом холсте) аллоцирует до ~1.6 ГБ. LayoutCount — чистая
+	// арифметика без аллокаций.
+	if n := wm.LayoutCount(W, canvasH, tw, th); n > maxWatermarkTiles {
+		return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, n, maxWatermarkTiles)
 	}
+	pts := wm.Layout(W, canvasH, tw, th)
 
 	// Анимация (кадры = вертикальный стек страниц): покадровый композит.
 	// Композит на весь сшитый холст попал бы только в область первого кадра.

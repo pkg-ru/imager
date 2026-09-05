@@ -16,10 +16,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg-ru/imager/adapters/storage/remote"
@@ -130,8 +132,13 @@ func (o Options) dial() (client, error) {
 // HostKeyFingerprint (SHA256:...), проверяется точное совпадение. Иначе
 // используется InsecureIgnoreHostKey — это небезопасно и должно быть
 // заменено на fingerprint в production (см. docs/DEPLOYMENT.md).
+//
+// В composition этот insecure-путь запрещён fail-fast (host-key-fingerprint
+// обязателен); здесь он остаётся только для прямого использования Options
+// и сопровождается warning-логом при dial.
 func (o Options) hostKeyCallback() (ssh.HostKeyCallback, error) {
 	if o.HostKeyFingerprint == "" {
+		log.Printf("sftp: WARNING: host key verification disabled (host-key-fingerprint is empty); connection is vulnerable to MITM")
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 	expected := strings.TrimPrefix(o.HostKeyFingerprint, "SHA256:")
@@ -139,7 +146,10 @@ func (o Options) hostKeyCallback() (ssh.HostKeyCallback, error) {
 		return nil, fmt.Errorf("sftp: invalid host-key-fingerprint %q", o.HostKeyFingerprint)
 	}
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		actual := ssh.FingerprintSHA256(key)
+		// ssh.FingerprintSHA256 возвращает строку с префиксом "SHA256:";
+		// нормализуем обе стороны к голому base64, иначе
+		// ConstantTimeCompare всегда даёт 0.
+		actual := strings.TrimPrefix(ssh.FingerprintSHA256(key), "SHA256:")
 		if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
 			return fmt.Errorf("sftp: host key mismatch: got %s, want %s", actual, o.HostKeyFingerprint)
 		}
@@ -209,7 +219,7 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 // выполняется повторная попытка с новым соединением (до MaxAttempts).
 func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
 	return withRetry(ctx, &s.store, func(cl *pooledClient) (object.ObjectMetadata, error, error) {
-		meta, err := s.opts.statWithClient(ctx, key, cl.client)
+		meta, err := s.Opts.statWithClient(ctx, key, cl.Value)
 		switch {
 		case err == nil:
 			return meta, nil, nil
@@ -246,14 +256,14 @@ func (s *store) openBuffered(ctx context.Context, full string, key object.Object
 		}
 
 		buf, err := remote.NewBuffer(remote.BufferOptions{
-			Pool:     s.opts.Pool,
-			Dir:      s.opts.SpoolDir,
-			MaxBytes: s.opts.SpoolMaxBytes,
+			Pool:     s.Opts.Pool,
+			Dir:      s.Opts.SpoolDir,
+			MaxBytes: s.Opts.SpoolMaxBytes,
 		})
 		if err != nil {
 			return nil, nil, remote.MapError("sftp buffer", err)
 		}
-		if _, err := buf.WriteFrom(f, s.opts.SpoolMaxBytes); err != nil {
+		if _, err := buf.WriteFrom(f, s.Opts.SpoolMaxBytes); err != nil {
 			_ = buf.Close()
 			if errors.Is(err, remote.ErrBufferLimit) {
 				return nil, nil, fmt.Errorf("sftp: %s %q exceeds spool limit: %w", role, key, object.ErrQuota)
@@ -272,7 +282,7 @@ func (s *store) openBuffered(ctx context.Context, full string, key object.Object
 // Open открывает поток исходного объекта через spillable буфер. При ошибке
 // соединения выполняется повторная попытка с новым соединением.
 func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	full, err := s.opts.key(key)
+	full, err := s.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +309,7 @@ func NewResultStore(opts Options) (*ResultStore, error) {
 // повторная попытка с новым соединением.
 func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
 	return withRetry(ctx, &r.store, func(cl *pooledClient) (object.ObjectMetadata, error, error) {
-		meta, err := r.opts.statWithClient(ctx, key, cl.client)
+		meta, err := r.Opts.statWithClient(ctx, key, cl.Value)
 		switch {
 		case err == nil:
 			return meta, nil, nil
@@ -316,7 +326,7 @@ func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.
 // Open открывает перематываемый поток результата через spillable буфер.
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +337,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 // материализации. Соединение удерживается до закрытия Stream. При ошибке
 // соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (object.Stream, error) {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -350,11 +360,11 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		}
 		// Соединение должно жить до закрытия потока: передаём владение
 		// (каркас не выполнит discard после успешного возврата).
-		cl.keepAlive()
+		cl.KeepAlive()
 		meta := object.ObjectMetadata{Key: key, Size: info.Size(), ModTime: info.ModTime()}
 		// f закрывается через Stream.Close; соединение освобождается
 		// после закрытия потока (session.Discard вызывается в Close).
-		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, session: cl.session}, meta), nil, nil
+		return remote.NewStreamArtifact(f, &sftpStreamCloser{f: f, session: cl.Session}, meta), nil, nil
 	})
 }
 
@@ -362,16 +372,15 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 type sftpStreamCloser struct {
 	f       io.Closer
 	session *remote.Session[client]
-	once    bool
+	once    sync.Once
 }
 
 func (c *sftpStreamCloser) Close() error {
-	if c.once {
-		return nil
-	}
-	c.once = true
-	err := c.f.Close()
-	c.session.Discard()
+	var err error
+	c.once.Do(func() {
+		err = c.f.Close()
+		c.session.Discard()
+	})
 	return err
 }
 
@@ -383,7 +392,7 @@ func (c *sftpStreamCloser) Close() error {
 // withRetryPolicy с политикой remote.NeverRetry; работа с src-ридером и
 // очистка temp-файлов выполняются внутри одиночной попытки (publishAttempt).
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return err
 	}
@@ -453,7 +462,7 @@ func (r *ResultStore) publishAttempt(full string, key object.ObjectKey, src io.R
 // Delete удаляет объект. Идемпотентно. При ошибке соединения выполняется
 // повторная попытка с новым соединением.
 func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return err
 	}
@@ -484,12 +493,12 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 // (.tmp-*) пропускаются. Идемпотентно: если каталога нет — возвращает
 // (0, nil). Возвращает число удалённых файлов.
 func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
-	full, err := r.opts.key(prefix)
+	full, err := r.Opts.key(prefix)
 	if err != nil {
 		return 0, err
 	}
 	return withRetry(ctx, &r.store, func(cl *pooledClient) (int64, error, error) {
-		n, err := r.deleteDir(cl.client, full)
+		n, err := r.deleteDir(cl.Value, full)
 		if err != nil {
 			switch {
 			case err == nil:
@@ -543,13 +552,13 @@ func (r *ResultStore) deleteDir(cl client, dir string) (int64, error) {
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
-	root := r.opts.Root
+	root := r.Opts.Root
 	if root == "" {
 		root = "."
 	}
 	return withRetry(ctx, &r.store, func(cl *pooledClient) (object.StoreStats, error, error) {
 		var stats object.StoreStats
-		if err := r.walk(cl.client, root, &stats); err != nil {
+		if err := r.walk(cl.Value, root, &stats); err != nil {
 			return object.StoreStats{}, err, remote.MapError("sftp walk", err)
 		}
 		return stats, nil, nil

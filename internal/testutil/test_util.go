@@ -140,9 +140,10 @@ var _ storage.SourceStore = (*MemSourceStore)(nil)
 // MemResultStore — in-memory storage.ResultStore с атомарным publish,
 // поддержкой List (storage.Lister) и опциональной ошибкой Publish.
 type MemResultStore struct {
-	mu     sync.Mutex
-	data   map[object.ObjectKey][]byte
-	pubErr error
+	mu        sync.Mutex
+	data      map[object.ObjectKey][]byte
+	pubErr    error
+	readCalls int
 }
 
 // NewMemResultStore создаёт пустой MemResultStore.
@@ -187,11 +188,20 @@ func (r *MemResultStore) Open(_ context.Context, key object.ObjectKey) (object.A
 func (r *MemResultStore) ReadStream(_ context.Context, key object.ObjectKey) (object.Stream, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.readCalls++
 	d, ok := r.data[key]
 	if !ok {
 		return nil, &object.NotFoundError{Key: key}
 	}
 	return &MemStream{buf: append([]byte(nil), d...), meta: object.ObjectMetadata{Key: key, Size: int64(len(d))}}, nil
+}
+
+// ReadCalls возвращает число вызовов ReadStream (для проверки, что результат
+// не перечитывается из хранилища лишний раз).
+func (r *MemResultStore) ReadCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.readCalls
 }
 
 func (r *MemResultStore) Publish(_ context.Context, key object.ObjectKey, src io.Reader, _ object.PublishOptions) error {

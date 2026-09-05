@@ -227,6 +227,31 @@ func (s *WatermarkSpec) anchorY(H, wh int) int {
 // Point — точка размещения копии ватермарки (левый верхний угол).
 type Point struct{ X, Y int }
 
+// LayoutCount вычисляет число копий ватермарки размером ww x wh на холсте
+// W x H согласно режиму repeat и позиции — БЕЗ материализации среза точек.
+// Используется процессорами для проверки лимита числа тайлов ДО вызова
+// Layout (защита от аллокации огромного среза при патологическом тайлинге).
+func (s *WatermarkSpec) LayoutCount(W, H, ww, wh int) int {
+	if W <= 0 || H <= 0 || ww <= 0 || wh <= 0 {
+		return 0
+	}
+	switch s.Repeat {
+	case WatermarkRepeatNoRepeat:
+		return 1
+	case WatermarkRepeatRepeatX:
+		return maxInt(1, ceilDiv(W, ww))
+	case WatermarkRepeatRepeatY:
+		return maxInt(1, ceilDiv(H, wh))
+	case WatermarkRepeatSpace:
+		return maxInt(1, W/ww) * maxInt(1, H/wh)
+	case WatermarkRepeatRound:
+		sw, sh := s.RoundStep(W, H, ww, wh)
+		return maxInt(1, ceilDiv(W, sw)) * maxInt(1, ceilDiv(H, sh))
+	default: // WatermarkRepeatRepeat
+		return maxInt(1, ceilDiv(W, ww)) * maxInt(1, ceilDiv(H, wh))
+	}
+}
+
 // Layout вычисляет список позиций (левый верхний угол) копий ватермарки
 // размером ww x wh на холсте W x H согласно режиму repeat и позиции.
 //

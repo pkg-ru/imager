@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/observability"
 	"github.com/pkg-ru/imager/ports/storage"
 )
@@ -129,6 +130,14 @@ const DefaultAdminQueueSize = 64
 // DefaultAdminWaitTimeout — таймаут режима wait=true по умолчанию.
 const DefaultAdminWaitTimeout = 300 * time.Second
 
+// PolicyRecorder — узкий интерфейс сборщика наблюдений learning-mode.
+// Реализуется app/learning.Recorder (и learning.Service). nil = выключено.
+type PolicyRecorder interface {
+	// Observe регистрирует наблюдение (неблокирующе). req == nil
+	// игнорируется.
+	Observe(req *asset.Request)
+}
+
 // Config — typed runtime конфигурация HTTP-адаптера.
 type Config struct {
 	// AllowedOrigins — CORS allowlist (deny-by-default). Пустой список
@@ -197,6 +206,10 @@ type Config struct {
 	// HTTP-запросов (admission control). 0 = без ограничения. При превышении
 	// лимита возвращается HTTP 503 + Retry-After: 1.
 	MaxConcurrentRequests int
+
+	// PolicyRecorder — сборщик наблюдений learning-mode (nil = выключено).
+	// Вызывается после успешного asset.Parse (best-effort, nil-safe).
+	PolicyRecorder PolicyRecorder
 }
 
 // Logger — единый интерфейс логирования из observability.

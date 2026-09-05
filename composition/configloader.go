@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/pkg-ru/imager/observability"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 // File names внутри каталога конфигурации.
@@ -80,12 +80,12 @@ func LoadConfigDir(dir string) (*RuntimeConfig, error) {
 // loadLayer читает пару base+local и возвращает слитую map.
 // requireBase=true требует наличия базового файла (для setting); иначе
 // отсутствие базового файла — нормальная ситуация (пустая map).
-func loadLayer(dir, baseName, localName string, requireBase bool) (map[any]any, error) {
+func loadLayer(dir, baseName, localName string, requireBase bool) (map[string]any, error) {
 	basePath := filepath.Join(dir, baseName)
 	baseData, err := os.ReadFile(basePath)
 	if err != nil {
 		if os.IsNotExist(err) && !requireBase {
-			return map[any]any{}, nil
+			return map[string]any{}, nil
 		}
 		return nil, fmt.Errorf("composition: read base config %s: %w", basePath, err)
 	}
@@ -112,7 +112,7 @@ func loadLayer(dir, baseName, localName string, requireBase bool) (map[any]any, 
 
 // checkLayerVersion проверяет, что ключ version в опциональном слое (если
 // присутствует) равен "1". Отсутствие ключа — нормальная ситуация.
-func checkLayerVersion(layer map[any]any, file string) error {
+func checkLayerVersion(layer map[string]any, file string) error {
 	v, ok := layer["version"]
 	if !ok {
 		return nil
@@ -127,9 +127,9 @@ func checkLayerVersion(layer map[any]any, file string) error {
 // (более специализированный слой выигрывает при конфликте скаляров). При
 // совпадении top-level ключа в нескольких базовых файлах в лог пишется warning
 // с перечнем конфликтующих файлов.
-func mergeLayers(setting, generate, failback map[any]any) map[any]any {
+func mergeLayers(setting, generate, failback map[string]any) map[string]any {
 	// Собираем, какие базовые файлы содержат каждый top-level ключ.
-	owners := map[any][]string{}
+	owners := map[string][]string{}
 	for k := range setting {
 		owners[k] = append(owners[k], BaseConfigFile)
 	}
@@ -151,16 +151,16 @@ func mergeLayers(setting, generate, failback map[any]any) map[any]any {
 
 // yamlToMap десериализует YAML-документ в map. Пустой документ допустим и
 // даёт пустую map (все умолчания применяются при typed decode).
-func yamlToMap(data []byte) (map[any]any, error) {
-	var m map[any]any
+func yamlToMap(data []byte) (map[string]any, error) {
+	var m map[string]any
 	if len(data) == 0 {
-		return map[any]any{}, nil
+		return map[string]any{}, nil
 	}
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
 	if m == nil {
-		return map[any]any{}, nil
+		return map[string]any{}, nil
 	}
 	return m, nil
 }
@@ -172,15 +172,15 @@ func yamlToMap(data []byte) (map[any]any, error) {
 //
 // Списки заменяются целиком, а не мержатся — это контракт для конфигурации
 // (например allowed-origins или disabled-coders нельзя "дополнить" в local).
-func deepMerge(base, override map[any]any) map[any]any {
+func deepMerge(base, override map[string]any) map[string]any {
 	for k, ov := range override {
 		bv, ok := base[k]
 		if !ok {
 			base[k] = ov
 			continue
 		}
-		bm, okB := bv.(map[any]any)
-		om, okO := ov.(map[any]any)
+		bm, okB := bv.(map[string]any)
+		om, okO := ov.(map[string]any)
 		if okB && okO {
 			base[k] = deepMerge(bm, om)
 			continue

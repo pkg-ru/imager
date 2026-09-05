@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/observability"
 	"github.com/pkg-ru/imager/ports/admin"
 )
@@ -37,7 +38,7 @@ func NewAdminHandler(svc admin.Service, cfg AdminConfig, log Logger) *AdminHandl
 	return &AdminHandler{svc: svc, cfg: cfg, log: log}
 }
 
-// ServeHTTP выполняет роутинг POST/DELETE и bearer-авторизацию.
+// ServeHTTP выполняет роутинг и bearer-авторизацию.
 func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Bearer-авторизация для всех admin-запросов.
 	if !a.authorized(r) {
@@ -52,7 +53,7 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && path == "/assets/delete":
 		a.handleDelete(w, r)
 	default:
-		w.Header().Set("Allow", "POST, DELETE")
+		w.Header().Set("Allow", "POST, DELETE, GET")
 		a.writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
@@ -80,9 +81,9 @@ func (a *AdminHandler) authorized(r *http.Request) bool {
 
 // generateRequest — тело POST /admin/assets/generate.
 type generateRequest struct {
-	Source string   `json:"source"`
-	Assets []string `json:"assets"`
-	Wait   bool     `json:"wait"`
+	Source dynamic.String      `json:"source"`
+	Assets dynamic.StringSlice `json:"assets"`
+	Wait   dynamic.Bool        `json:"wait"`
 }
 
 // handleGenerate обрабатывает POST /admin/assets/generate.
@@ -98,7 +99,7 @@ func (a *AdminHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.svc.EnqueueGenerate(req.Source, req.Assets, req.Wait)
+	res, err := a.svc.EnqueueGenerate(req.Source.Unwrap(), req.Assets.Unwrap(), req.Wait.Unwrap())
 	if err != nil {
 		a.mapServiceError(w, r, err)
 		return
@@ -113,8 +114,8 @@ func (a *AdminHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 // deleteRequest — тело DELETE /admin/assets/delete.
 type deleteRequest struct {
-	Source string   `json:"source"`
-	Assets []string `json:"assets"`
+	Source dynamic.String      `json:"source"`
+	Assets dynamic.StringSlice `json:"assets"`
 }
 
 // handleDelete обрабатывает DELETE /admin/assets/delete.
@@ -131,10 +132,10 @@ func (a *AdminHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	var deleted int
 	var err error
-	if req.Source != "" {
-		deleted, err = a.svc.DeleteBySource(r.Context(), req.Source)
+	if req.Source.Unwrap() != "" {
+		deleted, err = a.svc.DeleteBySource(r.Context(), req.Source.Unwrap())
 	} else {
-		deleted, err = a.svc.DeleteAssets(r.Context(), req.Assets)
+		deleted, err = a.svc.DeleteAssets(r.Context(), req.Assets.Unwrap())
 	}
 	if err != nil {
 		a.mapServiceError(w, r, err)

@@ -52,7 +52,7 @@
 | `application.limits` | setting + generate | `setting.yaml` (дефолт для всех слоёв) / `generate.yaml` (переопределение) |
 | `observability` | setting | `setting.yaml` |
 | `admin` | setting | `setting.yaml` |
-| `policy` (presets, path-policies) | generate | `generate.yaml` |
+| `policy` (presets, path-policies, learning-mode) | generate | `generate.yaml` |
 | `watermarks` | generate | `generate.yaml` |
 | `processing` | generate | `generate.yaml` |
 | `detection` | generate | `generate.yaml` |
@@ -255,6 +255,34 @@ path-policies:
         output-formats: [webp, avif]
 ```
 
+### policy.learning-mode
+
+**Learning-mode** — режим «обучения» политики: сервер генерирует и отдаёт ассеты, которые не разрешены текущими `path-policies`, но **не сохраняет** их в result-хранилище. Наблюдаемые URL автоматически накапливаются в `generate-local.yaml` (слой локальных переопределений).
+
+| Поле | Тип | По умолчанию | Описание |
+|------|-----|--------------|----------|
+| `learning-mode` | bool | `false` | Включить learning-mode при старте. Изменяется только вручную (правка конфига + перезапуск сервиса); runtime-переключателей нет |
+
+Поведение при включённом learning-mode:
+
+- **Bypass admission**: запрос, не подходящий ни под одну path-policy, генерируется и отдаётся клиенту, если его сегмент — размер-грамматика (`120x60`, `x200`, `200x`, `x`). Сегмент-имя несуществующего пресета (например `banner`) остаётся `403` — learning-mode не «угадывает» пресеты.
+- **Ничего не сохраняется**: даже ассеты, разрешённые path-policy, не публикуются в result-хранилище, пока режим включён. Уже сохранённые ассеты отдаются из кэша как обычно.
+- **Автонакопление path-policies**: каждый обслуженный запрос с размер-сегментом наблюдается и записывается в `generate-local.yaml` (дебаунс ~2 с + финальная запись при graceful shutdown). Формат записи — `path-policies` с custom-размером и выходным форматом, например:
+
+```yaml
+policy:
+  learning-mode: true
+  path-policies:
+    # added by learning-mode
+    /banners:
+      customs:
+        120x60:
+          output-formats: [webp]
+```
+
+- **Требования**: для записи `generate-local.yaml` нужен каталог конфигурации (`IMAGER_CONFIG_DIR`); без него runtime-флаг работает, но наблюдения не сохраняются.
+- **Рекомендация**: после переноса накопленных правил в `generate.yaml` выключите learning-mode (`learning-mode: false` в конфиге + перезапуск сервиса) — сервер вернётся к deny-by-default и начнёт сохранять ассеты.
+
 ### Правила dpr
 
 Поведение `@dpr` в URL зависит от того, задан ли `dpr` в настройках пресета/custom и содержит ли его имя фиксированный `@dpr`-суффикс. Здесь `P` — базовое имя сегмента (пресет или custom без `@dpr`).
@@ -448,6 +476,13 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 - `imager_vips_mem_highwater_bytes` — пик tracked memory;
 - `imager_vips_operations_total` — суммарное число операций govips;
 - `imager_vips_watermark_cache_hits_total` / `imager_vips_watermark_cache_misses_total` / `imager_vips_watermark_cache_entries` / `imager_vips_watermark_cache_bytes` — метрики кэша водяных знаков.
+
+Метрики асинхронной публикации (S1, экспортируются через `/metrics` и `/debug/vars`):
+
+- `imager_publish_queue_depth` — текущая глубина bounded-очереди фоновой публикации (gauge). Рост при стабильной нагрузке указывает на то, что воркеры не успевают писать в remote; переполнение очереди включает синхронный fallback (публикация на пути ответа).
+- `imager_publish_errors_total` — счётчик ошибок фоновой публикации после исчерпания retry/backoff. Результат с ошибкой НЕ попадает в кэш и будет сгенерирован повторно; длительный рост — признак проблем с result-хранилищем.
+
+Публикация результата в кэш выполняется фоновыми воркерами (подробнее — в `docs/PROCESSING.md`, раздел «Асинхронная публикация (S1)»). Размер очереди/число воркеров задаются в параметрах построения composition-root (не через YAML) и по умолчанию равны 512 и 4; graceful drain при shutdown — с таймаутом 5 с.
 
 Сбор отказоустойчив: паника/ошибка провайдера не влияет на обработку запросов (значения просто не обновляются до следующего тика); goroutine-сборщик останавливается при graceful shutdown.
 

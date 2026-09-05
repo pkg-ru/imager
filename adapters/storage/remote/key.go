@@ -17,7 +17,8 @@ import (
 // удалённого хранилища. Гарантирует:
 //   - "/" как разделитель, без ведущего "/";
 //   - отсутствие "." и ".." сегментов;
-//   - отсутствие обратных слешей и NUL-байтов;
+//   - отсутствие обратных слешей и управляющих байтов (< 0x20 и 0x7F,
+//     включая NUL) — защита от CRLF/control-инъекций в FTP/SFTP-команды;
 //   - непустой результат.
 //
 // При недопустимом ключе возвращается object.ErrUnsafePath.
@@ -29,8 +30,10 @@ func CanonicalKey(key object.ObjectKey) (string, error) {
 	if strings.ContainsRune(raw, '\\') {
 		return "", object.ErrUnsafePath
 	}
-	if strings.ContainsRune(raw, 0) {
-		return "", object.ErrUnsafePath
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return "", object.ErrUnsafePath
+		}
 	}
 	clean := strings.Trim(raw, "/")
 	parts := strings.Split(clean, "/")

@@ -24,6 +24,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/pixel"
 	"github.com/pkg-ru/imager/adapters/storage/fs"
 	"github.com/pkg-ru/imager/adapters/videoframe/ffmpeg"
+	"github.com/pkg-ru/imager/app/learning"
 	"github.com/pkg-ru/imager/bootstrap"
 	"github.com/pkg-ru/imager/composition"
 	"github.com/pkg-ru/imager/observability"
@@ -158,6 +159,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	app, err := composition.Build(context.Background(), composition.AppOptions{
 		Config:          rc.Pipeline,
 		HTTP:            rc.HTTP,
+		ConfigDir:       cfgDir,
 		SourceDir:       rc.SourceDir,
 		ResultDir:       rc.ResultDir,
 		SourceStorage:   rc.Source,
@@ -169,6 +171,11 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 		MetadataDir:     rc.MetadataDir,
 		Detector:        proc.Detector,
 		VideoExtractor:  videoExt,
+		// S1: асинхронная публикация результата в кэш (production).
+		// Ответ клиенту не ждёт записи в remote; ошибки публикации
+		// логируются и инкрементируют метрику, результат остаётся
+		// доступным для повторной генерации.
+		AsyncPublish: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("imager: build: %w", err)
@@ -191,7 +198,11 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	}
 
 	// Регистрируем ресурсы для закрытия при Shutdown (хранилища, процессор,
-	// пул буферов).
+	// пул буферов). Service регистрируется ПЕРВЫМ (наверху списка): при
+	// Shutdown его Close выполняет graceful drain очереди асинхронной
+	// публикации, пока хранилища ещё не закрыты. Если бы Service стоял после
+	// хранилищ, воркеры публикации могли бы упасть на закрытых хранилищах.
+	rt.AddCloser(app.Service)
 	rt.AddCloser(app.Sources)
 	rt.AddCloser(app.Results)
 	rt.AddCloser(proc.Processor)
@@ -202,6 +213,12 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	if app.AdminSvc != nil {
 		app.AdminSvc.Start(context.Background())
 		rt.AddCloser(app.AdminSvc)
+	}
+
+	// Learning-mode: регистрируем graceful Stop Recorder'а при shutdown
+	// (drain наблюдений + финальная запись generate-local.yaml).
+	if app.Learning != nil {
+		rt.AddCloser(learningCloser{s: app.Learning})
 	}
 
 	// Периодическая уборка осиротевших temp-файлов публикации.
@@ -323,5 +340,17 @@ type janitorCloser struct {
 
 func (c janitorCloser) Close() error {
 	c.j.Stop()
+	return nil
+}
+
+// learningCloser адаптирует *learning.Service к io.Closer для rt.AddCloser:
+// при shutdown выполняет graceful Stop Recorder'а (drain наблюдений +
+// финальная запись generate-local.yaml).
+type learningCloser struct {
+	s *learning.Service
+}
+
+func (c learningCloser) Close() error {
+	c.s.Stop()
 	return nil
 }

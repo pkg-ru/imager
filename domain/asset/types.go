@@ -169,9 +169,6 @@ func (n SegmentName) String() string { return string(n) }
 // preset-запроса). Сохранён для совместимости публичного API.
 type PresetName = SegmentName
 
-// NewPresetName создаёт PresetName (алиас NewSegmentName).
-func NewPresetName(s string) (PresetName, error) { return NewSegmentName(s) }
-
 // Dimension — значение измерения (ширина/высота) в пикселях.
 type Dimension int
 
@@ -259,14 +256,18 @@ func (s Size) String() string {
 }
 
 // Pixels возвращает число пикселей для точного размера (обе стороны заданы).
-// Возвращает ok=false, если хотя бы одна сторона не задана или размер
-// является original.
+// Возвращает ok=false, если хотя бы одна сторона не задана, размер является
+// original или одна из сторон <= 0 (0x0 → деление на ноль в проверке
+// переполнения).
 func (s Size) Pixels() (int64, bool) {
 	if s.original || s.width == nil || s.height == nil {
 		return 0, false
 	}
 	w := int64(s.width.Int())
 	h := int64(s.height.Int())
+	if w <= 0 || h <= 0 {
+		return 0, false
+	}
 	if w > math.MaxInt64/h {
 		return 0, false
 	}

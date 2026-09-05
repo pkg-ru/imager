@@ -359,14 +359,17 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 		return &JobResult{JobID: j.id, Status: "accepted", Queued: len(urls)}, nil
 	}
 
-	// wait=true: ждём завершения с таймаутом.
+	// wait=true: ждём завершения с таймаутом. time.NewTimer + defer Stop,
+	// чтобы таймер не утекал после завершения по j.done.
+	timer := time.NewTimer(s.cfg.WaitTimeout)
+	defer timer.Stop()
 	select {
 	case <-j.done:
 		if j.err != nil {
 			return nil, j.err
 		}
 		return j.result, nil
-	case <-time.After(s.cfg.WaitTimeout):
+	case <-timer.C:
 		// Отменяем контекст задачи, чтобы воркер мог прервать генерацию.
 		j.cancel()
 		return nil, ErrWaitTimeout

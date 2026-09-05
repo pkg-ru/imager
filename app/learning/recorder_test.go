@@ -1,0 +1,226 @@
+package learning
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/observability"
+)
+
+// newTestRequest — segment-запрос для тестов.
+func newTestRequest(t *testing.T, path, sourceName, sourceFormat, segment, format string) *asset.Request {
+	t.Helper()
+	req, err := asset.NewSegmentRequest(
+		path,
+		asset.SourceName(sourceName),
+		asset.Format(sourceFormat),
+		asset.SegmentName(segment),
+		0,
+		asset.Format(format),
+	)
+	if err != nil {
+		t.Fatalf("NewSegmentRequest: %v", err)
+	}
+	return req
+}
+
+func TestRecorderObserveExtractsPathSizeFormat(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Канонический путь запроса: "chto/to/gde/to/img-jpg" (без ведущего
+	// "/"); префикс — "/chto/to/gde/to".
+	req := newTestRequest(t, "chto/to/gde/to/img-jpg", "img", "jpg", "120x60", "webp")
+	rec.Observe(req)
+	rec.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "/chto/to/gde/to:") {
+		t.Errorf("path prefix missing:\n%s", got)
+	}
+	if !strings.Contains(got, "120x60:") {
+		t.Errorf("size custom missing:\n%s", got)
+	}
+	if !strings.Contains(got, "webp") {
+		t.Errorf("format missing:\n%s", got)
+	}
+}
+
+func TestRecorderIgnoresInvalidSize(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Имя пресета (не размер-грамматика) — наблюдение игнорируется.
+	req := newTestRequest(t, "a/b/img-jpg", "img", "jpg", "banner", "webp")
+	rec.Observe(req)
+	rec.Stop()
+
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected no generate-local.yaml for invalid size, err = %v", err)
+	}
+}
+
+func TestRecorderStopFinalWrite(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Дебаунс: запись не выполняется сразу после Observe (файл появляется
+	// не раньше writeInterval).
+	rec.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	time.Sleep(100 * time.Millisecond)
+	if info, err := os.Stat(filepath.Join(dir, localFileName)); err == nil {
+		if time.Since(info.ModTime()) < writeInterval-500*time.Millisecond {
+			t.Errorf("file written before debounce interval: modTime %v", info.ModTime())
+		}
+	}
+	// Stop() делает финальную запись.
+	rec.Stop()
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read after Stop: %v", err)
+	}
+	if !strings.Contains(string(data), "/a/b:") {
+		t.Errorf("path missing after Stop:\n%s", string(data))
+	}
+}
+
+func TestRecorderDebounce(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Поток наблюдений: несколько подряд — запись не чаще 1 раза в 2с.
+	for i := 0; i < 5; i++ {
+		rec.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+		time.Sleep(20 * time.Millisecond)
+	}
+	// До истечения дебаунса файла может не быть; после Stop — должен быть.
+	rec.Stop()
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read after Stop: %v", err)
+	}
+	if !strings.Contains(string(data), "120x60:") {
+		t.Errorf("custom missing:\n%s", string(data))
+	}
+}
+
+func TestRecorderInitialPathPolicies(t *testing.T) {
+	dir := t.TempDir()
+	initial := policy.Config{
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/existing": {Customs: customs([2]any{"100x100", sizeCustom("avif")})},
+		},
+	}
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Initial: initial, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	rec.Stop()
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "/existing:") || !strings.Contains(got, "avif") {
+		t.Errorf("initial path-policies not written:\n%s", got)
+	}
+}
+
+func TestRecorderWriteErrorRetries(t *testing.T) {
+	dir := t.TempDir()
+	// Файл-каталог: запись в generate-local.yaml упадёт.
+	blocked := filepath.Join(dir, localFileName)
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	rec.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	rec.Stop() // финальная запись упадёт (ERROR лог), состояние в памяти сохраняется
+
+	// Убираем блокировку — новое наблюдение ретраит запись.
+	if err := os.Remove(blocked); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rec2, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder 2: %v", err)
+	}
+	rec2.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	rec2.Stop()
+	data, err := os.ReadFile(blocked)
+	if err != nil {
+		t.Fatalf("read after retry: %v", err)
+	}
+	if !strings.Contains(string(data), "120x60:") {
+		t.Errorf("retry write missing custom:\n%s", string(data))
+	}
+}
+
+func TestController(t *testing.T) {
+	c := NewController()
+	if c.Enabled() {
+		t.Error("new controller must be disabled")
+	}
+	if !c.Enable() {
+		t.Error("Enable must return true")
+	}
+	if !c.Enabled() {
+		t.Error("controller must be enabled after Enable")
+	}
+	c.Disable()
+	if c.Enabled() {
+		t.Error("controller must be disabled after Disable")
+	}
+}
+
+func TestServiceObserveGatedByController(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	svc := NewService(NewController(), rec)
+	// Выключен: наблюдение не принимается.
+	svc.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	svc.Stop()
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected no file while disabled, err = %v", err)
+	}
+
+	// Включён: наблюдение принимается.
+	rec2, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder 2: %v", err)
+	}
+	svc2 := NewService(NewController(), rec2)
+	svc2.controller.Enable()
+	svc2.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	svc2.Stop()
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(data), "120x60:") {
+		t.Errorf("custom missing:\n%s", string(data))
+	}
+}

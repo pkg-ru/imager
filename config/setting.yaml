@@ -140,7 +140,9 @@ http:
   # уходит в процессоры/сеть. Применяется только к asset-запросам ("/"),
   # health/metrics остаются доступными при перегрузке.
   # 0 = без ограничения.
-  max-concurrent-requests: 4
+  # Quick win (Q1): поднято с 4 до 32 — admission control остаётся механизмом
+  # защиты, но лимит увеличен под более высокую пропускную способность.
+  max-concurrent-requests: 32
 
   # serve-original — ОТДЕЛЬНАЯ фича (не относится к source-fallback): при
   # enabled: true сервер отдаёт исходный файл по «простым» URL вида
@@ -303,12 +305,16 @@ libvips:
     # concurrency — максимальное число ОДНОВРЕМЕННО выполняемых операций
     # обработки libvips (bounded очередь слотов; 0 = код применяет 16).
     # Реальная защита памяти/CPU при параллельных запросах (например 2-4).
-    concurrency: 2
+    # Quick win (Q3): поднято с 2 до 8.
+    concurrency: 8
 
     # threads — число потоков libvips (vips_concurrency_set). 0 = default
     # govips (1). Для нагруженного процесса рекомендуется число логических
     # ядер (иначе libvips сам распараллелит по ядрам поверх concurrency).
-    threads: 4
+    # Quick win (Q3): снижено с 4 до 2 — итого до 16 vips-потоков
+    # (8 concurrency × 2 threads) для типичного сервера на 8+ ядрах.
+    # Значения стоит подстраивать под число ядер сервера.
+    threads: 2
 
     # max-cache-mem — максимум памяти кэша libvips (байт). 0 = default
     # govips (50 MiB). Уменьшение снижает пиковое потребление памяти.
@@ -329,7 +335,8 @@ libvips:
   # в govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша (не "без лимита").
   # Дефолт: true (обратная совместимость).
   operation-cache:
-    enabled: true
+    # Quick win (Q2): stateless-обработчик — кэш vips не полезен, отключаем
+    enabled: false
 
   # metrics-interval — интервал периодического сбора vips-метрик
   # (observability): tracked memory/allocs, open files, число операций,

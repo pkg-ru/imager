@@ -6,6 +6,7 @@ import (
 	"github.com/pkg-ru/dynamic"
 	"github.com/pkg-ru/imager/domain/asset"
 	"github.com/pkg-ru/imager/domain/processing"
+	"gopkg.in/yaml.v3"
 )
 
 // presetCfg — хелпер построения PresetConfig (имя пресета задаётся КЛЮЧОМ
@@ -573,4 +574,48 @@ func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
 func boolPtr(b bool) *bool {
 	v := b
 	return &v
+}
+
+// TestConfigLearningModeYAML — парсинг yaml-поля learning-mode в Config.
+// Config — DTO с yaml-тегами; поле LearningMode (dynamic.Bool) должно
+// корректно разбираться из YAML (true/false) и не ломать ValidateConfig.
+// Декодирование выполняется тем же путём, что и в composition
+// (yaml.v2 re-encode секции policy в typed Config).
+func TestConfigLearningModeYAML(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{
+			name: "learning-mode true",
+			yaml: "learning-mode: true\n",
+			want: true,
+		},
+		{
+			name: "learning-mode false",
+			yaml: "learning-mode: false\n",
+			want: false,
+		},
+		{
+			name: "learning-mode отсутствует",
+			yaml: "presets: {}\n",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			if err := yaml.Unmarshal([]byte(tt.yaml), &cfg); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := cfg.LearningMode.Unwrap(); got != tt.want {
+				t.Errorf("LearningMode = %v, want %v", got, tt.want)
+			}
+			// Валидация не ломается наличием флага.
+			if err := ValidateConfig(&cfg); err != nil {
+				t.Errorf("ValidateConfig: %v", err)
+			}
+		})
+	}
 }

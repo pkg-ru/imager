@@ -91,6 +91,18 @@ type Metrics interface {
 	IncAssetError(kind AssetErrorKind)
 }
 
+// PublishQueueMetrics — ОПЦИОНАЛЬНЫЙ порт метрик асинхронной публикации
+// (S1). Не входит в базовый интерфейс Metrics, чтобы не ломать сторонние
+// реализации; application-слой использует type-assert и no-op при отсутствии.
+type PublishQueueMetrics interface {
+	// SetPublishQueueDepth обновляет текущую глубину bounded-очереди
+	// асинхронной публикации (gauge).
+	SetPublishQueueDepth(v int64)
+	// IncPublishError инкрементирует счётчик ошибок асинхронной публикации
+	// (после исчерпания retry/backoff).
+	IncPublishError()
+}
+
 // nopMetrics — заглушка, используемая при отсутствии метрик.
 type nopMetrics struct{}
 
@@ -104,6 +116,10 @@ func (nopMetrics) ObserveProcessorDuration(time.Duration)                {}
 func (nopMetrics) IncStorageOp(StorageOp, bool)                          {}
 func (nopMetrics) ObserveStorageDuration(StorageOp, bool, time.Duration) {}
 func (nopMetrics) IncAssetError(AssetErrorKind)                          {}
+
+// nopMetrics реализует опциональный порт PublishQueueMetrics (no-op).
+func (nopMetrics) SetPublishQueueDepth(int64) {}
+func (nopMetrics) IncPublishError()           {}
 
 // NopMetrics возвращает no-op реализацию Metrics.
 func NopMetrics() Metrics { return nopMetrics{} }
@@ -169,6 +185,8 @@ type StdMetrics struct {
 	bufferPoolBytes  *expvar.Int // занятый бюджет buffer pool (байты)
 	cacheEvictions   *expvar.Int // всего eviction-файлов из кэша
 	cacheEntries     *expvar.Int // число записей в кэше
+	publishQueue     *expvar.Int // глубина очереди асинхронной публикации
+	publishErrors    *expvar.Int // ошибки асинхронной публикации после retry
 }
 
 // NewStdMetrics создаёт StdMetrics и регистрирует expvar-переменные.
@@ -195,6 +213,8 @@ func NewStdMetrics() *StdMetrics {
 		bufferPoolBytes:  getOrNewInt("imager_buffer_pool_bytes"),
 		cacheEvictions:   getOrNewInt("imager_cache_evictions_total"),
 		cacheEntries:     getOrNewInt("imager_cache_entries"),
+		publishQueue:     getOrNewInt("imager_publish_queue_depth"),
+		publishErrors:    getOrNewInt("imager_publish_errors_total"),
 	}
 	return m
 }
@@ -329,6 +349,22 @@ func (m *StdMetrics) SetHttpInflight(v int64) {
 	}
 }
 
+// IncHttpInflight атомарно увеличивает число обрабатываемых HTTP-запросов.
+// Quick win (Q6): expvar.Int.Add использует atomic.AddInt64 — одна атомарная
+// операция вместо неатомарной пары Value()+1/Set() (две операции с гонкой).
+func (m *StdMetrics) IncHttpInflight() {
+	if m.httpInflight != nil {
+		m.httpInflight.Add(1)
+	}
+}
+
+// DecHttpInflight атомарно уменьшает число обрабатываемых HTTP-запросов.
+func (m *StdMetrics) DecHttpInflight() {
+	if m.httpInflight != nil {
+		m.httpInflight.Add(-1)
+	}
+}
+
 // SetSingleflightKeys обновляет число ключей в singleflight.
 func (m *StdMetrics) SetSingleflightKeys(v int64) {
 	if m.singleflightKeys != nil {
@@ -355,6 +391,23 @@ func (m *StdMetrics) SetCacheEntries(v int64) {
 	if m.cacheEntries != nil {
 		m.cacheEntries.Set(v)
 	}
+}
+
+// SetPublishQueueDepth обновляет текущую глубину очереди асинхронной
+// публикации (gauge). Реализация PublishQueueMetrics.
+func (m *StdMetrics) SetPublishQueueDepth(v int64) {
+	if m.publishQueue != nil {
+		m.publishQueue.Set(v)
+	}
+}
+
+// IncPublishError инкрементирует счётчик ошибок асинхронной публикации
+// (после исчерпания retry/backoff). Реализация PublishQueueMetrics.
+func (m *StdMetrics) IncPublishError() {
+	if m.publishErrors != nil {
+		m.publishErrors.Add(1)
+	}
+	bumpMetricsVersion()
 }
 
 // String реализует expvar.Var для текстового вывода.

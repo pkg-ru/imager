@@ -63,6 +63,87 @@ func TestGenerateCacheStampedeSingleFlight(t *testing.T) {
 	if env.proc.callCount() != 1 {
 		t.Fatalf("processor calls = %d, want 1 (cache stampede dedup)", env.proc.callCount())
 	}
+	// Владелец и успевшие waiters читают общий refcount-буфер без повторного
+	// чтения из хранилища. Опоздавшие waiters (буфер уже освобождён) читают
+	// из кэша. Суммарно чтений из хранилища не больше n+1 (n cache-probe в
+	// Generate + 1 probe в generateLocked) + число опоздавших waiters.
+	if got := env.res.ReadCalls(); got > 2*n+1 {
+		t.Fatalf("result ReadStream calls = %d, want <= %d (no re-read from storage)", got, 2*n+1)
+	}
+}
+
+// TestGenerateNoResultReRead проверяет, что при одиночном запросе результат
+// отдаётся клиенту из буфера singleflight, а не перечитывается из хранилища.
+// Ожидается ровно 2 вызова ReadStream: два cache-probe (Generate.tryCache и
+// generateLocked.tryCache) — без повторного чтения результата.
+func TestGenerateNoResultReRead(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+
+	res, err := env.svc.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	defer res.Close()
+
+	data, _ := io.ReadAll(res.Opened)
+	if string(data) != "IMG" {
+		t.Fatalf("data = %q, want IMG", data)
+	}
+	if got := env.res.ReadCalls(); got != 2 {
+		t.Fatalf("result ReadStream calls = %d, want 2 (2 cache probes, no result re-read)", got)
+	}
+}
+
+// TestGenerateConcurrentCloseDoesNotBreakReaders проверяет, что закрытие
+// результата одним запросом не ломает reader'ы других запросов, разделяющих
+// общий буфер singleflight: даже после Close общий буфер держит данные,
+// пока открыт хотя бы один reader.
+func TestGenerateConcurrentCloseDoesNotBreakReaders(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+
+	const n = 8
+	results := make([]*Result, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = env.svc.Generate(ctx, req)
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("Generate[%d]: %v", i, errs[i])
+		}
+	}
+
+	// Закрываем результаты первой половины запросов ДО чтения. Так как
+	// запросы разделяют общий буфер (refcount), закрытие части reader'ов
+	// не должно обнулить данные для остальных, пока открыт хотя бы один
+	// reader (вторая половина ещё не закрыта).
+	for i := 0; i < n/2; i++ {
+		results[i].Close()
+	}
+
+	// Читаем незакрытую половину: данные должны быть целыми.
+	for i := n / 2; i < n; i++ {
+		data, _ := io.ReadAll(results[i].Opened)
+		if string(data) != "IMG" {
+			t.Fatalf("Generate[%d] data = %q, want IMG (reader broke after other Close)", i, data)
+		}
+		results[i].Close()
+	}
 }
 
 // TestGenerateCancelNoGoroutineLeak проверяет, что при отмене контекста во

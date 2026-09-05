@@ -10,6 +10,7 @@ import (
 	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/app/adminsvc"
 	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/app/learning"
 	"github.com/pkg-ru/imager/config"
 	"github.com/pkg-ru/imager/coordination/singleflight"
 	"github.com/pkg-ru/imager/ports/detector"
@@ -25,6 +26,10 @@ type AppOptions struct {
 	Config *config.Config
 	// HTTP — конфигурация HTTP-адаптера.
 	HTTP httpapi.Config
+	// ConfigDir — каталог конфигурации (для learning-mode Recorder:
+	// generate-local.yaml пишется в этот каталог). Пусто = learning-mode
+	// Recorder не создаётся (флаг всё равно работает из конфига).
+	ConfigDir string
 
 	// SourceDir — каталог исходников (используется при FS fallback).
 	SourceDir string
@@ -65,6 +70,13 @@ type AppOptions struct {
 	// VideoExtractor — извлекатель кадра из видео (ffmpeg). nil = видео
 	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
 	VideoExtractor videoframe.Extractor
+
+	// AsyncPublish — флаг асинхронной публикации результата (S1). true
+	// (умолчание для production) = публикация в кэш выполняется фоновыми
+	// воркерами после ответа клиенту; false = публикация синхронная (прежнее
+	// поведение, кэш готов сразу после Generate) — используется в тестах,
+	// которые проверяют состояние кэша сразу после запроса.
+	AsyncPublish bool
 }
 
 // App — собранный pipeline.
@@ -82,6 +94,11 @@ type App struct {
 	AdminSvc *adminsvc.Service
 	// AdminHandler — HTTP-обработчик /admin/* (nil, если admin выключен).
 	AdminHandler http.Handler
+
+	// Learning — фасад learning-mode (nil, если learning-mode недоступен:
+	// ConfigDir не задан). Требует Stop() при shutdown (drain + финальная
+	// запись generate-local.yaml).
+	Learning *learning.Service
 }
 
 // Build собирает новый pipeline. Fail-fast на invalid config.
@@ -156,7 +173,38 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	// Координатор.
 	coord := singleflight.New(singleflight.Options{})
 
+	// Learning-mode: runtime-флаг (Controller) + сборщик наблюдений
+	// (Recorder). Controller создаётся всегда (generatev2 bypass); Recorder
+	// — только если задан каталог конфигурации (generate-local.yaml пишется
+	// в него). Начальное состояние флага — policy.learning-mode из
+	// конфигурации.
+	learningCtrl := learning.NewController()
+	if compiled.LearningMode {
+		learningCtrl.Enable()
+	}
+	var learningRec *learning.Recorder
+	if opt.ConfigDir != "" {
+		learningRec, err = learning.NewRecorder(learning.Deps{
+			ConfigDir: opt.ConfigDir,
+			Initial:   opt.Config.Policy,
+			Logger:    opt.HTTP.Logger,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("composition: build: learning recorder: %w", err)
+		}
+	}
+	learningSvc := learning.NewService(learningCtrl, learningRec)
+
 	// Use case.
+	// S1: асинхронная публикация результата в кэш. В production включена по
+	// умолчанию (AsyncPublish=true): публикация выполняется bounded-очередью
+	// фоновых воркеров, ответ клиенту не ждёт записи в remote. Тесты, которым
+	// нужен готовый кэш сразу после Generate, отключают её (AsyncPublish=false
+	// → synchroncore поведение).
+	var publishQueue *generatev2.PublishQueueConfig
+	if opt.AsyncPublish {
+		publishQueue = &generatev2.PublishQueueConfig{}
+	}
 	svc, err := generatev2.New(generatev2.Deps{
 		Sources:                  sources,
 		Results:                  results,
@@ -179,14 +227,17 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		DefaultVideoMinContrast:  compiled.DefaultVideoMinContrast,
 		DefaultVideoFrameStep:    compiled.DefaultVideoFrameStep,
 		DefaultVideoAttempts:     compiled.DefaultVideoAttempts,
+		Learning:                 learningCtrl,
+		PublishQueue:             publishQueue,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("composition: build: generatev2: %w", err)
 	}
 
 	// HTTP handler. Пробрасываем хранилище исходников в конфиг для source
-	// fallback (nil = фича недоступна).
+	// fallback (nil = фича недоступна), а learning-mode — для Observe.
 	opt.HTTP.Sources = sources
+	opt.HTTP.PolicyRecorder = learningSvc
 	h, err := httpapi.New(svc, opt.HTTP)
 	if err != nil {
 		return nil, fmt.Errorf("composition: build: handler: %w", err)
@@ -224,5 +275,6 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Pool:         pool,
 		AdminSvc:     adminSvc,
 		AdminHandler: adminHandler,
+		Learning:     learningSvc,
 	}, nil
 }

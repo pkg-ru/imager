@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg-ru/imager/coordination/singleflight"
@@ -41,6 +42,26 @@ const publishRetryMax = 2 * time.Second
 
 // publishRetryAttempts — максимальное число попыток публикации.
 const publishRetryAttempts = 3
+
+// Параметры асинхронной публикации (S1). Публикация результата в кэш
+// выполняется в фоновых воркерах из bounded-очереди, чтобы не держать ответ
+// клиента на времени записи в remote (fsync/upload с retry до 2s).
+const (
+	// publishQueueDefault — ёмкость bounded-очереди асинхронной публикации.
+	// При переполнении публикация выполняется синхронно (fallback), чтобы
+	// не терять результаты.
+	publishQueueDefault = 512
+	// publishWorkersDefault — число фоновых воркеров публикации.
+	publishWorkersDefault = 4
+	// publishDrainTimeout — таймаут graceful drain очереди при Close.
+	publishDrainTimeout = 5 * time.Second
+)
+
+// LearningController — узкий интерфейс runtime-флага learning-mode.
+// Реализуется app/learning.Controller (и learning.Service). nil = выключено.
+type LearningController interface {
+	Enabled() bool
+}
 
 // Deps — зависимости use case.
 type Deps struct {
@@ -106,6 +127,33 @@ type Deps struct {
 	// DefaultVideoAttempts — сколько всего попыток извлечения кадра. 0 =
 	// дефолт 3.
 	DefaultVideoAttempts int64
+	// Learning — runtime-флаг learning-mode (nil = выключено). При
+	// включённом режиме запросы, не подходящие по правилам, генерируются
+	// (если сегмент — размер-грамматика), но НЕ сохраняются в storage.
+	Learning LearningController
+
+	// PublishQueue — настройки фоновой (асинхронной) публикации результата
+	// (S1). Публикация выполняется воркерами из bounded-очереди после ответа
+	// клиенту, чтобы не держать ответ на времени записи в remote.
+	// nil = асинхронная публикация выключена (публикации синхронные, прежнее
+	// поведение) — используется в тестах, где кэш должен быть готов сразу
+	// после Generate. Заданный конфиг с Disabled=false включает асинхронную
+	// публикацию; нулевые поля заменяются дефолтами (Workers, QueueSize,
+	// DrainTimeout). Disabled=true = синхронная публикация (как nil).
+	PublishQueue *PublishQueueConfig
+}
+
+// PublishQueueConfig — конфигурация фоновой публикации (S1).
+type PublishQueueConfig struct {
+	// Disabled — если true, публикация выполняется синхронно (прежнее
+	// поведение). false (умолчание) = асинхронная публикация.
+	Disabled bool
+	// Workers — число воркеров (0 → publishWorkersDefault).
+	Workers int
+	// QueueSize — ёмкость bounded-очереди (0 → publishQueueDefault).
+	QueueSize int
+	// DrainTimeout — таймаут graceful drain при Close (0 → publishDrainTimeout).
+	DrainTimeout time.Duration
 }
 
 func (d *Deps) validate() error {
@@ -135,6 +183,73 @@ type Service struct {
 	deps    Deps
 	log     Logger
 	metrics observability.Metrics
+
+	// Асинхронная публикация (S1): bounded-очередь и воркеры, выполняющие
+	// publish результата в кэш в фоне, чтобы ответ клиенту не ждал записи
+	// в remote (fsync/upload с retry). nil-очередь = асинхронная публикация
+	// выключена (все публикации синхронные, прежнее поведение).
+	pubQueue   chan publishTask
+	pubWorkers int
+	pubClosed  atomic.Bool
+	pubWG      sync.WaitGroup
+	pubOnce    sync.Once
+	// pubMu защищает канал pubQueue от гонки send/close: asyncPublish
+	// проверяет pubClosed и отправляет под этим мьютексом, Close закрывает
+	// канал под тем же мьютексом. Это исключает send-on-closed-channel.
+	pubMu sync.Mutex
+}
+
+// publishTask — задача асинхронной публикации. Содержит разделяемый
+// refcount-буфер и ОТДЕЛЬНЫЙ reader из этого буфера, открытый ДО помещения
+// задачи в очередь: данные остаются живыми (refcount), даже если клиент
+// закрыл свой reader/буфер раньше, чем воркер успел прочитать.
+type publishTask struct {
+	key    object.ObjectKey
+	buf    buffer.Buffer
+	reader io.ReadSeekCloser
+}
+
+// publishQueueEnabled сообщает, включена ли асинхронная публикация (S1):
+// заданный конфиг (не nil) и Disabled=false. nil/Disabled=true — синхронная
+// публикация (прежнее поведение, публикация на пути ответа).
+func (s *Service) publishQueueEnabled() bool {
+	return s.deps.PublishQueue != nil && !s.deps.PublishQueue.Disabled
+}
+
+// publishQueueCapacity возвращает ёмкость bounded-очереди публикации
+// (0 = очередь выключена). Нулевое значение → дефолт publishQueueDefault.
+func (s *Service) publishQueueCapacity() int {
+	if !s.publishQueueEnabled() {
+		return 0
+	}
+	if s.deps.PublishQueue.QueueSize > 0 {
+		return s.deps.PublishQueue.QueueSize
+	}
+	return publishQueueDefault
+}
+
+// publishWorkerCount возвращает число воркеров публикации.
+// Нулевое значение → дефолт publishWorkersDefault.
+func (s *Service) publishWorkerCount() int {
+	if !s.publishQueueEnabled() {
+		return 0
+	}
+	if s.deps.PublishQueue.Workers > 0 {
+		return s.deps.PublishQueue.Workers
+	}
+	return publishWorkersDefault
+}
+
+// publishDrainTimeoutValue возвращает таймаут drain при Close.
+// Нулевое значение → дефолт publishDrainTimeout.
+func (s *Service) publishDrainTimeoutValue() time.Duration {
+	if !s.publishQueueEnabled() {
+		return publishDrainTimeout
+	}
+	if s.deps.PublishQueue.DrainTimeout > 0 {
+		return s.deps.PublishQueue.DrainTimeout
+	}
+	return publishDrainTimeout
 }
 
 // New собирает Service и валидирует зависимости.
@@ -150,7 +265,141 @@ func New(d Deps) (*Service, error) {
 	if metrics == nil {
 		metrics = observability.NopMetrics()
 	}
-	return &Service{deps: d, log: log, metrics: metrics}, nil
+	s := &Service{deps: d, log: log, metrics: metrics}
+	// S1: bounded-очередь + воркеры асинхронной публикации. Публикация
+	// идёт в фоне; при переполнении очереди — fallback на синхронный
+	// publish, чтобы не терять результаты. При выключенном конфиге
+	// (nil/Disabled) воркеры не запускаются — публикация синхронная.
+	s.startPublishWorkers()
+	return s, nil
+}
+
+// startPublishWorkers запускает воркеров асинхронной публикации из
+// bounded-очереди. Воркеры живут до Close (drain очереди и завершение).
+func (s *Service) startPublishWorkers() {
+	q := s.publishQueueCapacity()
+	if q <= 0 {
+		return
+	}
+	n := s.publishWorkerCount()
+	if n < 1 {
+		n = 1
+	}
+	s.pubQueue = make(chan publishTask, q)
+	s.pubWorkers = n
+	for i := 0; i < n; i++ {
+		s.pubWG.Add(1)
+		go func() {
+			defer s.pubWG.Done()
+			for task := range s.pubQueue {
+				s.processPublishTask(task)
+			}
+		}()
+	}
+}
+
+// Close — graceful drain очереди асинхронной публикации. Дожидается
+// завершения уже принятых задач с таймаутом (publishDrainTimeout или
+// заданным в конфиге DrainTimeout). После Close новые публикации выполняются
+// синхронно (fallback), чтобы не терять результаты. Реализует io.Closer
+// (для rt.AddCloser). Идемпотентен (sync.Once).
+func (s *Service) Close() error {
+	s.pubOnce.Do(func() {
+		timeout := s.publishDrainTimeoutValue()
+		// Закрываем канал под pubMu: asyncPublish не может отправить в канал
+		// после close (send-on-closed-channel panic исключён).
+		s.pubMu.Lock()
+		s.pubClosed.Store(true)
+		if s.pubQueue != nil {
+			close(s.pubQueue)
+		}
+		s.pubMu.Unlock()
+		// Дожидаемся завершения уже принятых задач с таймаутом.
+		done := make(chan struct{})
+		go func() {
+			s.pubWG.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(timeout):
+			s.log.Warnf("generatev2: publish queue drain timeout after %s; %d tasks may be dropped", timeout, len(s.pubQueue))
+		}
+	})
+	return nil
+}
+
+// publishQueueDepth возвращает текущую глубину очереди (для гауга).
+func (s *Service) publishQueueDepth() int64 {
+	if s.pubQueue == nil {
+		return 0
+	}
+	return int64(len(s.pubQueue))
+}
+
+// publishMetrics возвращает опциональный порт метрик публикации (no-op,
+// если не реализован) и текущую глубину очереди.
+func (s *Service) publishMetrics() (observability.PublishQueueMetrics, int64) {
+	if pm, ok := s.metrics.(observability.PublishQueueMetrics); ok {
+		return pm, s.publishQueueDepth()
+	}
+	return nil, s.publishQueueDepth()
+}
+
+// asyncPublish ставит задачу публикации в bounded-очередь. Данные задачи
+// уже материализованы в reader (refcount-буфер), поэтому при переполнении
+// очереди публикация выполняется СИНХРОННО (fallback), чтобы не терять
+// результаты. Возвращает true, если задача принята в очередь.
+func (s *Service) asyncPublish(task publishTask) bool {
+	// Мьютекс исключает гонку с Close: Close закрывает канал под pubMu,
+	// поэтому пока мы держим блокировку, канал гарантированно открыт и
+	// send на закрытый канал невозможен. Отправка неблокирующая (default на
+	// полную очередь) — мьютекс удерживается лишь на микросекунды.
+	s.pubMu.Lock()
+	defer s.pubMu.Unlock()
+	if s.pubClosed.Load() {
+		return false
+	}
+	select {
+	case s.pubQueue <- task:
+		s.publishQueueDepthGauge()
+		return true
+	default:
+		return false
+	}
+}
+
+// publishQueueDepthGauge публикует текущую глубину очереди в метрики.
+func (s *Service) publishQueueDepthGauge() {
+	if pm, _ := s.metrics.(observability.PublishQueueMetrics); pm != nil {
+		pm.SetPublishQueueDepth(s.publishQueueDepth())
+	}
+}
+
+// processPublishTask — выполнение одной публикации из очереди. Использует
+// context.Background: публикация должна завершиться даже если запрос клиента
+// уже отменён (результат уже сгенерирован и отдан). Retry/backoff — внутри
+// publishFromBuffer; при исчерпании ошибка логируется и инкрементируется
+// метрика publish-ошибок, результат в кэш НЕ добавляется.
+func (s *Service) processPublishTask(task publishTask) {
+	pubStart := time.Now()
+	err := s.publishFromBuffer(context.Background(), task.key, task.reader)
+	_ = task.reader.Close()
+	_ = task.buf.Close()
+	s.publishQueueDepthGauge()
+	if err != nil {
+		s.metrics.IncStorageOp(observability.OpResultPublish, true)
+		s.metrics.ObserveStorageDuration(observability.OpResultPublish, true, time.Since(pubStart))
+		if pm, _ := s.metrics.(observability.PublishQueueMetrics); pm != nil {
+			pm.IncPublishError()
+		}
+		// Лог без секретов: ключ ассета (canonical URL, не секрет) и текст
+		// ошибки хранилища. URL/query/raw user input не логируются.
+		s.log.Errorf("generatev2: async publish failed (asset=%s): %v", task.key, err)
+		return
+	}
+	s.metrics.IncStorageOp(observability.OpResultPublish, false)
+	s.metrics.ObserveStorageDuration(observability.OpResultPublish, false, time.Since(pubStart))
 }
 
 // Result — типизированный результат генерации ассета (порт ports/generation).
@@ -176,16 +425,41 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	// для канонических (программных) запросов Authorize проверяет
 	// path-policy. ResolveError (неизвестный пресет) маппится в
 	// OutcomeInvalid, чтобы HTTP-слой мог вернуть понятную ошибку.
+	//
+	// Learning-mode: при включённом режиме запрос, НЕ подходящий по правилам,
+	// всё равно генерируется, если сегмент — размер-грамматика (custom-имя
+	// вида "120x60"). Такой запрос разрешается дефолтными настройками
+	// (resize, размер из сегмента, dpr из URL или 1) и продолжает генерацию.
+	// Имя несуществующего пресета (не размер) остаётся 403 — в path-policies
+	// такие записи не попадают.
+	learning := s.learningEnabled()
 	if req.IsPreset() && !req.IsResolved() {
 		resolved, dec := s.deps.Policy.Resolve(req)
 		if !dec.Allowed {
-			return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+			if learning {
+				if lr, ok := s.learningResolve(req); ok {
+					req = lr
+				} else {
+					return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+				}
+			} else {
+				return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+			}
+		} else {
+			req = resolved
 		}
-		req = resolved
 	} else {
 		dec := s.deps.Policy.Authorize(req)
 		if !dec.Allowed {
-			return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+			if learning && req.IsPreset() {
+				if lr, ok := s.learningResolve(req); ok {
+					req = lr
+				} else {
+					return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+				}
+			} else {
+				return nil, outcome(OutcomeForbidden, "policy: "+string(dec.Reason), nil)
+			}
 		}
 	}
 
@@ -225,9 +499,12 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 
 	// Keyed singleflight: concurrent запросы с тем же ключом дедуплицируются.
 	// generateLocked публикует результат в кэш ДО возврата, поэтому после
-	// Coordinator.Do каждый запрос (включая владельца) читает собственный
-	// поток из кэша. Это исключает гонку за преждевременное освобождение
-	// общего буфера singleflight (cache stampede regression).
+	// Coordinator.Do все запросы (владелец и waiters) получают общий буфер
+	// singleflight. Владелец и waiters, успевшие создать reader, читают
+	// результат из этого буфера (refcount) — без повторного чтения из remote.
+	// Данные буфера живут, пока открыт хотя бы один reader (см.
+	// memBuffer/remote.Buffer), поэтому закрытие reader'а одним запросом не
+	// ломает остальных.
 	v, err := s.deps.Coordinator.Do(ctx, key, func() (any, error) {
 		return s.generateLocked(ctx, key, req)
 	})
@@ -238,27 +515,92 @@ func (s *Service) Generate(ctx context.Context, req *asset.Request) (*Result, er
 	if !ok {
 		return nil, outcome(OutcomeProcessing, "coordinator returned invalid result", nil)
 	}
-	// Результат уже опубликован в кэш — закрываем общий буфер и читаем
-	// из кэша. Каждый запрос получает собственный буфер/reader, без гонки
-	// за общий ресурс.
-	_ = buf.Close()
-	cbuf, err := s.readResultBuffer(ctx, key)
-	if err != nil {
-		return nil, err
+	// Learning-mode: результат НЕ публикуется в кэш (generateLocked вернул
+	// общий буфер singleflight без publish). Отдаём его клиенту напрямую —
+	// каждый запрос получает собственный reader из общего буфера, без
+	// повторного чтения из remote.
+	if learning {
+		reader, err := buf.NewReader()
+		if err != nil {
+			_ = buf.Close()
+			return nil, outcome(OutcomeProcessing, "buffer reader", err)
+		}
+		meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
+		return &Result{
+			Key:       key,
+			URL:       url,
+			Request:   req,
+			Opened:    &bufferStream{buf: buf, r: reader, meta: meta},
+			FromCache: false,
+		}, nil
 	}
-	reader, err := cbuf.NewReader()
+	// Non-learning: результат уже опубликован в кэш. Пытаемся отдать reader
+	// из общего буфера singleflight (владелец и waiters, успевшие создать
+	// reader до освобождения буфера). Если буфер уже освобождён другим
+	// запросом (NewReader → ошибка), читаем результат из кэша — это
+	// безопасно, т.к. владелец опубликовал результат ДО возврата из
+	// generateLocked.
+	reader, err := buf.NewReader()
 	if err != nil {
-		_ = cbuf.Close()
-		return nil, outcome(OutcomeProcessing, "buffer reader", err)
+		_ = buf.Close()
+		cbuf, err := s.readResultBuffer(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		reader, err := cbuf.NewReader()
+		if err != nil {
+			_ = cbuf.Close()
+			return nil, outcome(OutcomeProcessing, "buffer reader", err)
+		}
+		meta := object.ObjectMetadata{Key: key, Size: cbuf.Size()}
+		return &Result{
+			Key:       key,
+			URL:       url,
+			Request:   req,
+			Opened:    &bufferStream{buf: cbuf, r: reader, meta: meta},
+			FromCache: false,
+		}, nil
 	}
-	meta := object.ObjectMetadata{Key: key, Size: cbuf.Size()}
+	meta := object.ObjectMetadata{Key: key, Size: buf.Size()}
 	return &Result{
 		Key:       key,
 		URL:       url,
 		Request:   req,
-		Opened:    &bufferStream{buf: cbuf, r: reader, meta: meta},
+		Opened:    &bufferStream{buf: buf, r: reader, meta: meta},
 		FromCache: false,
 	}, nil
+}
+
+// learningEnabled сообщает, включён ли learning-mode (nil-контроллер = off).
+func (s *Service) learningEnabled() bool {
+	return s.deps.Learning != nil && s.deps.Learning.Enabled()
+}
+
+// learningResolve разрешает segment-запрос, не подходящий по правилам,
+// дефолтными настройками learning-mode: resize, размер из сегмента
+// (размер-грамматика), dpr из URL или 1, выходной формат из URL.
+//
+// Возвращает (nil, false), если сегмент НЕ является размер-грамматикой
+// (имя несуществующего пресета) — такой запрос остаётся 403, в path-policies
+// такие записи не попадают.
+func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
+	if req == nil || !req.IsPreset() {
+		return nil, false
+	}
+	size, err := asset.ParseSize(req.SegmentName().String())
+	if err != nil {
+		return nil, false
+	}
+	dpr := req.DPR()
+	if dpr == 0 {
+		dpr = asset.DefaultDPR
+	}
+	return req.WithResolved(
+		"", // transform: resize
+		size,
+		dpr,
+		0, 0, 0, nil, nil, nil,
+	), true
 }
 
 // generateLocked выполняет генерацию под защитой singleflight: recheck кэша,
@@ -626,9 +968,12 @@ func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
 // Возвращает Buffer, из которого клиент читает результат.
 //
 // Отдача клиенту идёт из Buffer (куда процессор записал результат), а не из
-// remote. Публикация выполняется после завершения записи в буфер, чтобы
-// reader буфера прочитал полные данные. Повторный запрос (singleflight)
-// ждёт и генерацию, и публикацию (полная готовность remote).
+// remote. Публикация выполняется асинхронно (S1): результат ставится в
+// bounded-очередь фоновых воркеров и возвращается клиенту СРАЗУ, без
+// ожидания записи в remote. Waiters singleflight получают reader из общего
+// refcount-буфера (фаза 2), поэтому их ответ НЕ зависит от завершения
+// publish. Если очередь переполнена или сервис закрывается — публикация
+// выполняется синхронно (fallback), чтобы не терять результаты.
 func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, in processor.Input) (buffer.Buffer, error) {
 	buf, err := s.newBuffer()
 	if err != nil {
@@ -667,36 +1012,44 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	s.metrics.IncProcessorSuccess()
 	s.metrics.ObserveProcessorDuration(time.Since(procStart))
 
-	// Публикация в remote после завершения записи в буфер. Transient-ошибки
-	// (ErrUnavailable) ретраятся с экспоненциальным backoff.
-	pubStart := time.Now()
-	pubErr := s.publishFromBuffer(ctx, key, buf)
-	if pubErr != nil {
-		s.metrics.IncStorageOp(observability.OpResultPublish, true)
-		s.metrics.ObserveStorageDuration(observability.OpResultPublish, true, time.Since(pubStart))
-		_ = buf.Close()
-		if ctx.Err() != nil {
-			return nil, outcome(OutcomeCanceled, "canceled", ctx.Err())
-		}
-		return nil, s.mapPublishError(ctx, pubErr)
+	// Learning-mode: результат НЕ сохраняется в storage — пропускаем
+	// публикацию, largest_ai_asset и created_unix. Буфер возвращается
+	// клиенту напрямую (см. Generate).
+	if s.learningEnabled() {
+		return buf, nil
 	}
-	s.metrics.IncStorageOp(observability.OpResultPublish, false)
-	s.metrics.ObserveStorageDuration(observability.OpResultPublish, false, time.Since(pubStart))
 
-	// largest_ai_asset: best-effort обновление после успешной публикации,
-	// ТОЛЬКО при реальном ИИ-ассете (выход больше родителя с теми же
-	// пропорциями: srcW×srcH → outW×outH). Обычные resize/watermark не
-	// кандидаты → в Metadata даже не входим (ленивость: ни Load, ни Update,
-	// ни singleflight). Пропуск проверяется здесь, ДО Coordinator.Do, чтобы
-	// не создавать на каждый publish. Размеры берём из Result процессора
-	// (0 = неизвестно → ShouldTrackAsAIAsset вернёт false).
-	// Метаданные привязаны к АССЕТУ-результату, поэтому ключом служит key.
+	// Публикация: асинхронно через bounded-очередь (S1). Открываем ОТДЕЛЬНЫЙ
+	// reader из refcount-буфера ДО помещения задачи в очередь: клиент может
+	// закрыть свой reader/буфер сразу после ответа, и данные должны остаться
+	// живыми для воркера (refcount удерживает память/file, пока открыт хотя
+	// бы один reader). Retry/backoff остаются внутри publishFromBuffer.
+	reader, err := buf.NewReader()
+	if err != nil {
+		_ = buf.Close()
+		return nil, outcome(OutcomeProcessing, "publish reader", err)
+	}
+
+	// Порядок важен: создаём задачу после открытия reader'а и пробуем
+	// поставить её в очередь. При переполнении (все воркеры заняты, буфер
+	// очереди полон) или после закрытия сервиса — синхронный fallback.
+
+	// largest_ai_asset + created_unix: обе операции best-effort, выполняются
+	// АСИНХРОННО (fire-and-forget) и НЕ влияют на результат генерации —
+	// клиент получил буфер, данные уже материализованы. Поэтому они ставятся
+	// ДО ветки async/sync публикации и выполняются в обоих путях. Если бы они
+	// остались только после синхронного publish, при асинхронной публикации
+	// метаданные (largest_ai_asset, created_unix) терялись бы.
 	//
-	// Обновление largest_ai_asset НЕ влияет на результат генерации (клиент
-	// уже получил буфер), поэтому выполняется асинхронно (fire-and-forget)
-	// вместе с записью created_unix. Обе операции — best-effort и не
-	// блокируют ответ клиенту. Используется context.Background, чтобы
-	// запись завершилась даже после отмены запроса.
+	// largest_ai_asset: best-effort обновление, ТОЛЬКО при реальном ИИ-ассете
+	// (выход больше родителя с теми же пропорциями: srcW×srcH → outW×outH).
+	// Обычные resize/watermark не кандидаты → в Metadata даже не входим
+	// (ленивость: ни Load, ни Update, ни singleflight). Пропуск проверяется
+	// здесь, ДО Coordinator.Do, чтобы не создавать на каждый publish. Размеры
+	// берём из Result процессора (0 = неизвестно → ShouldTrackAsAIAsset
+	// вернёт false). Метаданные привязаны к АССЕТУ-результату, поэтому
+	// ключом служит key. Используется context.Background, чтобы запись
+	// завершилась даже после отмены запроса.
 	if procRes != nil && filemeta.ShouldTrackAsAIAsset(
 		procRes.SourceWidth, procRes.SourceHeight,
 		procRes.Width, procRes.Height,
@@ -713,22 +1066,51 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	// ассета. Выполняется в фоне (не блокирует ответ), best-effort.
 	s.recordAssetCreationTime(ctx, key)
 
+	task := publishTask{key: key, buf: buf, reader: reader}
+	if s.asyncPublish(task) {
+		return buf, nil
+	}
+
+	// Fallback: синхронная публикация. Не теряем результаты, но блокируем
+	// ответ на время записи в remote — допустимо только при переполнении
+	// очереди или shutdown.
+	pubStart := time.Now()
+	pubErr := s.publishFromBuffer(ctx, key, reader)
+	// Закрываем только reader воркера, но НЕ буфер: он возвращается клиенту
+	// и закрывается через bufferStream.Close() при result.Close() (client
+	// закрывает reader и сам буфер). Раньше здесь был buf.Close(), что
+	// освобождало память преждевременно — клиентский buf.NewReader() в
+	// Generate падал с "buffer closed" и ломался fallback на readResultBuffer.
+	_ = reader.Close()
+	if pubErr != nil {
+		s.metrics.IncStorageOp(observability.OpResultPublish, true)
+		s.metrics.ObserveStorageDuration(observability.OpResultPublish, true, time.Since(pubStart))
+		if ctx.Err() != nil {
+			return nil, outcome(OutcomeCanceled, "canceled", ctx.Err())
+		}
+		return nil, s.mapPublishError(ctx, pubErr)
+	}
+	s.metrics.IncStorageOp(observability.OpResultPublish, false)
+	s.metrics.ObserveStorageDuration(observability.OpResultPublish, false, time.Since(pubStart))
+
 	return buf, nil
 }
 
-// publishFromBuffer публикует содержимое буфера в remote. Читает из буфера
-// по мере записи процессором (параллельно), ограничивая размер OutputLimit.
+// publishFromBuffer публикует содержимое reader в remote. Принимает готовый
+// reader (открытый ДО вызова), чтобы удержать данные refcount-буфера живыми,
+// даже если клиент закрыл свой reader/буфер. Вызывается из воркеров
+// асинхронной очереди и из синхронного fallback.
 //
 // Transient-ошибки (ErrUnavailable) ретраятся с экспоненциальным backoff.
 // boundedReader не читает лишний байт — лимит проверяется ДО чтения, поэтому
 // при превышении в remote не попадает битый объект.
-func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, buf buffer.Buffer) error {
-	reader, err := buf.NewReader()
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
+//
+// ErrConflict (NoOverwrite, объект уже существует) трактуется как УСПЕХ:
+// повторная публикация того же ассета (например, при повторной генерации до
+// завершения фоновой публикации) означает, что результат уже в кэше. Это не
+// ошибка и не должно логироваться как publish-failure или инкрементировать
+// счётчик ошибок.
+func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, reader io.ReadSeekCloser) error {
 	var r io.Reader = reader
 	var br *bounded.BoundedReader
 	if s.deps.Limits != nil && s.deps.Limits.OutputBytes > 0 {
@@ -751,9 +1133,9 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 			case <-timer.C:
 			}
 		}
-		// Каждая попытка читает буфер с начала: перематываем reader и
-		// сбрасываем счётчик boundedReader, иначе повторная попытка
-		// опубликует усечённые данные.
+		// Каждая попытка читает с начала: перематываем reader и сбрасываем
+		// счётчик boundedReader, иначе повторная попытка опубликует
+		// усечённые данные.
 		if _, err := reader.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
@@ -762,6 +1144,11 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 		}
 		lastErr = s.deps.Results.Publish(ctx, key, r, object.PublishOptions{})
 		if lastErr == nil {
+			return nil
+		}
+		// Объект уже существует (NoOverwrite) — результат уже в кэше,
+		// считаем публикацию успешной (см. комментарий выше).
+		if object.IsConflict(lastErr) {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -775,53 +1162,60 @@ func (s *Service) publishFromBuffer(ctx context.Context, key object.ObjectKey, b
 	return lastErr
 }
 
-// mapResultError маппит ошибку ResultStore в типизированный OutcomeError.
-func (s *Service) mapResultError(ctx context.Context, err error) error {
+// mapOutcomeError — общий каркас маппинга ошибок хранилища/координатора в
+// типизированный OutcomeError: отмена контекста имеет приоритет над любым
+// маппингом, затем применяется специфичный для вызывающего mapper.
+func mapOutcomeError(ctx context.Context, err error, mapper func(error) error) error {
 	if ctx.Err() != nil {
 		return outcome(OutcomeCanceled, "canceled", ctx.Err())
 	}
-	switch {
-	case object.IsNotFound(err):
-		return outcome(OutcomeNotFound, "result not found", err)
-	case object.IsQuota(err):
-		return outcome(OutcomeQuota, "result store quota exceeded", err)
-	case object.IsUnavailable(err):
-		return outcome(OutcomeUnavailable, "result store unavailable", err)
-	default:
-		return outcome(OutcomeProcessing, "result store error", err)
-	}
+	return mapper(err)
+}
+
+// mapResultError маппит ошибку ResultStore в типизированный OutcomeError.
+func (s *Service) mapResultError(ctx context.Context, err error) error {
+	return mapOutcomeError(ctx, err, func(err error) error {
+		switch {
+		case object.IsNotFound(err):
+			return outcome(OutcomeNotFound, "result not found", err)
+		case object.IsQuota(err):
+			return outcome(OutcomeQuota, "result store quota exceeded", err)
+		case object.IsUnavailable(err):
+			return outcome(OutcomeUnavailable, "result store unavailable", err)
+		default:
+			return outcome(OutcomeProcessing, "result store error", err)
+		}
+	})
 }
 
 // mapSourceError маппит ошибку SourceStore в типизированный OutcomeError.
 func (s *Service) mapSourceError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return outcome(OutcomeCanceled, "canceled", ctx.Err())
-	}
-	switch {
-	case object.IsNotFound(err):
-		return outcome(OutcomeNotFound, "source not found", err)
-	case object.IsUnavailable(err):
-		return outcome(OutcomeUnavailable, "source store unavailable", err)
-	default:
-		return outcome(OutcomeProcessing, "source store error", err)
-	}
+	return mapOutcomeError(ctx, err, func(err error) error {
+		switch {
+		case object.IsNotFound(err):
+			return outcome(OutcomeNotFound, "source not found", err)
+		case object.IsUnavailable(err):
+			return outcome(OutcomeUnavailable, "source store unavailable", err)
+		default:
+			return outcome(OutcomeProcessing, "source store error", err)
+		}
+	})
 }
 
 // mapPublishError маппит ошибку публикации в типизированный OutcomeError.
 func (s *Service) mapPublishError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return outcome(OutcomeCanceled, "canceled", ctx.Err())
-	}
-	switch {
-	case object.IsQuota(err):
-		return outcome(OutcomeQuota, "publish quota exceeded", err)
-	case object.IsUnavailable(err):
-		return outcome(OutcomeUnavailable, "publish store unavailable", err)
-	case object.IsConflict(err):
-		return outcome(OutcomeProcessing, "publish conflict", err)
-	default:
-		return outcome(OutcomeProcessing, "publish result", err)
-	}
+	return mapOutcomeError(ctx, err, func(err error) error {
+		switch {
+		case object.IsQuota(err):
+			return outcome(OutcomeQuota, "publish quota exceeded", err)
+		case object.IsUnavailable(err):
+			return outcome(OutcomeUnavailable, "publish store unavailable", err)
+		case object.IsConflict(err):
+			return outcome(OutcomeProcessing, "publish conflict", err)
+		default:
+			return outcome(OutcomeProcessing, "publish result", err)
+		}
+	})
 }
 
 // mapCoordinatorError маппит ошибку координатора в типизированный OutcomeError.
@@ -832,17 +1226,16 @@ func (s *Service) mapPublishError(ctx context.Context, err error) error {
 // Retry-After), а не "unavailable". Маппятся в OutcomeUnavailable с явной
 // причиной, чтобы HTTP-слой мог вернуть Retry-After.
 func (s *Service) mapCoordinatorError(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return outcome(OutcomeCanceled, "canceled", ctx.Err())
-	}
-	var oe *OutcomeError
-	if errors.As(err, &oe) {
-		return oe
-	}
-	if errors.Is(err, singleflight.ErrTooManyKeys) || errors.Is(err, singleflight.ErrKeyTooLong) {
-		return outcome(OutcomeUnavailable, "coordination overloaded", err)
-	}
-	return outcome(OutcomeUnavailable, "coordination unavailable", err)
+	return mapOutcomeError(ctx, err, func(err error) error {
+		var oe *OutcomeError
+		if errors.As(err, &oe) {
+			return oe
+		}
+		if errors.Is(err, singleflight.ErrTooManyKeys) || errors.Is(err, singleflight.ErrKeyTooLong) {
+			return outcome(OutcomeUnavailable, "coordination overloaded", err)
+		}
+		return outcome(OutcomeUnavailable, "coordination unavailable", err)
+	})
 }
 
 // bufferStream — object.Stream поверх buffer.Buffer. Отдаёт клиенту данные

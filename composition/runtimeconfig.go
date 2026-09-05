@@ -1,12 +1,13 @@
 package composition
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/pkg-ru/dynamic"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 
 	"github.com/pkg-ru/imager/adapters/httpapi"
 	"github.com/pkg-ru/imager/adapters/processor/libvips"
@@ -182,7 +183,7 @@ type DetectionYAML struct {
 
 // RuntimeConfigFile — YAML-представление единого runtime-конфига.
 //
-// Поля Policy/Processing декодируются как yaml.MapSlice и пере-кодируются
+// Поля Policy/Processing декодируются как yaml.Node и пере-кодируются
 // в typed config.Config (см. ParseRuntimeConfig).
 type RuntimeConfigFile struct {
 	// Version — версия конфигурации.
@@ -198,9 +199,9 @@ type RuntimeConfigFile struct {
 	// HTTP — конфигурация HTTP-адаптера.
 	HTTP HTTPYAML `yaml:"http"`
 	// Policy — конфигурация политики (пробрасывается в config.Config).
-	Policy yaml.MapSlice `yaml:"policy"`
+	Policy yaml.Node `yaml:"policy"`
 	// Processing — конфигурация обработки.
-	Processing yaml.MapSlice `yaml:"processing"`
+	Processing yaml.Node `yaml:"processing"`
 	// Source — конфигурация source-хранилища.
 	Source StorageYAML `yaml:"source"`
 	// Result — конфигурация result-хранилища.
@@ -580,7 +581,9 @@ type NotFoundYAML struct {
 // отклоняются) и fail-fast валидацию.
 func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 	var raw RuntimeConfigFile
-	if err := yaml.UnmarshalStrict(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("composition: decode yaml: %w", err)
 	}
 
@@ -595,8 +598,8 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			return nil, fmt.Errorf("composition: watermarks.%s: %w", name, err)
 		}
 	}
-	if raw.Policy != nil {
-		pol, err := yaml.Marshal(raw.Policy)
+	if !raw.Policy.IsZero() {
+		pol, err := yaml.Marshal(&raw.Policy)
 		if err != nil {
 			return nil, fmt.Errorf("composition: re-encode policy: %w", err)
 		}
@@ -604,8 +607,8 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 			return nil, fmt.Errorf("composition: decode policy: %w", err)
 		}
 	}
-	if raw.Processing != nil {
-		proc, err := yaml.Marshal(raw.Processing)
+	if !raw.Processing.IsZero() {
+		proc, err := yaml.Marshal(&raw.Processing)
 		if err != nil {
 			return nil, fmt.Errorf("composition: re-encode processing: %w", err)
 		}
@@ -986,6 +989,23 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 			MaxCacheFiles: int(l.Limits.MaxCacheFiles.Unwrap()),
 			MaxCacheSize:  int(l.Limits.MaxCacheSize.Unwrap()),
 		},
+	}
+	// Fail-fast: отрицательные значения лимитов отключают лимиты в govips
+	// (значение < 0 = default govips) — запрещаем их, чтобы конфигурация
+	// была предсказуемой и безопасной.
+	for _, v := range []struct {
+		name string
+		val  int64
+	}{
+		{"limits.threads", l.Limits.Threads.Unwrap()},
+		{"limits.max-cache-mem", l.Limits.MaxCacheMem.Unwrap()},
+		{"limits.max-cache-files", l.Limits.MaxCacheFiles.Unwrap()},
+		{"limits.max-cache-size", l.Limits.MaxCacheSize.Unwrap()},
+		{"limits.output-bytes", l.Limits.OutputBytes.Unwrap()},
+	} {
+		if v.val < 0 {
+			return LibvipsConfig{}, fmt.Errorf("%s: negative value %d", v.name, v.val)
+		}
 	}
 	if l.Limits.Timeout.Unwrap() != "" {
 		d, err := time.ParseDuration(l.Limits.Timeout.Unwrap())

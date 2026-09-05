@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strconv"
@@ -95,7 +97,12 @@ func protectMetrics(next http.Handler, auth MetricsAuthConfig) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if auth.Token != "" {
-			if r.Header.Get("X-Metrics-Token") != auth.Token {
+			// Constant-time сравнение (по аналогии с admin_handler.go):
+			// SHA-256 хеши всегда одинаковой длины, поэтому
+			// subtle.ConstantTimeCompare не раскрывает длину токена по timing.
+			got := sha256.Sum256([]byte(r.Header.Get("X-Metrics-Token")))
+			want := sha256.Sum256([]byte(auth.Token))
+			if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}

@@ -281,7 +281,11 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 		}
 	}
 	if p == nil {
-		for name, pr := range s.byName {
+		// Итерируем по отсортированному списку имён (s.Names()), а не по
+		// map: детерминированный порядок разрешения при нескольких пресетах
+		// с одинаковым базовым именем и разными @dpr-суффиксами.
+		for _, name := range s.Names() {
+			pr := s.byName[name]
 			base, suffix, err := SplitPresetNameDPR(name)
 			if err != nil || base != segmentName || suffix == 0 {
 				continue

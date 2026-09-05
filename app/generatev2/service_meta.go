@@ -29,34 +29,18 @@ func metaFlightKey(srcKey object.ObjectKey) object.ObjectKey {
 	return object.ObjectKey(metaFlightPrefix + string(srcKey))
 }
 
-// planNeedsDetections возвращает true, если план требует ИИ-детекции
-// (face-crop/object-crop — операции на лицах/объектах). Trim — независимый
-// фильтр и не влияет на необходимость детекции.
-func planNeedsDetections(plan *processing.ProcessingPlan) bool {
+// planNeedsOperation возвращает true, если операция плана входит в ops.
+// Trim — независимый фильтр и не влияет на необходимость детекции.
+func planNeedsOperation(plan *processing.ProcessingPlan, ops ...processing.Operation) bool {
 	if plan == nil {
 		return false
 	}
-	switch plan.Operation {
-	case processing.OpFaceCrop, processing.OpObjectCrop:
-		return true
+	for _, op := range ops {
+		if plan.Operation == op {
+			return true
+		}
 	}
 	return false
-}
-
-// planNeedsFaces возвращает true, если плану нужны боксы лиц.
-func planNeedsFaces(plan *processing.ProcessingPlan) bool {
-	if plan == nil {
-		return false
-	}
-	return plan.Operation == processing.OpFaceCrop
-}
-
-// planNeedsObjects возвращает true, если плану нужны боксы объектов.
-func planNeedsObjects(plan *processing.ProcessingPlan) bool {
-	if plan == nil {
-		return false
-	}
-	return plan.Operation == processing.OpObjectCrop
 }
 
 // ensureDetections — best-effort источник боксов детекции для плана:
@@ -79,7 +63,7 @@ func (s *Service) ensureDetections(
 	if s.deps.Metadata == nil || s.deps.Detector == nil {
 		return false, nil
 	}
-	if !planNeedsDetections(plan) {
+	if !planNeedsOperation(plan, processing.OpFaceCrop, processing.OpObjectCrop) {
 		return false, nil
 	}
 	if !s.deps.Detector.Available() {
@@ -141,8 +125,8 @@ func (s *Service) ensureDetectionsLocked(
 		m = filemeta.NewFileMetadata()
 	}
 
-	needFaces := planNeedsFaces(plan)
-	needObjects := planNeedsObjects(plan)
+	needFaces := planNeedsOperation(plan, processing.OpFaceCrop)
+	needObjects := planNeedsOperation(plan, processing.OpObjectCrop)
 	detectFaces := needFaces && m.Faces == nil
 	detectObjects := needObjects && m.Objects == nil
 

@@ -20,6 +20,10 @@ import (
 type Config struct {
 	PathPolicies map[string]PathPolicyConfig `yaml:"path-policies"`
 	Presets      map[string]PresetConfig     `yaml:"presets"`
+	// LearningMode — флаг режима обучения (learning-mode): при включении
+	// сервис генерирует ассеты, не подходящие по правилам, но не сохраняет
+	// их в storage, и пополняет path-policies на основе наблюдаемых URL.
+	LearningMode dynamic.Bool `yaml:"learning-mode"`
 }
 
 // PathPolicyConfig — конфигурация path-policy (политики пути).

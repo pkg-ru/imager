@@ -32,6 +32,9 @@
 # не существуют — разрешение определяется только path-policies (deny-by-default).
 ########################################
 policy:
+  # learning mode - режим обучения (ассеты генерируются но не сохроняются в result)
+  learning-mode: false
+
   # presets — MAP именованных конфигураций обработки (ссылка из URL на
   # пресет). КЛЮЧ = имя пресета (обязательное, ≤64 символа, без дефисов "-"
   # в имени; допустимы буквы, цифры, "_", ".", "@" для суффикса @dpr;
@@ -88,10 +91,11 @@ policy:
     # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
     # @2 в имени фиксирует dpr=2: в URL допустим ТОЛЬКО thumb@2.webp.
     thumb@2:
-      width: 400
-      height: 400
+      width: 200
+      height: 200
       output-formats: [webp, avif]
       quality: 85
+      dpr: 2
 
     # пресет "banner" — анимационный WebP-баннер 1200x400. dpr не задан
     # (wildcard-@dpr из URL).
@@ -108,13 +112,14 @@ policy:
     # 800 = 400×2) для экранов с DPR 2. @2 в имени фиксирует dpr=2: в URL
     # допустим ТОЛЬКО /banners/.../banner@2.{webp|avif}.
     banner@2:
-      width: 2400
-      height: 800
+      width: 1200
+      height: 400
       output-formats: [webp, avif]
       quality: 80
       frames: 0
       duration: 0
       loop: true
+      dpr: 2
 
     # Примеры режимов crop/ориентации (раскомментируйте при необходимости):
     # avatar:                   # центрированный кроп
@@ -263,36 +268,3 @@ watermarks: {}
 #     position: center        # top | bottom | left | right | center
 #     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space
 #     size: contain           # contain | cover | "200px 50px"
-
-########################################
-# application — прикладные лимиты генерации ассетов (перенесены сюда из
-# policy.global.limits; ключ application.output-limit удалён — вместо него
-# application.limits.output-bytes). Раньше задавались в policy.global.limits.
-########################################
-application:
-  limits:
-    # source-bytes — максимум размера ИСХОДНОГО файла (байт).
-    # Тип: int64. 0 = без лимита.
-    source-bytes: 10485760                    # 10 MiB
-
-    # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
-    # Тип: int64. 0 = без лимита.
-    output-bytes: 10485760                    # 10 MiB
-
-    # width — максимум ширины запрошенного изображения (px).
-    # width: 2000
-    # height — максимум высоты запрошенного изображения (px).
-    # height: 2000
-    # pixels — максимум пикселей запрошенного изображения (wxh).
-    # pixels: 4000000                            # 4 MP
-    # dpr — максимум значения dpr в запросе (1/2/3).
-    # dpr: 3
-    # frames — максимум кадров анимации (для GIF/WebP).
-    # frames: 150
-    # duration — максимум длительности анимации (мс).
-    # duration: 60000                            # 60 000 мс = 60 c
-    # concurrency — максимум одновременных операций обработки от одного
-    # клиента (int).
-    # concurrency: 10
-    # Примечание: параметры width/height/pixels/frames/dpr/duration/
-    # concurrency не заданы в этом файле — 0 => без ограничения.

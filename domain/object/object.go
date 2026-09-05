@@ -182,11 +182,15 @@ func (e *QuotaError) Error() string {
 	return msg
 }
 
-// Unwrap возвращает каноническую ошибку ErrQuota; если задана внутренняя
-// причина, она возвращается первой для сохранения errors.Is-совместимости.
-func (e *QuotaError) Unwrap() error {
+// Unwrap возвращает список ошибок для errors.Is/errors.As: каноническая
+// ошибка ErrQuota и внутренняя причина (если задана). Multi-unwrap
+// гарантирует, что errors.Is(err, ErrQuota) и errors.Is(err, e.Err) оба
+// работают независимо от наличия внутренней причины.
+func (e *QuotaError) Unwrap() []error {
+	errs := make([]error, 0, 2)
 	if e.Err != nil {
-		return e.Err
+		errs = append(errs, e.Err)
 	}
-	return ErrQuota
+	errs = append(errs, ErrQuota)
+	return errs
 }

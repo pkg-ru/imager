@@ -114,7 +114,9 @@ func gzipHandler(next http.Handler) http.Handler {
 			ResponseWriter: w,
 			acceptEncoding: r.Header.Get("Accept-Encoding"),
 		}
+		// defer гарантирует завершение gzip-потока даже при панике в
+		// нижележащем handler (иначе клиент получит обрезанный поток).
+		defer gw.Close()
 		next.ServeHTTP(gw, r)
-		gw.Close()
 	})
 }

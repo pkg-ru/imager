@@ -217,6 +217,12 @@ func (h *Handler) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Learning-mode: регистрируем наблюдение (best-effort, nil-safe).
+	// Recorder сам отфильтрует не-размерные сегменты и не-медиа форматы.
+	if h.cfg.PolicyRecorder != nil {
+		h.cfg.PolicyRecorder.Observe(req)
+	}
+
 	// Явный deadline для генерации, связанный с GenerateTimeout.
 	// Превышение маппится в 504 (OutcomeCanceled) через mapError.
 	genCtx := r.Context()
@@ -286,8 +292,9 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 func (h *Handler) etagFor(meta object.ObjectMetadata, result *generation.Result) string {
 	// Если metadata предоставляет ETag, используем его. Нормализуем:
 	// убираем кавычки, если хранилище уже вернуло quoted-ETag, чтобы не
-	// получить двойные кавычки в заголовке.
-	if meta.ETag != "" {
+	// получить двойные кавычки в заголовке. Невалидное значение (управляющие
+	// символы, кавычки) не выставляется — fallback на вычисленный ETag.
+	if meta.ETag != "" && validETag(meta.ETag) {
 		return `"` + strings.Trim(meta.ETag, `"`) + `"`
 	}
 	// Иначе — стабильная identity из canonical URL + size, кэшируем.
@@ -598,10 +605,12 @@ func (h *Handler) serveSourceObject(w http.ResponseWriter, r *http.Request, key 
 	if meta.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
 	}
-	// Content-Disposition: inline; filename="name.ext".
-	w.Header().Set("Content-Disposition", `inline; filename="`+fileName+`"`)
+	// Content-Disposition: inline; filename="name.ext". fileName санитизируется:
+	// разрешены только [A-Za-z0-9._-], остальное заменяется на '_' — защита
+	// от header injection (CR/LF) и мусорных символов.
+	w.Header().Set("Content-Disposition", `inline; filename="`+sanitizeFileName(fileName)+`"`)
 	w.Header().Set("Cache-Control", cacheControl)
-	if meta.ETag != "" {
+	if meta.ETag != "" && validETag(meta.ETag) {
 		w.Header().Set("ETag", `"`+strings.Trim(meta.ETag, `"`)+`"`)
 	}
 
@@ -794,6 +803,37 @@ func extOf(p string) string {
 		return ""
 	}
 	return p[i:]
+}
+
+// sanitizeFileName приводит имя файла к безопасному набору символов
+// [A-Za-z0-9._-]; все остальные символы заменяются на '_'. Защита от
+// header injection (CR/LF) в Content-Disposition.
+func sanitizeFileName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
+
+// validETag проверяет, что ETag из метаданных безопасен для заголовка:
+// только печатные ASCII [!-~] без '"' и CR/LF. Невалидное значение не
+// выставляется (fallback на вычисленный ETag).
+func validETag(etag string) bool {
+	for i := 0; i < len(etag); i++ {
+		c := etag[i]
+		if c < 0x21 || c > 0x7e || c == '"' {
+			return false
+		}
+	}
+	return true
 }
 
 // outputFormat извлекает расширение из URI, если оно похоже на формат.

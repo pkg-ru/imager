@@ -144,6 +144,16 @@ func ExtractSourceBestEffort(raw string) *SourceRef {
 		return nil
 	}
 
+	// Валидируем sourceName через NewSourceName (те же проверки безопасности,
+	// что в Parse): длина, управляющие символы, разделители пути, "..".
+	// Дополнительно запрещаем '%' в имени исходника — encoded-обходы.
+	if _, err := NewSourceName(sourceName); err != nil {
+		return nil
+	}
+	if strings.Contains(sourceName, "%") {
+		return nil
+	}
+
 	// Канонизируем путь (те же проверки безопасности, что в Parse).
 	canon, err := NewCanonicalizer().CanonicalPath(path)
 	if err != nil {
@@ -341,14 +351,34 @@ func RejectUnsafe(raw string) error {
 }
 
 // rejectUnsafe отклоняет URL, содержащие traversal-сегменты, encoded
-// разделители, control-символы или недопустимые символы.
+// разделители, control-символы, обратные слеши, NUL-последовательности
+// ("%00") и любые %XX-последовательности, декодирующиеся в control-символ.
 func rejectUnsafe(raw string) error {
 	if strings.Contains(raw, "..") {
 		return fmt.Errorf("url contains traversal segment")
 	}
+	if strings.Contains(raw, "\\") {
+		return fmt.Errorf("url contains backslash")
+	}
 	lower := strings.ToLower(raw)
 	if strings.Contains(lower, "%2f") {
 		return fmt.Errorf("url contains encoded path separator")
+	}
+	// "%00" и любые %XX, где XX — hex-код control-символа (< 0x20 или 0x7F):
+	// encoded-обходы, которые после декодирования дают управляющие байты.
+	for i := 0; i+2 < len(lower); i++ {
+		if lower[i] != '%' {
+			continue
+		}
+		hi, ok1 := hexVal(lower[i+1])
+		lo, ok2 := hexVal(lower[i+2])
+		if !ok1 || !ok2 {
+			continue
+		}
+		v := hi<<4 | lo
+		if v < 0x20 || v == 0x7f {
+			return fmt.Errorf("url contains encoded control character")
+		}
 	}
 	for _, r := range raw {
 		if r < 0x20 || r == 0x7f {
@@ -356,4 +386,16 @@ func rejectUnsafe(raw string) error {
 		}
 	}
 	return nil
+}
+
+// hexVal возвращает значение hex-цифры (0-15) и признак валидности.
+func hexVal(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	default:
+		return 0, false
+	}
 }

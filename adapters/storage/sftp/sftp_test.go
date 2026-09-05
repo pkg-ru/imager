@@ -184,8 +184,10 @@ func TestSFTPHostKeyCallbackMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public key: %v", err)
 	}
+	// ssh.FingerprintSHA256 уже возвращает строку с префиксом "SHA256:";
+	// ожидаемый fingerprint задаётся в том же формате (одинарный префикс).
 	actual := ssh.FingerprintSHA256(pub)
-	fp := "SHA256:" + actual // совпадает
+	fp := actual // совпадает
 
 	cb, err := (Options{HostKeyFingerprint: fp}).hostKeyCallback()
 	if err != nil {

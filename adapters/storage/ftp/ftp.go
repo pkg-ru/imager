@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/textproto"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jlaffaye/ftp"
@@ -86,6 +87,13 @@ func (o Options) validate() error {
 	}
 	if o.TLS && !o.TLSVerify {
 		return fmt.Errorf("ftp: tls-verify=false is forbidden; set tls-verify: true")
+	}
+	// Root попадает в FTP-команды (CWD/STOR/RNFR/RNTO) как часть пути:
+	// управляющие байты (включая CR/LF) запрещены — защита от CRLF-инъекции.
+	for _, r := range o.Root {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("ftp: root contains control character %q", r)
+		}
 	}
 	return nil
 }
@@ -187,7 +195,7 @@ func (o Options) stat(ctx context.Context, key object.ObjectKey) (object.ObjectM
 	if err != nil {
 		return object.ObjectMetadata{}, err
 	}
-	s := store{opts: o}
+	s := store{Store: remote.NewStoreDirect(o, o.dial, func(c conn) error { return c.Quit() })}
 	return withRetry(ctx, &s, func(c *pooledConn) (object.ObjectMetadata, error, error) {
 		entries, err := c.List(full)
 		if err != nil {
@@ -224,7 +232,7 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 
 // Lookup возвращает метаданные исходного объекта.
 func (s *SourceStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	return s.opts.stat(ctx, key)
+	return s.Opts.stat(ctx, key)
 }
 
 // openBuffered открывает объект по полному пути full и материализует его в
@@ -239,14 +247,14 @@ func (s *store) openBuffered(ctx context.Context, full string, key object.Object
 		defer rc.Close()
 
 		buf, err := remote.NewBuffer(remote.BufferOptions{
-			Pool:     s.opts.Pool,
-			Dir:      s.opts.SpoolDir,
-			MaxBytes: s.opts.SpoolMaxBytes,
+			Pool:     s.Opts.Pool,
+			Dir:      s.Opts.SpoolDir,
+			MaxBytes: s.Opts.SpoolMaxBytes,
 		})
 		if err != nil {
 			return nil, nil, remote.MapError("ftp buffer", err)
 		}
-		if _, err := buf.WriteFrom(rc, s.opts.SpoolMaxBytes); err != nil {
+		if _, err := buf.WriteFrom(rc, s.Opts.SpoolMaxBytes); err != nil {
 			_ = buf.Close()
 			if errors.Is(err, remote.ErrBufferLimit) {
 				return nil, nil, fmt.Errorf("ftp: %s %q exceeds spool limit: %w", role, key, object.ErrQuota)
@@ -265,7 +273,7 @@ func (s *store) openBuffered(ctx context.Context, full string, key object.Object
 // Open открывает поток исходного объекта через spillable буфер. При ошибке
 // соединения выполняется повторная попытка с новым соединением.
 func (s *SourceStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	full, err := s.opts.key(key)
+	full, err := s.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -292,13 +300,13 @@ func NewResultStore(opts Options) (*ResultStore, error) {
 
 // Lookup возвращает метаданные результата.
 func (r *ResultStore) Lookup(ctx context.Context, key object.ObjectKey) (object.ObjectMetadata, error) {
-	return r.opts.stat(ctx, key)
+	return r.Opts.stat(ctx, key)
 }
 
 // Open открывает перематываемый поток результата через spillable буфер.
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Artifact, error) {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +317,7 @@ func (r *ResultStore) Open(ctx context.Context, key object.ObjectKey) (object.Ar
 // материализации. Соединение удерживается до закрытия Stream. При ошибке
 // соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (object.Stream, error) {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return nil, err
 	}
@@ -320,11 +328,11 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 		}
 		// Соединение должно жить до закрытия потока: передаём владение
 		// (каркас не выполнит discard после успешного возврата).
-		c.keepAlive()
+		c.KeepAlive()
 		meta := object.ObjectMetadata{Key: key}
 		// rc закрывается через Stream.Close; соединение освобождается
 		// после закрытия потока (session.Discard вызывается в Close).
-		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, session: c.session}, meta), nil, nil
+		return remote.NewStreamArtifact(rc, &ftpStreamCloser{rc: rc, session: c.Session}, meta), nil, nil
 	})
 }
 
@@ -332,16 +340,15 @@ func (r *ResultStore) ReadStream(ctx context.Context, key object.ObjectKey) (obj
 type ftpStreamCloser struct {
 	rc      io.Closer
 	session *remote.Session[conn]
-	once    bool
+	once    sync.Once
 }
 
 func (c *ftpStreamCloser) Close() error {
-	if c.once {
-		return nil
-	}
-	c.once = true
-	err := c.rc.Close()
-	c.session.Discard()
+	var err error
+	c.once.Do(func() {
+		err = c.rc.Close()
+		c.session.Discard()
+	})
 	return err
 }
 
@@ -350,7 +357,7 @@ func (c *ftpStreamCloser) Close() error {
 // RNFR/RNTO, DELE) и выполняет cleanup временного файла при любой ошибке.
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.Reader, opts object.PublishOptions) error {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return err
 	}
@@ -422,7 +429,7 @@ func isFTPNotFound(err error) bool {
 // object.ErrNotFound и не считается ошибкой соединения. При ошибке
 // соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
-	full, err := r.opts.key(key)
+	full, err := r.Opts.key(key)
 	if err != nil {
 		return err
 	}
@@ -443,13 +450,13 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 // Stats возвращает агрегированную статистику по корню (рекурсивно).
 // При ошибке соединения выполняется повторная попытка с новым соединением.
 func (r *ResultStore) Stats(ctx context.Context) (object.StoreStats, error) {
-	root := r.opts.Root
+	root := r.Opts.Root
 	if root == "" {
 		root = "/"
 	}
 	return withRetry(ctx, &r.store, func(c *pooledConn) (object.StoreStats, error, error) {
 		var stats object.StoreStats
-		if err := r.walk(c.conn, root, &stats); err != nil {
+		if err := r.walk(c.Value, root, &stats); err != nil {
 			return object.StoreStats{}, err, remote.MapError("ftp walk", err)
 		}
 		return stats, nil, nil
@@ -489,12 +496,12 @@ func (r *ResultStore) walk(c conn, dir string, stats *object.StoreStats) error {
 // если каталога нет — возвращает (0, nil). Возвращает число удалённых
 // файлов.
 func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
-	full, err := r.opts.key(prefix)
+	full, err := r.Opts.key(prefix)
 	if err != nil {
 		return 0, err
 	}
 	return withRetry(ctx, &r.store, func(c *pooledConn) (int64, error, error) {
-		n, err := r.deleteByPrefixWalk(c.conn, full)
+		n, err := r.deleteByPrefixWalk(c.Value, full)
 		if err != nil {
 			if isFTPNotFound(err) {
 				// Каталог уже удалён — идемпотентно.

@@ -33,6 +33,11 @@ import (
 	"github.com/pkg-ru/imager/ports/storage"
 )
 
+// DefaultHTTPSpoolMaxBytes — безопасный дефолт лимита spool для HTTP source
+// (512 МБ). Применяется, когда spool-max-bytes не задан (0 = неограниченный
+// буфер — DoS-риск).
+const DefaultHTTPSpoolMaxBytes int64 = 512 * 1024 * 1024
+
 // StorageKind — тип удалённого хранилища.
 type StorageKind string
 
@@ -103,66 +108,38 @@ type RemoteStorageConfig struct {
 // BuildSourceStore создаёт SourceStore по конфигурации. При пустом Kind
 // возвращается nil (вызывающий использует FS fallback).
 func BuildSourceStore(ctx context.Context, cfg RemoteStorageConfig) (storage.SourceStore, error) {
-	switch cfg.Kind {
-	case "", StorageFS:
-		return nil, nil
-	case StorageS3:
-		client, err := buildS3Client(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return s3adapter.NewSourceStore(s3adapter.Options{
-			Bucket:        cfg.Bucket,
-			Prefix:        cfg.Prefix,
-			Client:        client,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			MetadataTTL:   cfg.MetadataTTL,
-		})
-	case StorageSFTP:
-		return sftp.NewSourceStore(sftp.Options{
-			Addr:               cfg.Addr,
-			User:               cfg.User,
-			Password:           cfg.Password,
-			PrivateKey:         cfg.PrivateKey,
-			Root:               cfg.Root,
-			SpoolDir:           cfg.SpoolDir,
-			SpoolMaxBytes:      cfg.SpoolMaxBytes,
-			Pool:               cfg.Pool,
-			ConnOptions:        cfg.Conn,
-			HostKeyFingerprint: cfg.HostKeyFingerprint,
-		})
-	case StorageFTP, StorageFTPS:
-		return ftp.NewSourceStore(ftp.Options{
-			Addr:          cfg.Addr,
-			User:          cfg.User,
-			Password:      cfg.Password,
-			TLS:           cfg.Kind == StorageFTPS,
-			TLSVerify:     cfg.TLSVerify,
-			Root:          cfg.Root,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			ConnOptions:   cfg.Conn,
-		})
-	case StorageHTTP:
-		return httpadapter.NewSourceStore(httpadapter.Options{
-			BaseURL:       cfg.BaseURL,
-			SpoolDir:      cfg.SpoolDir,
-			SpoolMaxBytes: cfg.SpoolMaxBytes,
-			Pool:          cfg.Pool,
-			ConnOptions:   cfg.Conn,
-		})
-	default:
-		return nil, fmt.Errorf("composition: unsupported source storage kind %q", cfg.Kind)
+	s, err := buildStore(ctx, cfg, false)
+	if err != nil {
+		return nil, err
 	}
+	if s == nil {
+		return nil, nil
+	}
+	return s.(storage.SourceStore), nil
 }
 
 // BuildResultStore создаёт ResultStore по конфигурации. При пустом Kind
 // возвращается nil (вызывающий использует FS fallback). Plain FTP не
 // поддерживает ResultStore — возвращается ошибка capability.
 func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.ResultStore, error) {
+	s, err := buildStore(ctx, cfg, true)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, nil
+	}
+	return s.(storage.ResultStore), nil
+}
+
+// buildStore — общая фабрика Source/Result-хранилищ по конфигурации.
+// isResult=true строит ResultStore, иначе SourceStore. При пустом Kind
+// возвращается (nil, nil) — вызывающий использует FS fallback.
+func buildStore(ctx context.Context, cfg RemoteStorageConfig, isResult bool) (any, error) {
+	role := "source"
+	if isResult {
+		role = "result"
+	}
 	switch cfg.Kind {
 	case "", StorageFS:
 		return nil, nil
@@ -171,7 +148,7 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 		if err != nil {
 			return nil, err
 		}
-		return s3adapter.NewResultStore(s3adapter.Options{
+		opts := s3adapter.Options{
 			Bucket:        cfg.Bucket,
 			Prefix:        cfg.Prefix,
 			Client:        client,
@@ -179,9 +156,13 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
 			MetadataTTL:   cfg.MetadataTTL,
-		})
+		}
+		if isResult {
+			return s3adapter.NewResultStore(opts)
+		}
+		return s3adapter.NewSourceStore(opts)
 	case StorageSFTP:
-		return sftp.NewResultStore(sftp.Options{
+		opts := sftp.Options{
 			Addr:               cfg.Addr,
 			User:               cfg.User,
 			Password:           cfg.Password,
@@ -192,9 +173,13 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			Pool:               cfg.Pool,
 			ConnOptions:        cfg.Conn,
 			HostKeyFingerprint: cfg.HostKeyFingerprint,
-		})
+		}
+		if isResult {
+			return sftp.NewResultStore(opts)
+		}
+		return sftp.NewSourceStore(opts)
 	case StorageFTP, StorageFTPS:
-		return ftp.NewResultStore(ftp.Options{
+		opts := ftp.Options{
 			Addr:          cfg.Addr,
 			User:          cfg.User,
 			Password:      cfg.Password,
@@ -205,11 +190,30 @@ func BuildResultStore(ctx context.Context, cfg RemoteStorageConfig) (storage.Res
 			SpoolMaxBytes: cfg.SpoolMaxBytes,
 			Pool:          cfg.Pool,
 			ConnOptions:   cfg.Conn,
-		})
+		}
+		if isResult {
+			return ftp.NewResultStore(opts)
+		}
+		return ftp.NewSourceStore(opts)
 	case StorageHTTP:
-		return nil, fmt.Errorf("composition: http storage is source-only and cannot be used as result")
+		if isResult {
+			return nil, fmt.Errorf("composition: http storage is source-only and cannot be used as result")
+		}
+		// SpoolMaxBytes == 0 означает неограниченный буфер (DoS-риск):
+		// устанавливаем безопасный дефолт 512 МБ, если лимит не задан.
+		spoolMax := cfg.SpoolMaxBytes
+		if spoolMax == 0 {
+			spoolMax = DefaultHTTPSpoolMaxBytes
+		}
+		return httpadapter.NewSourceStore(httpadapter.Options{
+			BaseURL:       cfg.BaseURL,
+			SpoolDir:      cfg.SpoolDir,
+			SpoolMaxBytes: spoolMax,
+			Pool:          cfg.Pool,
+			ConnOptions:   cfg.Conn,
+		})
 	default:
-		return nil, fmt.Errorf("composition: unsupported result storage kind %q", cfg.Kind)
+		return nil, fmt.Errorf("composition: unsupported %s storage kind %q", role, cfg.Kind)
 	}
 }
 

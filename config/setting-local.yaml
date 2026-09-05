@@ -1,9 +1,14 @@
+# Local-слой глубоко merge-ится поверх base-setting.yaml (base <- local) —
+# ключи этого файла перекрывают одноимённые ключи setting.yaml.
+# Значения libvips.limits приведены в соответствие с setting.yaml
+# (concurrency 8, threads 2): local-оверрайд не должен снижать
+# производительность движка.
 libvips:
   limits:
     timeout: "30s"
     output-bytes: 10485760
-    concurrency: 2
-    threads: 0
+    concurrency: 8
+    threads: 2
     max-cache-mem: 52428800
     max-cache-files: 0
     max-cache-size: 100

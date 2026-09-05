@@ -218,7 +218,7 @@ func TestGeneratePresetResolves(t *testing.T) {
 	// Preset-запрос: photos/photo-png/thumb@2.webp
 	sn, _ := asset.NewSourceName("photo")
 	sf, _ := asset.NewFormat("png")
-	pn, _ := asset.NewPresetName("thumb")
+	pn, _ := asset.NewSegmentName("thumb")
 	of, _ := asset.NewFormat("webp")
 	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
 	if err != nil {
@@ -252,7 +252,7 @@ func TestGenerateKeyIsCanonicalURL(t *testing.T) {
 	// Preset-запрос: photos/photo-png/thumb@2.webp.
 	sn, _ := asset.NewSourceName("photo")
 	sf, _ := asset.NewFormat("png")
-	pn, _ := asset.NewPresetName("thumb")
+	pn, _ := asset.NewSegmentName("thumb")
 	of, _ := asset.NewFormat("webp")
 	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
 	if err != nil {

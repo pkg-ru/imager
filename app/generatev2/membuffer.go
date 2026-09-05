@@ -11,6 +11,16 @@ import (
 // заменяется добавлением фиксированных сегментов.
 const memChunkSize = 32 * 1024
 
+// memChunkPool — пул переиспользуемых chunk-буферов фиксированного размера.
+// Каждый 32KiB chunk аллоцируется один раз и переиспользуется между буферами,
+// что снижает нагрузку на GC в горячем пути Write.
+var memChunkPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, memChunkSize)
+		return &b
+	},
+}
+
 // memBuffer — in-memory реализация buffer.Buffer, используемая, когда
 // фабрика spillable-буферов не задана. Хранит данные в памяти процесса.
 //
@@ -38,7 +48,9 @@ func (b *memBuffer) Write(p []byte) (int, error) {
 	orig := len(p)
 	for len(p) > 0 {
 		if len(b.chunks) == 0 || len(b.chunks[len(b.chunks)-1]) == memChunkSize {
-			b.chunks = append(b.chunks, make([]byte, 0, memChunkSize))
+			// Берём chunk из пула вместо аллокации нового слайса.
+			chunk := memChunkPool.Get().(*[]byte)
+			b.chunks = append(b.chunks, (*chunk)[:0])
 		}
 		last := &b.chunks[len(b.chunks)-1]
 		n := memChunkSize - len(*last)
@@ -128,6 +140,13 @@ func (b *memBuffer) Close() error {
 // буфер закрыт и не осталось открытых reader'ов. Вызывается под mu.
 func (b *memBuffer) releaseLocked() {
 	if b.closed && b.refs <= 0 {
+		// Окончательное освобождение: буфер закрыт и не осталось открытых
+		// reader'ов, значит chunk'и больше никем не используются (chunk может
+		// разделяться между несколькими reader'ами) — возвращаем их в пул.
+		for _, c := range b.chunks {
+			cp := c[:0]
+			memChunkPool.Put(&cp)
+		}
 		b.chunks = nil
 		b.size = 0
 		b.pos = 0
@@ -143,9 +162,15 @@ func (b *memBuffer) Size() int64 {
 func (b *memBuffer) NewReader() (io.ReadSeekCloser, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Reader'ы учитываются reference counting. После закрытия буфера новые
-	// reader'ы не создаются (данные могут быть освобождены).
-	if b.closed {
+	// Reader'ы учитываются reference counting. Новый reader можно создать и
+	// после Close (запись завершена), пока данные живы — то есть пока есть
+	// открытые reader'ы. Это позволяет каждому запросу singleflight получить
+	// собственный reader из общего буфера, даже если другой запрос уже
+	// закрыл свой reader (и тем самым пометил буфер closed). Данные
+	// освобождаются только когда буфер закрыт И не осталось reader'ов
+	// (см. releaseLocked), поэтому закрытие одного reader'а не ломает
+	// остальных.
+	if b.closed && b.refs <= 0 {
 		return nil, errors.New("buffer closed")
 	}
 	b.refs++

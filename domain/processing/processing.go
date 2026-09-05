@@ -13,6 +13,7 @@ package processing
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -187,7 +188,8 @@ func (t *TrimSpec) Validate() error {
 	if t.Color != "" && !isHexColor(t.Color) {
 		return fmt.Errorf("trim color %q must be in #RRGGBB form", t.Color)
 	}
-	if t.Tolerance < 0 || t.Tolerance > 1 {
+	// NaN не проходит сравнения < 0 / > 1 — отклоняем явно.
+	if math.IsNaN(t.Tolerance) || t.Tolerance < 0 || t.Tolerance > 1 {
 		return fmt.Errorf("trim tolerance must be in [0,1], got %v", t.Tolerance)
 	}
 	return nil
