@@ -224,7 +224,7 @@ func TestPaletteBitDepthSnap(t *testing.T) {
 	}
 }
 
-func TestLegacyNormalization(t *testing.T) {
+func TestNormalizeGIFBitDepth(t *testing.T) {
 	cases := []struct {
 		name string
 		got  int
@@ -235,14 +235,6 @@ func TestLegacyNormalization(t *testing.T) {
 		{"NormalizeGIFBitDepth(4)", NormalizeGIFBitDepth(4), 4},
 		{"NormalizeGIFBitDepth(-2)", NormalizeGIFBitDepth(-2), 1},
 		{"NormalizeGIFBitDepth(12)", NormalizeGIFBitDepth(12), 8},
-		// pngPaletteColors: 0→256, <2→2, >256→256.
-		{"NormalizePNGPaletteColors(0)", NormalizePNGPaletteColors(0), 256},
-		{"NormalizePNGPaletteColors(1)", NormalizePNGPaletteColors(1), 2},
-		{"NormalizePNGPaletteColors(300)", NormalizePNGPaletteColors(300), 256},
-		// pngPaletteBitdepth: 0→8, <1→1, >8→8.
-		{"NormalizePNGPaletteBitDepth(0)", NormalizePNGPaletteBitDepth(0), 8},
-		{"NormalizePNGPaletteBitDepth(-3)", NormalizePNGPaletteBitDepth(-3), 1},
-		{"NormalizePNGPaletteBitDepth(12)", NormalizePNGPaletteBitDepth(12), 8},
 	}
 	for _, c := range cases {
 		if c.got != c.want {

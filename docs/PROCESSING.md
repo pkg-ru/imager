@@ -155,7 +155,7 @@ APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 - **Lossy-форматы** (jpeg/webp/avif/heif/jxl): `quality` передаётся кодеру **напрямую** как качество потери (число качества запроса/пресета = качество выхода). Чем выше — тем больше битов, меньше артефактов; чем ниже — тем меньше размер.
 - **Lossless-форматы** (png/apng/gif): потерь `quality` **никогда не вводит**. Он управляет **усилием упаковки** (compression-level/effort) и **палитровой автоматикой** через якорный автомаппинг — «спрятать» качество в меньший файл: больше `quality` → плотнее упаковка, при `q≥90` PNG-палитра автоматически выключается (truecolor, защита градиентов).
 
-Per-format переопределение качества — **только нативными параметрами**: `webp-quality`, `jxl-quality` и т.п. (только lossy) либо ключами усилия (`webp-reduction-effort`, `jxl-effort`, `gif-effort`, `png-compression-level` и т.д.). Старый механизм глобальных `libvips.encoders.*` и `processing.default-quality` удалён полностью; per-format качество для lossless-форматов (`png-quality`) — ошибка конфигурации.
+Per-format переопределение качества — **только нативными параметрами**: `webp-quality`, `jxl-quality` и т.п. (только lossy) либо ключами усилия (`webp-reduction-effort`, `jxl-effort`, `gif-effort`, `png-compression-level` и т.д.). Per-format качество для lossless-форматов (`png-quality`) — ошибка конфигурации.
 
 Приоритеты параметров на каждом экспорте (разрешаются через `domain/encoding.Resolve` на каждый экспорт):
 

@@ -70,25 +70,6 @@ type ParamMeta struct {
 	Help    string
 }
 
-// KnownParams — ключи параметров, участвующих в маппинге от quality
-// (для внешней документации и тестов).
-var knownParams = []string{
-	"quality",
-	"progressive",
-	"reduction-effort",
-	"lossless",
-	"near-lossless",
-	"speed",
-	"effort",
-	"compression-level",
-	"interlace",
-	"palette",
-	"palette-colors",
-	"palette-bit-depth",
-	"dither",
-	"bit-depth",
-}
-
 // FormatDef — реестр формата: якорное quality, признак прямого quality
 // (передаётся кодеку как качество потери) и список нативных параметров.
 type FormatDef struct {
@@ -121,21 +102,14 @@ func (d FormatDef) Param(name string) (ParamMeta, bool) {
 	return ParamMeta{}, false
 }
 
-// HasParam сообщает, относится ли нативный ключ к формату.
-func (d FormatDef) HasParam(name string) bool {
-	_, ok := d.Param(name)
-	return ok
-}
-
 // registry — единый реестр нативных параметров форматов. Неизменяем после
 // инициализации пакета; LookupFormat возвращает копии, чтение конкурентно-
 // безопасно.
 //
-// Дефолты сверены с setting/server.yaml: jpeg-progressive=false (yaml:358),
-// png-interlace=false (yaml:362), png-palette=false (yaml:370), legacy-0 из
-// конфига («не задано» → дефолт движка: webp effort 4, png compression 6,
-// jxl effort 7, palette colors 256, palette bit-depth 8, gif bit-depth 8)
-// описан в domain как «эффективный» параметр — см. Normalize* в mapping.go.
+// Дефолты соответствуют setting.yaml: jpeg-progressive=false,
+// png-interlace=false, png-palette=false; «не задано» в конфиге трактуется
+// как «эффективный» дефолт движка: webp effort 4, png compression 6,
+// jxl effort 7, palette colors 256, palette bit-depth 8, gif bit-depth 8.
 var registry = map[Format]FormatDef{
 	FormatJPEG: {
 		Name:          FormatJPEG,
@@ -382,8 +356,8 @@ func Resolve(format string, quality uint8, overrides map[string]any) (ResolvedPa
 // Ключ "quality" обрабатывается ОСОБО: это per-format quality из пресета
 // (jpeg-quality/webp-quality/avif-quality/heif-quality/jxl-quality). Он
 // допустим ТОЛЬКО для lossy-форматов (DirectQuality) и ложится в overrides
-// под реестровым именем "quality"; после валидации здесь downstream (S4)
-// извлекает его из overrides и передаёт в Resolve как качество формата —
+// под реестровым именем "quality"; после валидации downstream извлекает
+// его из overrides и передаёт в Resolve как качество формата —
 // сам Resolve по-прежнему запрещает "quality" внутри overrides. Для
 // lossless-форматов (png/apng/gif) задание quality-ключа формата — ошибка
 // (их качество задаётся только скалярным quality пресета).
@@ -519,8 +493,8 @@ func coerceParam(meta ParamMeta, raw any) (float64, error) {
 	return v, nil
 }
 
-// Value возвращает эффективное значение нативного параметра (для S2–S4 и
-// тестов). ok=false для ключей, не принадлежащих формату.
+// Value возвращает эффективное значение нативного параметра (для
+// потребителей и тестов). ok=false для ключей, не принадлежащих формату.
 func (r ResolvedParams) Value(name string) (any, bool) {
 	switch name {
 	case "quality":

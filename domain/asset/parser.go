@@ -26,7 +26,7 @@ func parseErr(url, reason, segment string) error {
 
 // Parse разбирает asset URL в immutable Request.
 //
-// Новая грамматика (transform-коды отсутствуют):
+// Грамматика (transform-коды отсутствуют):
 //
 //	/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
 //
@@ -45,6 +45,7 @@ func parseErr(url, reason, segment string) error {
 // безопасная canonicalization: запрещены traversal-сегменты, encoded
 // разделители ("%2f", "%2F"), control-символы, а также ограничены длина
 // и набор символов.
+
 // SourceRef — ссылка на исходник, извлечённая из произвольного URL.
 //
 // Используется для source fallback: когда полный Parse не удался (неверный

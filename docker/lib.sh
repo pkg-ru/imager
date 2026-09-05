@@ -1,12 +1,10 @@
 #!/bin/sh
 # lib.sh - shared helpers for imager install/distribution scripts.
 #
-# Convenience logging, fetch (curl->wget fallback), OS/arch detection and
-# release-version resolution. Pure POSIX sh (runs in alpine /bin/sh, bash,
-# dash, busybox).
+# Logging, fetch (curl->wget fallback), OS/arch detection and release-version
+# resolution. Pure POSIX sh.
 
 # -- Logging ----------------------------------------------------------------
-# Prefix can be overridden per script (e.g. '[imager]').
 LIB_PREFIX="${LIB_PREFIX:-[imager]}"
 
 log()  { printf '%s %s\n' "$LIB_PREFIX" "$*"; }
@@ -14,8 +12,7 @@ warn() { printf '%s WARNING: %s\n' "$LIB_PREFIX" "$*" >&2; }
 die()  { printf '%s ERROR: %s\n' "$LIB_PREFIX" "$*" >&2; exit 1; }
 
 # -- Fetch ------------------------------------------------------------------
-# fetch <out-file> <url>: download via curl if available, otherwise wget.
-# Both tools are tried with sane timeouts/retries. Exits non-zero on failure.
+# fetch <out-file> <url>: download via curl (fallback: wget); non-zero on failure.
 fetch() { # $1 = output file, $2 = url
     _out="$1"; _url="$2"
     if command -v curl >/dev/null 2>&1; then
@@ -50,16 +47,11 @@ detect_arch() {
 }
 
 # -- Release version resolution ----------------------------------------------
-# Repository holding GitHub releases. Imager releases are published from
-# gitverse.ru/pkg-ru/imager (primary code repo) to github.com/pkg-ru/imager
-# (GitHub mirror) and altrap/imager (Docker Hub image).
 RELEASE_REPO="${IMAGER_RELEASE_REPO:-github.com/pkg-ru/imager}"
-# Primary git remote used as fallback for release/tag resolution when the
-# GitHub API is unavailable (git ls-remote --tags).
 RELEASE_GIT_URL="${IMAGER_RELEASE_GIT_URL:-https://gitverse.ru/pkg-ru/imager}"
 
-# get_latest_release_api: query GitHub "releases/latest" (prefers the API tag),
-# prints the tag e.g. "v1.2.3" or empty string.
+# get_latest_release_api: query GitHub "releases/latest", print tag "v1.2.3"
+# or empty string.
 get_latest_release_api() {
     _api_url="https://api.github.com/repos/${RELEASE_REPO}/releases/latest"
     _tag=$(
@@ -69,11 +61,7 @@ get_latest_release_api() {
             wget -q -T 30 -t 2 -O - "$_api_url" 2>/dev/null
         fi
     )
-    # tag_name may be quoted; strip quotes defensively.
-    case "$_tag" in
-        *'"tag_name"'*) : ;; # contains a field we parse below only if JSON-parser absent
-    esac
-    # Minimal extraction without jq: grep for "tag_name" and cut.
+    # Extract "tag_name" without jq: first sed, fallback tr+grep.
     if command -v sed >/dev/null 2>&1; then
         _t=$(printf '%s\n' "$_tag" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
     else
@@ -85,10 +73,8 @@ get_latest_release_api() {
     esac
 }
 
-# get_latest_release_git: enumerate remote tags, pick the highest semver
-# matching refs/tags/v[0-9]*, print e.g. "v1.2.3".
-# Primary remote is gitverse.ru/pkg-ru/imager (RELEASE_GIT_URL); falls back
-# to the GitHub mirror (RELEASE_REPO) when gitverse is unreachable.
+# get_latest_release_git: print highest semver tag matching v[0-9]* from the
+# git remote; fallback to the GitHub mirror when RELEASE_GIT_URL is unreachable.
 get_latest_release_git() {
     if ! command -v git >/dev/null 2>&1; then
         return 0
@@ -105,10 +91,9 @@ get_latest_release_git() {
     done
 }
 
-# resolve_release_version <version>: normalize "latest" to the concrete highest
-# semver tag, otherwise echo the given version unchanged. Prints "v1.2.3".
-# Order: GitHub API releases/latest (github.com/pkg-ru/imager), fallback
-# git ls-remote --tags (gitverse.ru/pkg-ru/imager primary), then die.
+# resolve_release_version <version>: "latest" -> highest semver tag; otherwise
+# prints the version unchanged (normalized with a "v" prefix if missing).
+# Order: GitHub API releases/latest, fallback git ls-remote --tags, then die.
 resolve_release_version() {
     _ver="$1"
     if [ -z "$_ver" ]; then

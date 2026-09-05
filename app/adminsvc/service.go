@@ -273,8 +273,7 @@ func (s *Service) enqueue(j *job) error {
 	}
 }
 
-// Sentinel-ошибки определены в порту ports/admin; здесь — алиасы для
-// обратной совместимости (→ HTTP-статусы маппит транспорт).
+// Sentinel-ошибки из порта ports/admin.
 var (
 	ErrQueueFull = admin.ErrQueueFull
 	ErrStopped   = admin.ErrStopped
@@ -454,7 +453,7 @@ func (s *Service) runDelete(ctx context.Context, j *job) (*JobResult, error) {
 //
 // Сам исходник (path/name.format) лежит вне префикса ассетов и не удаляется.
 func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error) {
-	ref, err := objectRefKey(source)
+	ref, err := parseSourceKey(source)
 	if err != nil {
 		return 0, ErrInvalidRequest
 	}
@@ -515,9 +514,7 @@ func (s *Service) DeleteBySource(ctx context.Context, source string) (int, error
 }
 
 // ErrNotImplemented — result-хранилище не поддерживает ни PrefixDeleter, ни
-// List (→ HTTP 501). Алиас порта ports/admin; в DeleteBySource
-// для таких хранилищ теперь используется «слепое» удаление по ключам,
-// поэтому эта ошибка фактически не возвращается.
+// List (→ HTTP 501). Алиас порта ports/admin.
 var ErrNotImplemented = admin.ErrNotImplemented
 
 // DeleteAssets удаляет перечисленные ассеты (канонические URL). Идемпотентно.

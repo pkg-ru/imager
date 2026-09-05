@@ -108,10 +108,6 @@ sudo sh docker/install-imager.sh          # или IMAGER_VERSION=1.0.0
 устанавливается из prebuilt `.tgz` с `github.com/microsoft/onnxruntime/releases`
 в `/usr/local/lib` + `ldconfig`.
 
-> Клонировать репозиторий не обязательно: скрипты можно запустить из URL
-> (`git clone --depth 1 https://gitverse.ru/pkg-ru/imager.git` — основной
-> репозиторий; зеркало `https://github.com/pkg-ru/imager.git`, см. «Быстрая установка»).
-
 ## Установка на macOS (пошагово)
 
 Требуется [Homebrew](https://brew.sh):
@@ -172,32 +168,23 @@ docker pull altrap/imager
 
 ### Сборка образа из релиза (GitHub releases)
 
+`altrap/imager` — образ на Docker Hub (учётка `altrap`, не репозиторий кода).
+Релизы кода публикуются в `gitverse.ru/pkg-ru/imager` (основной) и
+`github.com/pkg-ru/imager` (зеркало).
+
 ```bash
-docker build --build-arg IMAGER_VERSION=1.0.0 -t altrap/imager .
+docker build --target from-release --build-arg IMAGER_VERSION=1.0.0 -t altrap/imager .
 # без версии — latest-релиз
-docker build -t altrap/imager .
+docker build --target from-release -t altrap/imager .
 ```
 
-`altrap/imager` — образ на Docker Hub (учётка `altrap`, НЕ репозиторий кода).
-Релизы кода публикуются в `github.com/pkg-ru/imager` (зеркало) / теги в
-`gitverse.ru/pkg-ru/imager` (основной).
+> `--target from-release` обязателен: без него `docker build` собирает
+> последнюю стадию Dockerfile (`from-source`) и `IMAGER_VERSION` игнорируется.
 
-Два production-target'а Dockerfile:
-
-- **`from-release`** (по умолчанию): бинарь скачивается fetcher-стадией
-  (`alpine:3.23` + `ca-certificates`/`curl` + `docker/install-imager.sh` +
-  `docker/lib.sh`) из GitHub releases (`github.com/pkg-ru/imager`, fallback
-  теги `gitverse.ru/pkg-ru/imager`) — Go toolchain и исходники не нужны;
-- **`from-source`**: полная сборка из исходников (builder
-  `golang:1.27.0-alpine3.23` + libvips/кодеки/onnxruntime):
-
-  ```bash
-  docker build --target from-source -t imager:from-source .
-  ```
-
-Runtime-стадия (`alpine:3.23`) содержит libvips, heif, de265, jxl, poppler,
-libraw, rsvg, ghostscript, ffmpeg, onnxruntime; non-root `imager` (uid 10001);
-пакетные списки — единый источник [`docker/build-deps.sh`](../docker/build-deps.sh).
+Target `from-release`: бинарь скачивается fetcher-стадией
+(`alpine:3.23` + `ca-certificates`/`curl` + `docker/install-imager.sh` +
+`docker/lib.sh`) из GitHub releases (`github.com/pkg-ru/imager`, fallback
+теги `gitverse.ru/pkg-ru/imager`) — Go toolchain и исходники не нужны.
 
 HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 
@@ -209,10 +196,24 @@ HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 | `GOFLAGS` | `-buildvcs=false` | Флаги Go (builder `from-source`) |
 | `BUILD_TAGS` | `libvips,onnx` | Build tags (builder `from-source`) |
 
+### Сборка образа из исходников
+
+```bash
+docker build --target from-source -t imager:from-source .
+```
+
+Target `from-source`: builder `golang:1.27.0-alpine3.23` + libvips/кодеки/onnxruntime,
+бинарный файл собирается с `-tags libvips,onnx`.
+
+Runtime-стадия (`alpine:3.23`) содержит libvips, heif, de265, jxl, poppler,
+libraw, rsvg, ghostscript, ffmpeg, onnxruntime; non-root `imager` (uid 10001);
+пакетные списки — единый источник [`docker/build-deps.sh`](../docker/build-deps.sh);
+каталог конфигурации — `/etc/imager` (env `IMAGER_CONFIG_DIR`).
+
 ### Релизный цикл через Makefile
 
 ```bash
-make docker-build-release IMAGER_VERSION=1.0.0   # build: altrap/imager:latest + altrap/imager:v1.2.3
+make docker-build-release IMAGER_VERSION=1.0.0   # build: altrap/imager:latest + altrap/imager:<version>
 make docker-push IMAGER_VERSION=1.0.0            # push обоих тегов
 make docker-release IMAGER_VERSION=1.0.0         # build + push
 make docker-build-from-source                    # сборка из исходников
@@ -222,26 +223,13 @@ make docker-build-from-source                    # сборка из исход�
 (`docker/lib.sh`: GitHub API `releases/latest` на `github.com/pkg-ru/imager`
 → fallback `git ls-remote --tags` на `gitverse.ru/pkg-ru/imager`).
 
-### Сборка образа из исходников (исторический способ)
-
-```bash
-docker build -t imager:production .
-```
-
-Эквивалентно `--target from-source` (см. выше). Двухэтапная схема:
-
-- **builder**: `golang:1.27.0-alpine3.23` + `build-base`, `vips-dev ~=8.17`, `libheif-dev`, `libjxl-dev`, `librsvg-dev`, `poppler-dev`, `libraw-dev`, `onnxruntime` (edge); бинарный файл собирается с `-tags libvips,onnx`;
-- **runtime**: `alpine:3.23` + `libvips`, `libheif`, `libde265`, `libjxl`, `poppler-utils`, `libraw`, `librsvg`, `ghostscript`, `ffmpeg`, `onnxruntime`; non-root пользователь `imager` (uid 10001); бинарный файл `/usr/local/bin/imager`, каталог конфигурации `/etc/imager`.
-
-Примечание: `--read-only` не используется — см. объяснение в [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening).
-
 ## Docker Compose
 
 ```bash
 docker compose up -d --build
 ```
 
-[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./setting` → `/etc/imager/setting:ro`, `./models` → `/etc/imager/models:ro`, `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. `read_only: true` не используется — причины и полный разбор hardening в [DEPLOYMENT.md](DEPLOYMENT.md#запуск).
+[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./setting` → `/etc/imager/setting:ro`, `./models` → `/etc/imager/models:rw` (entrypoint скачивает модели при старте), `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. Подробности hardening — [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening).
 
 ## Локальная разработка
 

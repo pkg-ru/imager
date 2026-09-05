@@ -165,8 +165,7 @@ func NewSegmentName(s string) (SegmentName, error) {
 // String возвращает строковое представление.
 func (n SegmentName) String() string { return string(n) }
 
-// PresetName — обратно-совместимый алиас SegmentName (старое имя поля
-// preset-запроса). Сохранён для совместимости публичного API.
+// PresetName — алиас SegmentName для публичного API.
 type PresetName = SegmentName
 
 // Dimension — значение измерения (ширина/высота) в пикселях.

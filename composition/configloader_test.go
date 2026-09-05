@@ -1,4 +1,4 @@
-﻿package composition
+package composition
 
 import (
 	"path/filepath"
@@ -633,9 +633,6 @@ http:
 	}
 }
 
-// TestLoadConfigDirMissingGenerateFailback проверяет обратную совместимость:
-// отсутствие generate.yaml / failback.yaml — нормальная ситуация, сервис
-// работает как раньше (только server.yaml).
 func TestLoadConfigDirMissingGenerateFailback(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
@@ -742,10 +739,7 @@ func TestLoadConfigDirUnknownFieldInFailback(t *testing.T) {
 	}
 }
 
-// TestLoadConfigDirBackwardCompatSingleFile проверяет обратную совместимость:
-// старый монолитный server.yaml, содержащий секции, которые "переехали" в
-// generate/failback, продолжает работать без ошибок.
-func TestLoadConfigDirBackwardCompatSingleFile(t *testing.T) {
+func TestLoadConfigDirSingleFile(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, filepath.Join(dir, BaseConfigFile), `
 version: "1"

@@ -61,9 +61,8 @@ type RuntimeConfig struct {
 	// Пустые пути к моделям = face-crop/object-crop отключены (запрос с
 	// такими операциями вернёт понятную ошибку).
 	Detection DetectionConfig
-	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset
-	// Дефолт: true. false = поведение
-	// идентично текущему (кэш моделей отключён).
+	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset.
+	// Дефолт: true.
 	MetadataEnabled bool
 	// MetadataDir — КОРЕНЬ sidecar-хранилища metаданных (metadata.dir):
 	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
@@ -112,7 +111,7 @@ type LibvipsConfig struct {
 	// EncodersConfig — полное per-format представление единой секции
 	// encoders (default-quality + нативные параметры по форматам). Хранит
 	// ГЛОБАЛЬНЫЕ значения; эффективные параметры каждого экспорта
-	// разрешаются per-request через domain/encoding.Resolve (S4).
+	// разрешаются per-request через domain/encoding.Resolve.
 	EncodersConfig libvips.EncodersConfig
 	// ShrinkOnLoad — настройки shrink-on-load (предварительное уменьшение
 	// при декодировании JPEG/WebP/GIF/HEIF/AVIF).
@@ -127,8 +126,8 @@ type LibvipsConfig struct {
 	// keep (сохранить embedded-профиль в выход).
 	Color libvips.ColorMode
 	// OperationCache — настройки operation cache libvips.
-	// Включено по умолчанию (обратная совместимость); false = нулевые
-	// лимиты кэша при Startup (кэш отключён).
+	// Включено по умолчанию; false = нулевые лимиты кэша при Startup
+	// (кэш отключён).
 	OperationCache libvips.OperationCacheOpts
 	// VipsMetricsInterval — интервал периодического сбора vips-метрик
 	// (0 = дефолт 15s).
@@ -346,8 +345,7 @@ type ColorYAML struct {
 
 // OperationCacheYAML — YAML-представление настроек operation cache.
 type OperationCacheYAML struct {
-	// Enabled — включить operation cache libvips (nil = включено по
-	// умолчанию, обратная совместимость).
+	// Enabled — включить operation cache libvips (nil = включено по умолчанию).
 	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
 }
 
@@ -452,7 +450,7 @@ type EncoderFormatJXLYAML struct {
 	// Quality — качество [1,100]; nil = из запроса / default-quality.
 	Quality *int `yaml:"quality"`
 	// Effort — effort [3,9] (больше = лучше сжатие, медленнее). nil = 7.
-	// 0 НЕВАЛИДЕН (в старом конфиге 0 означал «дефолт govips 7»).
+	// 0 НЕВАЛИДЕН.
 	Effort *int `yaml:"effort"`
 	// Lossless — без потерь. nil = false.
 	Lossless *bool `yaml:"lossless"`
@@ -593,7 +591,7 @@ type MetadataYAML struct {
 	// Enabled — включить sidecar-кэш моделей и largest_ai_asset.
 	// Тип: bool. Дефолт: true. false = поведение идентично текущему.
 	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
-	// Dir — КОРЕНЬ sidecar-хранилища метаданных (НОВАЯ СЕМАНТИКА v2.1):
+	// Dir — КОРЕНЬ sidecar-хранилища метаданных:
 	// явный ЛОКАЛЬНЫЙ путь файловой системы. Метаданные всегда хранятся
 	// локально по этому пути, независимо от типов source/result.
 	// Тип: string. Дефолт: <эффективный локальный result-каталог>.
@@ -844,7 +842,7 @@ func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
 
 	// Единая секция encoders: сборка в libvips.EncodersConfig (валидация по
 	// реестру domain/encoding). Эффективные параметры каждого экспорта
-	// разрешаются через domain/encoding.Resolve в exportImage (S4):
+	// разрешаются через domain/encoding.Resolve в exportImage:
 	// preset override > encoders yaml > автомаппинг от quality > дефолт.
 	enc, err := buildEncoders(raw.Encoders)
 	if err != nil {
@@ -1336,8 +1334,8 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 	}
 	cfg.DetectionSem = ds
 	// Цветовой менеджмент: строгая политика mode (strip/transform/
-	// keep). Empty = strip (дефолт, обратная совместимость); неизвестное
-	// значение — fail-fast ошибка конфигурации.
+	// keep). Empty = strip (дефолт); неизвестное значение — fail-fast
+	// ошибка конфигурации.
 	colorMode, err := libvips.ParseColorMode(l.Color.Mode.Unwrap())
 	if err != nil {
 		return LibvipsConfig{}, fmt.Errorf("color: %w", err)

@@ -168,8 +168,8 @@ func TestAddObservation(t *testing.T) {
 }
 
 func TestHoistIdenticalCustomsBrothers(t *testing.T) {
-	// Пример из ТЗ: /chto/to/gde/to + /chto/to/gde/tut с одинаковыми
-	// customs → общий предок /chto/to/gde, промежуточные пути удалены.
+	// /chto/to/gde/to + /chto/to/gde/tut с одинаковыми customs → общий
+	// предок /chto/to/gde, промежуточные пути удалены.
 	state := map[string]policy.PathPolicyConfig{
 		"/chto/to/gde/to":  {Customs: customs([2]any{"120x60", sizeCustom("webp")})},
 		"/chto/to/gde/tut": {Customs: customs([2]any{"120x60", sizeCustom("webp")})},

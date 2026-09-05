@@ -80,11 +80,12 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
     && addgroup -S -g 10001 imager \
     && adduser -S -D -H -u 10001 -G imager imager
 
-ENV TZ=Europe/Moscow
+ENV TZ=Europe/Moscow \
+    IMAGER_CONFIG_DIR=/etc/imager
 
 # Каталоги source/result (writable) и mountpoint /etc/imager/models. ONNX-модели
 # в образ НЕ копируются: при старте контейнера они скачиваются entrypoint'ом
-# в смонтированный каталог (rw), см. docker/entrypoint.sh и models/README.md.
+# в смонтированный каталог (rw), см. docker/entrypoint.sh.
 RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
     && chown -R imager:imager /data \
     && chmod 0750 /data /data/source /data/result \

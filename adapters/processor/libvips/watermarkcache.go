@@ -279,9 +279,10 @@ func (c *watermarkCache) totalBytes() int64 {
 	return c.bytes
 }
 
-// stats возвращает снимок метрик кэша: число записей, суммарные
-// байты, накопительные hit/miss. Потокобезопасно.
-func (c *watermarkCache) stats() (entries int, bytes, hits, misses int64) {
+// stats возвращает снимок метрик кэша для observability: число записей,
+// суммарный размер закэшированных байтов, накопительные попадания и промахи.
+// Потокобезопасно; не изменяет LRU-порядок.
+func (c *watermarkCache) stats() (entries int, bytes int64, hits, misses int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lru.Len(), c.bytes, c.hits, c.misses

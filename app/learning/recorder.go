@@ -152,31 +152,17 @@ func (r *Recorder) record(req *asset.Request) {
 	}
 }
 
-// pathPrefix извлекает путь-префикс из канонического пути запроса:
-// путь без сегмента-файла. Канонический путь запроса —
-// "{path}/{source_name}-{source_format}/{segment}.{out}" (без ведущего
-// "/"); префикс — часть до последнего "/" с добавленным ведущим "/"
-// (нормализация path-policy). Путь без "/" (только source-файл) даёт
-// пустой префикс — наблюдение игнорируется.
+// pathPrefix нормализует путь запроса к префиксу path-policy:
+// ведущий "/", без хвостового "/" (кроме ровно "/"). req.Path() — это
+// УЖЕ путь без source-файла и сегмента (домен asset.Request хранит
+// именно каталог исходника), поэтому никаких срезов по "/" не требуется.
+// Пустой путь (запрос корневого исходника "/name.ext") не даёт префикса —
+// наблюдение игнорируется (path-policy "/" — fallback, не правило).
 func pathPrefix(canonicalPath string) string {
 	if canonicalPath == "" {
 		return ""
 	}
-	i := lastIndexByte(canonicalPath, '/')
-	if i < 0 {
-		return ""
-	}
-	return "/" + canonicalPath[:i]
-}
-
-// lastIndexByte — последний индекс байта c в s или -1.
-func lastIndexByte(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
+	return normalizePrefix(canonicalPath)
 }
 
 // scheduleWriteLocked планирует запись с учётом дебаунса: если с последней

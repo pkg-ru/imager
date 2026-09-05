@@ -1,25 +1,20 @@
 #!/bin/sh
 # install-imager.sh - download and install the imager release binary.
 #
-# - IMAGER_VERSION (default "latest") -> resolve_release_version() in lib.sh
-#   (GitHub API releases/latest github.com/pkg-ru/imager, fallback git
-#   ls-remote --tags gitverse.ru/pkg-ru/imager)
-# - downloads imager-<VERSION>-<OS>-<ARCH>.tar.gz (.zip on Windows) from
-#   https://github.com/pkg-ru/imager/releases/download/...
-# - extracts the `imager` binary into ${INSTALL_DIR:-/usr/local/bin}
-#   (for the Docker fetcher stage: INSTALL_DIR=/out)
-# - chmod +x and a run sanity check (--help / --version depending on binary)
+# IMAGER_VERSION (default "latest") is resolved via resolve_release_version()
+# in lib.sh. Downloads imager-<VERSION>-<OS>-<ARCH>.tar.gz (.zip on Windows)
+# from https://github.com/pkg-ru/imager/releases, extracts the `imager`
+# binary into ${INSTALL_DIR:-/usr/local/bin} (Docker fetcher stage: /out),
+# chmods it executable and runs a sanity check.
 #
-# Works both in alpine (/bin/sh) inside the Docker fetcher stage and on host
-# shells (bash/dash/zsh). Requires curl or wget and tar (bsdtar/unzip for zip).
+# Requires curl or wget and tar (unzip for .zip). No CLI args; configuration
+# is read from environment variables.
 #
 # Usage:
 #   sh docker/install-imager.sh            # latest release to /usr/local/bin
 #   IMAGER_VERSION=1.0.0 INSTALL_DIR=./out sh docker/install-imager.sh
 set -eu
 
-# Resolve the directory of this script, then source lib.sh from the repo
-# docker/ dir (fallback: look next to the script).
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "${SCRIPT_DIR}/lib.sh" ]; then
     # shellcheck source=lib.sh
@@ -79,7 +74,7 @@ else
     tar -xzf "$ARCHIVE_PATH" -C "$WORK_DIR"
 fi
 
-# Find the imager binary (may be at archive root or in a subdir).
+# Бинарь может лежать в корне архива или во вложенном каталоге.
 BIN=$(find "$WORK_DIR" \( -type f -name 'imager' -o -type f -name 'imager.exe' \) 2>/dev/null | head -n 1)
 if [ -z "$BIN" ]; then
     rm -rf "$WORK_DIR"

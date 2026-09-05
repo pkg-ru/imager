@@ -250,7 +250,7 @@ func (s *PresetSet) Names() []string {
 // ResolveError описывает ошибку разрешения segment URL в канонический запрос.
 type ResolveError struct {
 	SegmentName string
-	// PresetName — алиас SegmentName (обратная совместимость с httpapi).
+	// PresetName — алиас SegmentName.
 	PresetName string
 	Reason     string
 }

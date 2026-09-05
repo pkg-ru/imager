@@ -39,11 +39,6 @@ func parseSourceKey(source string) (*SourceRef, error) {
 	return &SourceRef{Path: path, SourceName: name, SourceFormat: format}, nil
 }
 
-// objectRefKey — алиас parseSourceKey (используется в DeleteBySource).
-func objectRefKey(source string) (*SourceRef, error) {
-	return parseSourceKey(source)
-}
-
 // assetPrefix возвращает префикс ключей ассетов исходника:
 // "{path}/{name}-{format}/" (без path, если путь пуст).
 func assetPrefix(ref *SourceRef) string {
@@ -65,8 +60,7 @@ func assetPrefix(ref *SourceRef) string {
 //   - custom-сегменты path-policy: имя custom (размер-грамматика, опционально
 //     с @dpr) × output-formats из whitelist → segment request → canonical URL.
 //
-// Канонические размеры (size-rules) в новой архитектуре отсутствуют —
-// произвольные размеры задаются только через custom-сегменты path-policy.
+// Произвольные размеры задаются только через custom-сегменты path-policy.
 func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSet) ([]string, error) {
 	if ref == nil || pol == nil || presets == nil {
 		return nil, ErrInvalidRequest

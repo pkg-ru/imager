@@ -1018,7 +1018,7 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 	if err := stripAllMetadata(img, b.opts.Color == ColorKeep); err != nil {
 		return nil, err
 	}
-	// DPI-нормализация (Волна 5d): после strip сбрасываем xres/yres к 72 DPI,
+	// DPI-нормализация: после strip сбрасываем xres/yres к 72 DPI,
 	// чтобы просмотрщики не масштабировали изображение по DPI-метаданным
 	// исходника. Решение (нужна ли копия) — чистая функция
 	// needsResolutionNormalization; при необходимости создаётся новый ImageRef.
@@ -1099,8 +1099,8 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		p := vips.NewAvifExportParams()
 		p.Quality = resolved.Quality
 		p.StripMetadata = true
-		// S4: avif speed 0 ВАЛИДЕН (это скорость, а не «не задано») —
-		// ставим всегда из resolved (govips: Speed=0 → Effort из params,
+		// avif speed 0 ВАЛИДЕН (это скорость, а не «не задано») — ставим
+		// всегда из resolved (govips: Speed=0 → Effort из params,
 		// поэтому пишем в Effort).
 		p.Effort = resolved.Speed
 		p.Lossless = resolved.Lossless

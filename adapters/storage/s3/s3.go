@@ -145,28 +145,6 @@ func isForbidden(err error) bool {
 	return false
 }
 
-// isThrottled сообщает, является ли ошибка признаком троттлинга (HTTP 429
-// или код SlowDown/Throttling).
-func isThrottled(err error) bool {
-	if httpStatus(err) == 429 {
-		return true
-	}
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
-		switch apiErr.ErrorCode() {
-		case "SlowDown", "Throttling", "TooManyRequests", "RequestLimitExceeded":
-			return true
-		}
-	}
-	return false
-}
-
-// isServerError сообщает, является ли ошибка серверной (HTTP 5xx).
-func isServerError(err error) bool {
-	code := httpStatus(err)
-	return code >= 500 && code <= 599
-}
-
 // httpStatus извлекает HTTP status code из ошибки S3 (если доступен),
 // иначе 0.
 func httpStatus(err error) int {

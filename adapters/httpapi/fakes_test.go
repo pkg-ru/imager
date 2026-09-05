@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"gitverse.ru/pkg-ru/imager/domain/object"
 	"gitverse.ru/pkg-ru/imager/internal/testutil"
 	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // requireLocalhostTCP пропускает тест, если localhost TCP недоступен.
@@ -167,22 +165,6 @@ func (p *fakePixel) GeneratePixel(ctx context.Context, format string) ([]byte, e
 type memSourceStore = testutil.MemSourceStore
 
 func newMemSourceStore() *memSourceStore { return testutil.NewMemSourceStore() }
-
-// memResultStore — in-memory storage.ResultStore (алиас testutil).
-type memResultStore = testutil.MemResultStore
-
-func newMemResultStore() *memResultStore { return testutil.NewMemResultStore() }
-
-// fakeProcessor — fake processor.Processor: копирует исходник в out.
-type fakeProcessor struct{}
-
-func (fakeProcessor) Process(ctx context.Context, in processor.Input, out io.Writer) (*processor.Result, error) {
-	n, err := io.Copy(out, in.Source)
-	if err != nil {
-		return nil, err
-	}
-	return &processor.Result{Size: n}, nil
-}
 
 // fakeDetector — fake detector.Detector: всегда доступен, не находит лиц.
 type fakeDetector struct{}

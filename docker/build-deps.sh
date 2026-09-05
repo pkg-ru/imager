@@ -1,9 +1,7 @@
 #!/bin/sh
 # build-deps.sh - single source of truth for Alpine apk package lists.
 #
-# Used by the production Dockerfile (builder and runtime stages) and by
-# Dockerfile.test. Keeps the duplicated apk lists in one place so that
-# pinned versions never drift between the two Dockerfiles.
+# Used by Dockerfile (builder/runtime stages) and Dockerfile.test.
 #
 # Usage:
 #   docker/build-deps.sh install-builder      # builder-stage (dev packages)
@@ -15,17 +13,16 @@
 # Requires Alpine Linux with /etc/apk. The onnxruntime group (libstdc++,
 # libgcc, onnxruntime) comes from the edge repository: the edge sources must
 # be appended to /etc/apk/repositories BEFORE calling install-runtime /
-# install-edge (mirror override is applied by the caller; see Dockerfile).
+# install-edge.
 set -u
 
 # Builder-stage dev packages (golang:1.27.0-alpine3.23 builder).
-# Pinned versions must match the production Dockerfile.
 BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.17 glib-dev libheif-dev libde265-dev libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
 
-# Runtime-stage packages (alpine:3.23 runtime); pinned versions.
+# Runtime-stage packages (alpine:3.23 runtime).
 RUNTIME_PACKAGES="vips-tools~=8.17 vips~=8.17 libheif~=1.23 libde265~=1.0 libjxl~=0.11 poppler-utils libraw~=0.21 librsvg~=2.61 ghostscript~=10.06 ffmpeg~=8.0 tzdata~=2026 ca-certificates"
 
-# Packages from edge (C++23 onnxruntime): added with --upgrade after the edge
+# Edge packages (C++23 onnxruntime); installed with --upgrade after the edge
 # repositories are enabled.
 EDGE_PACKAGES="libstdc++ libgcc onnxruntime"
 

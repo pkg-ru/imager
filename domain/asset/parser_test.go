@@ -154,21 +154,20 @@ func TestParseSegmentNameWithDPRSuffix(t *testing.T) {
 func TestParseInvalid(t *testing.T) {
 	invalid := []string{
 		"",
-		"/",                                   // empty
-		"/photos/photo-1-jpg/banner",          // missing output format
-		"/photos/photo-1-jpg/banner.",         // empty output format
-		"/photos/photo-1-jpg/banner@2",        // missing output format
-		"/photos/photo-1-jpg/banner@2.",       // empty output format
-		"/photos/photo-1-jpg/banner@0.webp",   // explicit @0
-		"/photos/photo-1-jpg/banner@1.webp",   // explicit @1
-		"/photos/photo-1-jpg/banner@4.webp",   // dpr > MaxDPR
-		"/photos/photo-1-jpg/banner@-1.webp",  // negative dpr
-		"/photos/photo-1-jpg/banner@x.webp",   // non-numeric dpr
-		"/photos/photo-1-jpg/banner@.webp",    // empty dpr
-		"/photos/photo-1-jpg/banner@2@3.webp", // multiple '@' in segment
-		"/photos/photo-1-jpg/@2.webp",         // empty segment
-		"/photos/photo-1-jpg/.webp",           // empty segment
-		// Transform-коды больше не поддерживаются.
+		"/",                                                    // empty
+		"/photos/photo-1-jpg/banner",                           // missing output format
+		"/photos/photo-1-jpg/banner.",                          // empty output format
+		"/photos/photo-1-jpg/banner@2",                         // missing output format
+		"/photos/photo-1-jpg/banner@2.",                        // empty output format
+		"/photos/photo-1-jpg/banner@0.webp",                    // explicit @0
+		"/photos/photo-1-jpg/banner@1.webp",                    // explicit @1
+		"/photos/photo-1-jpg/banner@4.webp",                    // dpr > MaxDPR
+		"/photos/photo-1-jpg/banner@-1.webp",                   // negative dpr
+		"/photos/photo-1-jpg/banner@x.webp",                    // non-numeric dpr
+		"/photos/photo-1-jpg/banner@.webp",                     // empty dpr
+		"/photos/photo-1-jpg/banner@2@3.webp",                  // multiple '@' in segment
+		"/photos/photo-1-jpg/@2.webp",                          // empty segment
+		"/photos/photo-1-jpg/.webp",                            // empty segment
 		"/photos/photo-1-jpg/t-x50@3.png",                      // transform code
 		"/photos/photo-1-jpg/ct-180x@2.avif",                   // transform code
 		"/photos/photo-1-jpg/sc-120x80@2.webp",                 // transform code

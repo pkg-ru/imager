@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
 	"gitverse.ru/pkg-ru/imager/domain/object"
-	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 

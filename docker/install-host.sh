@@ -1,16 +1,14 @@
 #!/bin/sh
-# install-host.sh - one-command host install of imager (production).
+# install-host.sh - one-command host install of imager.
 #
-# Orchestrates: detect OS/arch -> install system deps -> download ONNX models
-# -> install the imager release binary. Supports running from a repo clone or
-# remote execution:
+# Detect OS/arch -> install system deps -> download ONNX models -> install the
+# imager release binary. Works from a repo clone or via remote execution:
 #
 #   curl -fsSL https://raw.githubusercontent.com/pkg-ru/imager/main/docker/install-host.sh | sh
 #   curl -fsSL .../install-host.sh | IMAGER_VERSION=1.0.0 sh
 #
-# When running via curl|bash the script is NOT inside a repo clone: it clones
-# the repository (shallow) into a temp dir and runs the install steps from
-# there via docker/install-deps-<os>(.ps1) etc.
+# When run via curl|bash (not a clone) the repo is cloned shallow into a temp
+# dir and the install steps run from there.
 #
 # Env overrides:
 #   IMAGER_VERSION        - release version (default "latest")
@@ -40,7 +38,7 @@ else
     TMP_REPO=$(mktemp -d)
     trap 'rm -rf "$TMP_REPO"' EXIT
     if command -v git >/dev/null 2>&1; then
-        # Primary: gitverse.ru/pkg-ru/imager (git). Fallback: GitHub mirror.
+        # Primary: gitverse.ru/pkg-ru/imager; fallback: GitHub mirror.
         if ! git clone --depth 1 https://gitverse.ru/pkg-ru/imager.git "$TMP_REPO" 2>/dev/null; then
             log "gitverse clone failed - falling back to github.com/pkg-ru/imager..."
             git clone --depth 1 https://github.com/pkg-ru/imager.git "$TMP_REPO"
@@ -52,12 +50,12 @@ else
         die "git not found; cannot clone the install scripts. Clone the repo manually and run docker/install-host.sh"
     fi
     REPO_DIR="$TMP_REPO"
-    # Re-exec from the clone so relative includes work.
+    # Re-exec from the clone so relative includes (lib.sh) resolve.
     exec sh "$REPO_DIR/docker/install-host.sh" "$@"
 fi
 
 # -- Detect platform ------------------------------------------------------------
-# Общие хелперы (log/warn/fetch, detect_os/detect_arch) из docker/lib.sh.
+# log/warn/die, fetch, detect_os/detect_arch из docker/lib.sh.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "${SCRIPT_DIR}/lib.sh"
@@ -99,7 +97,7 @@ if [ "${IMAGER_SKIP_MODELS:-0}" = "1" ]; then
     log "IMAGER_SKIP_MODELS=1 - skipping model download"
 else
     if [ "$OS" = "windows" ]; then
-        # download-models.sh is POSIX sh; on Windows run through a sh if available
+        # download-models.sh is POSIX sh; on Windows run via sh if present.
         if command -v sh >/dev/null 2>&1; then
             sh "$REPO_DIR/docker/download-models.sh"
         else

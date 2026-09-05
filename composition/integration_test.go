@@ -122,10 +122,8 @@ func TestIntegrationCacheHitNoRegeneration(t *testing.T) {
 }
 
 // TestIntegrationPresetResultStoredByCanonicalURL проверяет, что preset-запрос
-// /test-jpg/thumb@2.webp после раскрытия пресета сохраняет результат в
-// ResultStore под каноническим URL (test-jpg/thumb@2.webp), а не под
-// SHA-256 хешем. Это regression-тест для перехода с hash-based на
-// canonical-URL-based ключа хранения.
+// /test-jpg/thumb@2.webp сохраняет результат в ResultStore под каноническим
+// URL (test-jpg/thumb@2.webp).
 func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 	app, srcDir, resDir := buildFSApp(t)
 	seedSource(t, srcDir, "test.jpg", []byte("RAWIMAGE"))
@@ -157,8 +155,6 @@ func TestIntegrationPresetResultStoredByCanonicalURL(t *testing.T) {
 	}
 
 	// Физический файл должен существовать под каноническим URL-именем.
-	// В новой грамматике канонический URL строится из имени сегмента
-	// (пресета), а не из transform-кода.
 	want := filepath.Join(resDir, "test-jpg/thumb@2.webp")
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("expected result file %q to exist: %v", want, err)

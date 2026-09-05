@@ -48,7 +48,7 @@ func planNeedsOperation(plan *processing.ProcessingPlan, ops ...processing.Opera
 //   - кэш/детектор отключён или план не требует детекции → (false, nil);
 //   - sidecar-кэш дал боксы                              → (true, боксы оригинала);
 //   - сбой любой стадии                                  → лог + (false, nil):
-//     процессор работает в режиме self-detection (деградация 8.2).
+//     процессор работает в режиме self-detection.
 //
 // Модель вызывается ровно один раз на ассет под keyed singleflight
 // "meta:"+assetKey; sidecar создаётся лениво (только при реальных данных).

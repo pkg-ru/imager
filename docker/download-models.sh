@@ -1,27 +1,18 @@
 #!/bin/sh
-# download-models.sh - idempotent ONNX model downloader.
+# download-models.sh - ONNX model downloader (idempotent, atomic replace).
 #
 # Downloads YuNet (face) and SSD MobileNet (object) models into
-# $IMAGER_MODELS_DIR (default /etc/imager/models) if they are missing.
-# Used by entrypoint.sh at container start and can be run manually:
+# $IMAGER_MODELS_DIR (default /etc/imager/models) if missing. Used by
+# entrypoint.sh at container start; can be run manually:
 #   sh ./docker/download-models.sh
 #
-# Behavior:
-#   - skips download if target file exists and is non-empty (idempotent);
-#   - downloads to "<name>.tmp.<pid>" then atomically mv's into place, so
-#     parallel containers never observe a half-written model;
-#   - on failure prints a warning but exits 0: detection in imager is
-#     optional (empty model paths disable fc/oc operations), the service
-#     still starts.
-#
-# Overridable sources (useful for private mirrors):
-#   IMAGER_MODEL_FACE_URL     - YuNet model URL (face detection)
-#   IMAGER_MODEL_OBJECT_URL   - SSD MobileNet v1 model URL (object detection)
-#   IMAGER_MODEL_SELFIE_URL   - test image selfie.jpg URL (downloads ONLY
-#                               when set; needed for real inference tests,
-#                               not for production)
-#   IMAGER_MODELS_DIR         - models directory (default /etc/imager/models)
-#   IMAGER_SKIP_MODELS=1      - disable download entirely (offline mode)
+# Environment:
+#   IMAGER_MODEL_FACE_URL    - YuNet model URL (face detection)
+#   IMAGER_MODEL_OBJECT_URL  - SSD MobileNet v1 model URL (object detection)
+#   IMAGER_MODEL_SELFIE_URL  - test image selfie.jpg URL (only when set;
+#                              needed for inference tests, not production)
+#   IMAGER_MODELS_DIR        - models directory (default /etc/imager/models)
+#   IMAGER_SKIP_MODELS=1     - skip download entirely (offline mode)
 set -u
 
 # Models directory.
@@ -42,10 +33,9 @@ SELFIE_URL="${IMAGER_MODEL_SELFIE_URL:-}"
 MIN_SIZE=1024
 
 # -- Helpers -------------------------------------------------------------
-# Общие хелперы (log/warn/fetch) берутся из docker/lib.sh, когда он доступен
-# (клонированный репозиторий / build context). При standalone-развёртывании
-# (скрипт скопирован в runtime-образ без lib.sh) используются локальные
-# определения — поведение идентично.
+# log/warn/fetch берутся из docker/lib.sh, доступного по соседству; при
+# standalone-развёртывании (скрипт скопирован в runtime-образ без lib.sh)
+# используются локальные определения.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "${SCRIPT_DIR}/lib.sh" ]; then
     # shellcheck source=lib.sh
@@ -88,7 +78,7 @@ download() { # $1 = file name, $2 = url, $3 = directory
     tmp="$dir/$name.tmp.$$"
     rm -f "$tmp"
     if fetch "$tmp" "$url" && [ -s "$tmp" ] && \
-       [ "$(stat -c %s "$tmp" 2>/dev/null || echo 0)" -ge "$MIN_SIZE" ]; then
+       [ "$(wc -c < "$tmp" 2>/dev/null || echo 0)" -ge "$MIN_SIZE" ]; then
         mv -f "$tmp" "$target" && log "model $name: downloaded and installed"
     else
         rm -f "$tmp"

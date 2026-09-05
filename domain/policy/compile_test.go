@@ -175,7 +175,7 @@ func TestValidateConfigValidPathPolicies(t *testing.T) {
 }
 
 // TestValidateConfigValidCustomNameDPR — позитивные кейсы правил @N для
-// customs (пункт C): имя без @N без dpr — ок (wildcard); имя без @N с
+// customs: имя без @N без dpr — ок (wildcard); имя без @N с
 // dpr: 1 — ок; имя с @N с dpr == N — ок.
 func TestValidateConfigValidCustomNameDPR(t *testing.T) {
 	valid := &Config{

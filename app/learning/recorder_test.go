@@ -35,9 +35,13 @@ func TestRecorderObserveExtractsPathSizeFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
-	// Канонический путь запроса: "chto/to/gde/to/img-jpg" (без ведущего
-	// "/"); префикс — "/chto/to/gde/to".
-	req := newTestRequest(t, "chto/to/gde/to/img-jpg", "img", "jpg", "120x60", "webp")
+	// req.Path() — каталог исходника БЕЗ source-файла и сегмента
+	// (грамматика: /{path}/{source_name}-{source_format}/{segment}.{out};
+	// домен хранит только {path}). Префикс path-policy = нормализованный
+	// Path() с ведущим "/". Regression: раньше pathPrefix срезал последний
+	// сегмент, и наблюдения для одно-сегментных путей (/test/...) молча
+	// отбрасывались — generate-local.yaml не пополнялся.
+	req := newTestRequest(t, "test", "my-png", "png", "120x60", "webp")
 	rec.Observe(req)
 	rec.Stop()
 
@@ -46,7 +50,7 @@ func TestRecorderObserveExtractsPathSizeFormat(t *testing.T) {
 		t.Fatalf("read generate-local.yaml: %v", err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "/chto/to/gde/to:") {
+	if !strings.Contains(got, "/test:") {
 		t.Errorf("path prefix missing:\n%s", got)
 	}
 	if !strings.Contains(got, "120x60:") {
@@ -54,6 +58,44 @@ func TestRecorderObserveExtractsPathSizeFormat(t *testing.T) {
 	}
 	if !strings.Contains(got, "webp") {
 		t.Errorf("format missing:\n%s", got)
+	}
+}
+
+func TestRecorderObserveNestedPath(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Вложенный путь: полный {path} сохраняется целиком (без среза
+	// последнего сегмента, как раньше).
+	req := newTestRequest(t, "a/b/c", "img", "jpg", "120x60", "webp")
+	rec.Observe(req)
+	rec.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "/a/b/c:") {
+		t.Errorf("nested path prefix missing:\n%s", got)
+	}
+}
+
+func TestRecorderObserveEmptyPathIgnored(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Путь пуст (исходник в корне): наблюдение игнорируется — path-policy
+	// "/" это fallback, не правило.
+	req := newTestRequest(t, "", "img", "jpg", "120x60", "webp")
+	rec.Observe(req)
+	rec.Stop()
+
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected no generate-local.yaml for empty path, err = %v", err)
 	}
 }
 
@@ -81,7 +123,7 @@ func TestRecorderStopFinalWrite(t *testing.T) {
 	}
 	// Дебаунс: запись не выполняется сразу после Observe (файл появляется
 	// не раньше writeInterval).
-	rec.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	rec.Observe(newTestRequest(t, "a/b", "img", "jpg", "120x60", "webp"))
 	time.Sleep(100 * time.Millisecond)
 	if info, err := os.Stat(filepath.Join(dir, localFileName)); err == nil {
 		if time.Since(info.ModTime()) < writeInterval-500*time.Millisecond {

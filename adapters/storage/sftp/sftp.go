@@ -24,10 +24,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/sftp"
 	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
 	"gitverse.ru/pkg-ru/imager/domain/object"
 	"gitverse.ru/pkg-ru/imager/ports/storage"
-	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 

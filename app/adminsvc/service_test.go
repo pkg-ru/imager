@@ -440,10 +440,10 @@ func TestDeleteAssets(t *testing.T) {
 	}
 }
 
-// TestDeleteBySourceNotLister — result-хранилище без List и без PrefixDeleter
-// больше НЕ возвращает 501: используется «слепое» удаление по ключам,
-// сформированным из политик/правил. С пустой политикой перечисление даёт
-// пустой список — удаление завершается без ошибки.
+// TestDeleteBySourceNotLister — result-хранилище без List и без PrefixDeleter:
+// используется «слепое» удаление по ключам, сформированным из политик/правил.
+// С пустой политикой перечисление даёт пустой список — удаление завершается
+// без ошибки.
 func TestDeleteBySourceNotLister(t *testing.T) {
 	gen := newFakeGenerator()
 	src := testutil.NewMemSourceStore()

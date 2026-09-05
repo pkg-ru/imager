@@ -17,9 +17,8 @@ import (
 type ColorMode string
 
 const (
-	// ColorStrip — удалять ICC-профиль при обработке (текущее поведение,
-	// дефолт для обратной совместимости: stripAllMetadata удаляет профиль
-	// при экспорте).
+	// ColorStrip — удалять ICC-профиль при обработке (дефолт:
+	// stripAllMetadata удаляет профиль при экспорте).
 	ColorStrip ColorMode = "strip"
 	// ColorTransform — конвертировать embedded-профиль в стандартный sRGB
 	// (через PCS) ПЕРЕД пиксельной обработкой. После конверсии изображение

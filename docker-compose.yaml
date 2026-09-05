@@ -11,8 +11,9 @@ services:
     # Hardening: non-root (в Dockerfile), dropped capabilities, no-new-privileges,
     # tmpfs для /tmp. read_only: true НЕ используется: при read-only rootfs
     # Docker не создаст mountpoint для bind-mount ./models (каталог лежит в
-    # read-only слое). Корень остаётся writable, а модели/конфиг монтируются
-    # :ro (неизменяемы); writable — только /data и /tmp (tmpfs).
+    # read-only слое). Writable — bind-mounts /etc/imager/models (:rw, сюда
+    # entrypoint скачивает модели) и /data/result (:rw); /etc/imager/setting
+    # и /data/source монтируются :ro, /tmp — tmpfs.
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     security_opt:
@@ -60,7 +61,7 @@ services:
       # как каталог автоскачивания (entrypoint) и fallback для
       # detection.face-model / detection.object-model в конфиге: если путь в YAML
       # не задан, он строится как <IMAGER_MODELS_DIR>/<имя_модели>. Явное
-      # значение в YAML имеет приоритет. Подробнее: models/README.md.
+      # значение в YAML имеет приоритет.
       IMAGER_MODELS_DIR: /etc/imager/models
       # Источники моделей для автоскачивания при старте (опционально,
       # по умолчанию — официальные OpenCV Zoo / ONNX Model Zoo). Полезно для

@@ -1,10 +1,10 @@
 // Параметры кодировщиков (per-format) в адаптере libvips.
 //
-// S4: глобальные статические EncoderParams заменены на разрешение параметров
-// через domain/encoding на КАЖДЫЙ экспорт: глобальные значения из секции
-// encoders (EncodersConfig) + overrides из ProcessingPlan + якорный
-// автомаппинг от plan.Quality. Единственная точка вычисления — resolveEffective,
-// используемая из exportImage (process_libvips.go).
+// Эффективные параметры каждого экспорта разрешаются через domain/encoding:
+// глобальные значения из секции encoders (EncodersConfig) + overrides из
+// ProcessingPlan + якорный автомаппинг от plan.Quality. Единственная точка
+// вычисления — resolveEffective, используемая из exportImage
+// (process_libvips.go).
 //
 // Файл без build-tag: resolveEffective и структуры EncodersConfig не зависят
 // от govips и тестируются в любой сборке.
@@ -14,8 +14,8 @@ import (
 	"gitverse.ru/pkg-ru/imager/domain/encoding"
 )
 
-// defaultQuality — дефолт encoders.default-quality при 0 (совпадает с
-// историческим дефолтом кода 80; см. composition.buildEncoders).
+// defaultQuality — дефолт encoders.default-quality при 0
+// (см. composition.buildEncoders).
 const defaultQuality = 80
 
 // EncodersConfig — полное per-format представление единой секции encoders

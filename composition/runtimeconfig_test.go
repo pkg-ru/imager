@@ -1276,7 +1276,7 @@ libvips:
 		t.Error("operation-cache.enabled=true must keep operation cache enabled")
 	}
 
-	// Дефолт: пустая секция → включено (обратная совместимость).
+	// Дефолт: пустая секция → включено.
 	rc, err = ParseRuntimeConfig([]byte(`
 version: "1"
 policy: {}

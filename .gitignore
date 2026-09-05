@@ -16,8 +16,6 @@
 /*.log
 
 # --- Local configuration (secrets) ---
-/*-local.yaml
-/config/*-local.yaml
 .env
 .env.*
 

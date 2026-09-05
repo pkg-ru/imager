@@ -1,10 +1,8 @@
 #!/bin/sh
 # install-deps-ubuntu.sh - install imager system dependencies on Debian/Ubuntu.
 #
-# Installs libvips + all codecs (HEIF/AVIF, JPEG XL, SVG, PDF, RAW), FFmpeg,
-# build toolchain and ONNX Runtime (prebuilt .tgz from GitHub releases) via apt.
-# Idempotent: apt installs are no-ops when already satisfied; the ONNX Runtime
-# step checks whether the library is already present.
+# Installs libvips + codecs (HEIF/AVIF, JPEG XL, SVG, PDF, RAW), FFmpeg, build
+# toolchain and ONNX Runtime (prebuilt .tgz from GitHub releases) via apt.
 #
 # Requires root/sudo (apt). Run:
 #   sudo sh docker/install-deps-ubuntu.sh
@@ -45,8 +43,8 @@ log "Updating apt index and installing packages..."
 sudo_sh "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $APT_PACKAGES"
 
 # -- ONNX Runtime ------------------------------------------------------------
-# Install directly into /usr/local so that the onnx build tag's cgo defaults
-# find libonnxruntime.so at link/run time (via ldconfig).
+# Установка в /usr/local: cgo-сборка с тегом onnx ищет libonnxruntime.so
+# по стандартным путям (ldconfig).
 if ldconfig -p 2>/dev/null | grep -q 'libonnxruntime\.so'; then
     log "ONNX Runtime already present, skip download"
 else

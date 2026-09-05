@@ -2,14 +2,8 @@ package learning
 
 import "gitverse.ru/pkg-ru/imager/domain/asset"
 
-// service.go — точка сборки фундамента learning-mode: связывает
-// Controller (runtime-флаг) и Recorder (сборщик наблюдений).
-//
-// Интеграция с generatev2/httpapi/composition — отдельная подзадача:
-// композиция создаёт Service из конфига (learning-mode: true в
-// policy.Config) и передаёт его в use case'ы.
-
-// Service — фасад фундамента learning-mode.
+// Service связывает Controller (runtime-флаг) и Recorder (сборщик
+// наблюдений) learning-mode.
 type Service struct {
 	controller *Controller
 	recorder   *Recorder

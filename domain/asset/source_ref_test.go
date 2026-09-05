@@ -93,9 +93,9 @@ func TestExtractSourceBestEffortInvalid(t *testing.T) {
 		"/../etc/passwd",        // traversal
 		"/a/../b/img-png/x.png", // traversal в пути
 		"/img-png/%2f/x.png",    // encoded separator
-		"/img-png/200x200@2",   // нет output format
-		"/-png/200x200.png",    // пустое имя
-		"/img-/200x200.png",    // пустой формат
+		"/img-png/200x200@2",    // нет output format
+		"/-png/200x200.png",     // пустое имя
+		"/img-/200x200.png",     // пустой формат
 		"/img-png/",             // пустой rest после slash
 	}
 

@@ -6,8 +6,8 @@ import (
 )
 
 // Пакет mapping.go: детерминированные чистые функции якорного маппинга
-// quality → нативные параметры, методы EffectiveX (явное значение из
-// пресета побеждает автомаппинг) и legacy-нормализация значений из конфига.
+// quality → нативные параметры и методы EffectiveX (явное значение из
+// пресета побеждает автомаппинг).
 //
 // Принцип «эффективный параметр»: EffectiveX(quality, explicit *T) —
 // explicit != nil → значение из пресета (уже провалидировано в Resolve),
@@ -70,8 +70,7 @@ func (r ResolvedParams) EffectiveReductionEffort(q uint8, explicit *int) int {
 }
 
 // Effort: avif speed [0..9] (ИНВЕРСИЯ: меньше = медленнее, лучше сжатие).
-// 0 ВАЛИДЕН как скорость (в отличие от legacy-конфига, где 0 = «не задано»,
-// код игнорировал 0). Якорь: q=80→6 (конфиг avif-speed=6), q=100→0 (медленно,
+// 0 ВАЛИДЕН как скорость. Якорь: q=80→6 (конфиг avif-speed=6), q=100→0 (медленно,
 // максимальное сжатие), q=0→9 (быстро). Линейно, монотонно:
 //
 //	speed(q) = clamp(round(6 + (q-80)*(-9/20)), 0, 9)
@@ -104,7 +103,7 @@ func (r ResolvedParams) EffectiveJXLEffort(q uint8, explicit *int) int {
 	return JXLEffort(int(q))
 }
 
-// Effort: gif effort [1..10] (дефолт libvips 7, ранее не конфигурировался).
+// Effort: gif effort [1..10] (дефолт libvips 7).
 // Якорь: q=75→7, q=100→10 (максимум), q=0→1 (минимум):
 //
 //	effort(q) = clamp(round(7 + (q-75)*(3/25)), 1, 10)
@@ -195,9 +194,7 @@ func PaletteBitDepthFromQuality(q int) int {
 }
 
 // EffectivePalette — png palette: явная → она, иначе автоматика от quality
-// (q < 90 → true, q >= 90 → false). Дефолт конфига false (server.yaml:370)
-// сохраняется как legacy-дефолт, но автомаппинг — включённая при получении
-// требований отзывается: качество управляет палитрой, а не «выключено всегда».
+// (q < 90 → true, q >= 90 → false): качество управляет палитрой.
 func (r ResolvedParams) EffectivePalette(q uint8, explicit *bool) bool {
 	if explicit != nil {
 		return *explicit
@@ -240,9 +237,8 @@ func (r ResolvedParams) EffectiveDither(_ uint8, explicit *float64) float64 {
 	return DefaultDither
 }
 
-// NormalizeGIFBitDepth — «эффективный bit-depth» GIF [1..8]: legacy-семантика
-// из encoders.go (gifBitDepth): 0 = «не задано» → 8 (умолчание govips),
-// < 1 → 1, > 8 → 8.
+// NormalizeGIFBitDepth — «эффективный bit-depth» GIF [1..8]:
+// 0 = «не задано» → 8 (умолчание govips), < 1 → 1, > 8 → 8.
 func NormalizeGIFBitDepth(v int) int {
 	switch {
 	case v == 0:
@@ -255,46 +251,15 @@ func NormalizeGIFBitDepth(v int) int {
 	return v
 }
 
-// NormalizePNGPaletteColors — palette-colors: legacy-семантика из encoders.go
-// (pngPaletteColors): 0 → 256, < 2 → 2, > 256 → 256.
-func NormalizePNGPaletteColors(v int) int {
-	switch {
-	case v == 0:
-		return 256
-	case v < 2:
-		return 2
-	case v > 256:
-		return 256
-	}
-	return v
-}
-
-// NormalizePNGPaletteBitDepth — palette-bit-depth: legacy-семантика из
-// encoders.go (pngPaletteBitdepth): 0 → 8, < 1 → 1, > 8 → 8.
-func NormalizePNGPaletteBitDepth(v int) int {
-	switch {
-	case v == 0:
-		return 8
-	case v < 1:
-		return 1
-	case v > 8:
-		return 8
-	}
-	return v
-}
-
-// EffectiveBitDepth — gif bit-depth: явное → оно (уже нормализовано в
-// диапазон [1,8] ещё в Resolve через coerceParam), иначе 8. Явные значения
-// 1..8 сохраняются без снапа — точная семантика «эффективного bit-depth»
-// (0 из legacy-конфига уже превращён в 8, см. NormalizeGIFBitDepth).
+// EffectiveBitDepth — gif bit-depth: явное → оно (нормализовано в диапазон
+// [1,8] через NormalizeGIFBitDepth), иначе 8.
 //
-// ОСОБЕННОСТЬ (зафиксировано из текущего кода): значения bit-depth > 4
-// требуют dither/квантование — движок всегда квантует до запрошенной
-// битности; Dither=0 лишь отключает дизеринг, но квантование выполняет
-// gifsave. Граница 4 — «безопасная» битность, где визуальные артефакты
-// малозаметны даже без дизеринга; при bit-depth > 4 и dither=0 возможна
-// полосатость (banding) — это документированное поведение движка, а не
-// ошибка маппинга.
+// ОСОБЕННОСТЬ: значения bit-depth > 4 требуют dither/квантование — движок
+// всегда квантует до запрошенной битности; Dither=0 лишь отключает дизеринг,
+// но квантование выполняет gifsave. Граница 4 — «безопасная» битность, где
+// визуальные артефакты малозаметны даже без дизеринга; при bit-depth > 4 и
+// dither=0 возможна полосатость (banding) — это документированное поведение
+// движка, а не ошибка маппинга.
 func (r ResolvedParams) EffectiveBitDepth(_ uint8, explicit *int) int {
 	if explicit != nil {
 		return NormalizeGIFBitDepth(*explicit)

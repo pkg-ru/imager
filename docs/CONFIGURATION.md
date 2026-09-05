@@ -69,12 +69,6 @@
 
 Полные самодокументированные примеры — [`setting/server.yaml`](../setting/server.yaml), [`setting/generate.yaml`](../setting/generate.yaml), [`setting/failback.yaml`](../setting/failback.yaml); локальные переопределения — [`setting/server-local.yaml`](../setting/server-local.yaml), [`setting/generate-local.yaml`](../setting/generate-local.yaml), [`setting/failback-local.yaml`](../setting/failback-local.yaml).
 
-## Обратная совместимость
-
-Старый монолитный `server.yaml` (ранее `setting.yaml`), содержащий все секции (включая «переехавшие» в generate/failback), продолжает работать: merge выполняется на уровне map до strict-декодирования, а схема едина. Если новый `generate.yaml`/`failback.yaml` дублирует секцию из старого `server.yaml` — применяется deep merge в порядке `setting → generate → failback` (значение из более специализированного слоя побеждает) с warning в лог.
-
-> **Исключение — новая policy-грамматика.** Старые ключи `policy.global` (`authorization`, `allowed-presets`, `size-rules`, `limits`), `policy.presets[].size` (вместо `width`/`height`), строковый `output-formats` и slice-формат `presets`/`watermarks` (список с полем `name`; вместо него — map, где имя = ключ) больше **не поддерживаются**: strict-декодирование отклоняет их как неизвестные поля. При миграции перепишите policy-секцию по новому формату (см. [policy](#policy)) и перенесите лимиты в `application.limits`.
-
 ---
 
 ## server
@@ -132,7 +126,7 @@ Fallback на **исходный файл** при ошибке ассета, к
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `enabled` | bool | `false` | Включать ли канонический source fallback (URL вида `name-format.ext`). Выключен по умолчанию (текущее поведение). |
+| `enabled` | bool | `false` | Включать ли канонический source fallback (URL вида `name-format.ext`). |
 | `status` | int | `404` | HTTP-статус ответа: `200` или `404` (0 → `404`). |
 | `cache-control` | string | `"no-store"` | `Cache-Control` для source fallback-ответа. |
 
@@ -372,7 +366,7 @@ policy:
 
 Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
-Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets.<name>.watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`. Поле `watermark` у path-policy более не существует.
+Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets.<name>.watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`.
 
 ```yaml
 watermarks:
@@ -406,7 +400,7 @@ watermarks:
 
 ## encoders
 
-Единая **top-level** секция настроек кодирования — заменила старые `processing.default-quality` и `libvips.encoders.*` (удалены полностью, без совместимости; любой из них — ошибка старта). Живёт в `server.yaml`; переопределения возможны через `*-local.yaml` и более специализированные слои (deep merge).
+Единая **top-level** секция настроек кодирования. Живёт в `server.yaml`; переопределения возможны через `*-local.yaml` и более специализированные слои (deep merge).
 
 Структура: `default-quality` + именованные группы форматов (`jpeg`, `webp`, `avif`, `heif`, `jxl`, `png`, `apng`, `gif`) с нативными параметрами реестра `domain/encoding`. Эффективные параметры **каждого экспорта** разрешаются через `domain/encoding.Resolve` на каждый экспорт по строгому приоритету:
 
@@ -436,7 +430,7 @@ watermarks:
 | `avif.lossless` | bool | `false` | — | Lossless-режим AVIF |
 | `heif.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества HEIF/HEIC |
 | `jxl.quality` | int `[1,100]` | `null` | — | Глобальный дефолт качества JPEG XL |
-| `jxl.effort` | int `[3,9]` | `7` | ✅ | Effort JPEG XL. Якорь q75→7. `0` невалиден (в прежнем плоском конфиге `0` означал «дефолт govips») |
+| `jxl.effort` | int `[3,9]` | `7` | ✅ | Effort JPEG XL. Якорь q75→7. `0` невалиден |
 | `jxl.lossless` | bool | `false` | — | Lossless-режим JPEG XL |
 | `png.quality` | int `[1,100]` | `null` | — | Якорное качество PNG: влияет только на упаковку/палитру, потерь не вводит |
 | `png.compression-level` | int `[1,9]` | `6` | ✅ | Уровень сжатия PNG. Якорь q85→6 |
@@ -527,11 +521,9 @@ encoders:
 | `max-cache-files` | int | default govips | Максимум открытых файлов кэша |
 | `max-cache-size` | int | `100` | Максимум операций в кэше |
 
-Параметры кодировщиков вынесены из `libvips.encoders.*` в единую top-level секцию [encoders](#encoders); `libvips.encoders.*` удалён полностью (без совместимости). Эффективные параметры каждого экспорта разрешаются через `domain/encoding.Resolve` на каждый экспорт: **preset override > `encoders` YAML > автомаппинг от quality > реестровый дефолт**. Диапазоны валидируются при старте по реестру `domain/encoding`: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
+Параметры кодировщиков задаются в единой top-level секции [encoders](#encoders). Эффективные параметры каждого экспорта разрешаются через `domain/encoding.Resolve`: **preset override > `encoders` YAML > автомаппинг от quality > реестровый дефолт**. Диапазоны валидируются при старте по реестру `domain/encoding`: невалидное значение — ошибка конфигурации (fail-fast), не runtime-ошибка.
 
 DPI-нормализация: при экспорте `xres`/`yres` сбрасываются к 72 DPI (после `stripAllMetadata`), чтобы просмотрщики не масштабировали изображение по DPI-метаданным исходника (например 300 DPI из сканера). Изображения уже с 72 DPI не перекопируются (быстрый путь). Константа не конфигурируется.
-
-> **WebP preset**: в govips v2.18.0 `WebpExportParams` не содержит поля `Preset` (`default`/`photo`/`picture`/`drawing`/`icon`/`text`), поэтому параметр `webp-preset` не добавляется в конфиг — он пропущен до появления API в govips.
 
 Shrink-on-load (`libvips.shrink-on-load.*`) — предварительное уменьшение при декодировании JPEG/WebP/GIF/HEIF/AVIF. Коэффициент вычисляется из целевого размера плана с запасом ×2 (после shrink размер гарантированно ≥ цели; точный resize выполняется далее как обычно). Решение консервативно: shrink НЕ применяется при trim/smart-crop/face-crop/object-crop, ручной ориентации или ненейтральном EXIF-повороте, `size=x`, неизвестных размерах исходника и для анимированных GIF. Для JPEG применяется shrink степени двойки (1/2, 1/4, 1/8), для WebP/HEIF/AVIF/GIF — scale-on-load.
 
@@ -539,9 +531,9 @@ Shrink-on-load (`libvips.shrink-on-load.*`) — предварительное �
 |:------------------------------------|------|--------------|----------|
 | `enabled` | bool | `true` | Включить shrink-on-load при декодировании |
 
-ICC color management (`libvips.color.mode`) — политика обработки embedded-ICC-профиля исходника. Проблема, которую решает: без color management цвета CMYK/ProPhoto/Display-P3 исходников искажаются (профиль просто удаляется). Режимы:
+ICC color management (`libvips.color.mode`) — политика обработки embedded-ICC-профиля исходника. Без color management цвета CMYK/ProPhoto/Display-P3 исходников искажаются (профиль удаляется). Режимы:
 
-- `strip` (дефолт, обратная совместимость): профиль удаляется при обработке (`stripAllMetadata`).
+- `strip` (дефолт): профиль удаляется при обработке (`stripAllMetadata`).
 - `transform`: embedded-профиль конвертируется в стандартный sRGB через PCS (govips `TransformICCProfile` → `vips_icc_transform` с профилем sRGB IEC61966-2.1) ПЕРЕД пиксельной обработкой; после конверсии изображение обрабатывается как обычное sRGB. **Fast-path (нулевой оверхед)**: sRGB-совместимый профиль (проверка по сигнатуре/имени без lcms-конверсии) или изображение уже в sRGB colorspace без профиля — конверсия не выполняется. **Отказоустойчивость**: битый/отсутствующий профиль или ошибка lcms не роняют запрос — fallback на strip-поведение с warning-логом.
 - `keep`: embedded-профиль сохраняется в выходном изображении (профиль не удаляется при экспорте).
 
@@ -632,7 +624,7 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 
 Путь к модели можно задать двумя способами (приоритет у первого):
 1. явно в YAML (`face-model` / `object-model`);
-2. через env `IMAGER_MODELS_DIR` (каталог) — если ключ в YAML пуст, путь строится как `<IMAGER_MODELS_DIR>/face_detection_yunet_2023mar.onnx` (и `/ssd_mobilenet_v1_12.onnx`). В Docker (compose) задаётся `/etc/imager/models`, **куда монтируется хостовый `./models` в режиме rw**, а модели скачиваются автоматически при старте контейнера (`docker/entrypoint.sh` → `docker/download-models.sh`). Ручное размещение файлов не требуется; при недоступном источнике контейнер запускается с предупреждением, а операции `fc`/`oc` остаются отключёнными (пустые пути). См. [DEPLOYMENT.md](DEPLOYMENT.md) и `models/README.md`.
+2. через env `IMAGER_MODELS_DIR` (каталог) — если ключ в YAML пуст, путь строится как `<IMAGER_MODELS_DIR>/face_detection_yunet_2023mar.onnx` (и `/ssd_mobilenet_v1_12.onnx`). В Docker (compose) задаётся `/etc/imager/models`, **куда монтируется хостовый `./models` в режиме rw**, а модели скачиваются автоматически при старте контейнера (`docker/entrypoint.sh` → `docker/download-models.sh`). Ручное размещение файлов не требуется; при недоступном источнике контейнер запускается с предупреждением, а операции `fc`/`oc` остаются отключёнными (пустые пути). См. [DEPLOYMENT.md](DEPLOYMENT.md).
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
@@ -683,7 +675,6 @@ Sidecar-кэш результатов ИИ-детекции (лица/объек
 | `limits.concurrency` | uint32 | `0` | Максимум одновременных операций от одного клиента |
 | `buffer-max-bytes` | int64 | `524288000` (500 MiB) | Бюджет памяти spillable-буфера (source+result); при исчерпании — спул на диск |
 
-> Ключ `application.output-limit` удалён: заменён на `application.limits.output-bytes`. Лимиты перенесены из удалённой секции `policy.global.limits`.
 
 ## observability
 

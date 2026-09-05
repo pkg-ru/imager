@@ -389,7 +389,7 @@ func TestResolveDPRConflict(t *testing.T) {
 }
 
 // TestPathIndexLongestPrefixMatch проверяет выбор path-policy по правилу
-// longest prefix match на всех примерах из ТЗ (пункт 3).
+// longest prefix match.
 func TestPathIndexLongestPrefixMatch(t *testing.T) {
 	p := mustPolicy(t, Config{
 		PathPolicies: map[string]PathPolicyConfig{
@@ -404,16 +404,16 @@ func TestPathIndexLongestPrefixMatch(t *testing.T) {
 		path string
 		want string
 	}{
-		// Пункт 1 "/": корневой каталог.
+		// "/": корневой каталог (fallback).
 		{"products", "/"},
 		{"", "/"},
-		// Пункт 2 "/users".
+		// "/users".
 		{"users", "/users"},
-		// Пункт 3 "/basket" → "/" (НЕ "/basket/users" — сегменты не совпадают).
+		// "/basket" → "/" (НЕ "/basket/users" — сегменты не совпадают).
 		{"basket", "/"},
-		// Пункт 4 "/basket/products".
+		// "/basket/products".
 		{"basket/products", "/basket/products"},
-		// Пункт 5 "/users/gift" (НЕ "/users").
+		// "/users/gift" (НЕ "/users").
 		{"users/gift", "/users/gift"},
 		// Вложенные пути под более специфичным префиксом.
 		{"users/gift/deep", "/users/gift"},

@@ -80,47 +80,47 @@ policy:
     # пресет "thumb" — маленький resize-центр 200x200. dpr: 1 = фиксированный
     # множитель 1 (итоговый размер 200x200); @dpr-суффикс в URL запрещён —
     # для thumb@2.webp/thumb@3.webp существуют отдельные пресеты thumb@2.
-    thumb:
-      width: 200
-      height: 200
-      output-formats: [webp, avif]
-      quality: 85
-      dpr: 1
+    # thumb:
+    #   width: 200
+    #   height: 200
+    #   output-formats: [webp, avif]
+    #   quality: 85
+    #   dpr: 1
 
     # пресет "thumb@2" — версия 200x200 для экранов с DPR 2 (реально 400x400).
     # @2 в имени фиксирует dpr=2: в URL допустим ТОЛЬКО thumb@2.webp.
-    thumb@2:
-      width: 200
-      height: 200
-      output-formats: [webp, avif]
-      quality: 85
-      dpr: 2
+    # thumb@2:
+    #   width: 200
+    #   height: 200
+    #   output-formats: [webp, avif]
+    #   quality: 85
+    #   dpr: 2
 
     # пресет "banner" — анимационный WebP-баннер 1200x400. dpr: 1 =
     # фиксированный множитель 1 (итоговый размер 1200x400); @dpr-суффикс в
     # URL запрещён — для banner@2.webp существует отдельный пресет banner@2.
-    banner:
-      width: 1200        # 0 = не задан (вычисляется пропорционально)
-      height: 400
-      output-formats: [webp, avif]
-      quality: 80        # 0 = default-quality
-      frames: 0          # 0 = без ограничения кадров
-      duration: 0        # 0 = без ограничения длительности
-      loop: true         # зацикленная анимация (nil = по default-loop)
-      dpr: 1
+    # banner:
+    #   width: 1200        # 0 = не задан (вычисляется пропорционально)
+    #   height: 400
+    #   output-formats: [webp, avif]
+    #   quality: 80        # 0 = default-quality
+    #   frames: 0          # 0 = без ограничения кадров
+    #   duration: 0        # 0 = без ограничения длительности
+    #   loop: true         # зацикленная анимация (nil = по default-loop)
+    #   dpr: 1
 
     # пресет "banner@2" — та же геометрия (ширина 2400 = 1200×2, высота
     # 800 = 400×2) для экранов с DPR 2. @2 в имени фиксирует dpr=2: в URL
     # допустим ТОЛЬКО /banners/.../banner@2.{webp|avif}.
-    banner@2:
-      width: 1200
-      height: 400
-      output-formats: [webp, avif]
-      quality: 80
-      frames: 0
-      duration: 0
-      loop: true
-      dpr: 2
+    # banner@2:
+    #   width: 1200
+    #   height: 400
+    #   output-formats: [webp, avif]
+    #   quality: 80
+    #   frames: 0
+    #   duration: 0
+    #   loop: true
+    #   dpr: 2
 
     # Примеры режимов crop/ориентации (раскомментируйте при необходимости):
     # avatar:                   # центрированный кроп
@@ -186,50 +186,50 @@ policy:
   path-policies:
     # / — fallback для всех путей. Разрешены пресеты thumb/thumb@2 и
     # custom-размеры из секции customs ниже.
-    /:
-      presets: ["thumb", "thumb@2"]
-      customs:
-        # custom-имя = размер: "x" = оригинальный размер.
-        x:
-          output-formats: [webp]
-        # "x200" = только высота 200 (ширина пропорционально).
-        x200:
-          output-formats: [webp, avif]
-        # "200x" = только ширина 200 (высота пропорционально).
-        200x:
-          output-formats: [webp]
-        # "200x200" = точный размер; dpr не задан → допустимы 200x200.webp,
-        # 200x200@2.webp, 200x200@3.webp.
-        200x200:
-          output-formats: [webp]
+    # /:
+    #   presets: ["thumb", "thumb@2"]
+    #   customs:
+    #     # custom-имя = размер: "x" = оригинальный размер.
+    #     x:
+    #       output-formats: [webp]
+    #     # "x200" = только высота 200 (ширина пропорционально).
+    #     x200:
+    #       output-formats: [webp, avif]
+    #     # "200x" = только ширина 200 (высота пропорционально).
+    #     200x:
+    #       output-formats: [webp]
+    #     # "200x200" = точный размер; dpr не задан → допустимы 200x200.webp,
+    #     # 200x200@2.webp, 200x200@3.webp.
+    #     200x200:
+    #       output-formats: [webp]
 
     # /thumbs — специфичный префикс: только пресет thumb и один custom.
-    /thumbs:
-      presets: ["thumb"]
-      customs:
-        100x100:
-          output-formats: [webp, avif]
+    # /thumbs:
+    #   presets: ["thumb"]
+    #   customs:
+    #     100x100:
+    #       output-formats: [webp, avif]
 
     # /banners — баннеры: пресеты banner/banner@2 + кастомный вариант
     # 200x100 с явным @2 в имени (фиксирует dpr=2; в URL допустим только
     # 200x100@2.{webp|avif}). Имя с @N требует dpr: N — отсутствие поля dpr
     # было бы ошибкой конфигурации.
-    /banners:
-      presets: ["banner", "banner@2"]
-      customs:
-        200x100@2:
-          output-formats: [webp, avif]
-          dpr: 2
+    # /banners:
+    #   presets: ["banner", "banner@2"]
+    #   customs:
+    #     200x100@2:
+    #       output-formats: [webp, avif]
+    #       dpr: 2
 
     # /originals — только custom "x" (оригинальный размер), все форматы.
-    /originals:
-      customs:
-        x:
-          output-formats: [jpeg, png, webp, gif, avif, heif, apng, jxl]
+    # /originals:
+    #   customs:
+    #     x:
+    #       output-formats: [jpeg, png, webp, gif, avif, heif, apng, jxl]
 
     # /admin — отдельный путь с пресетом thumb.
-    /admin:
-      presets: ["thumb"]
+    # /admin:
+    #   presets: ["thumb"]
 
     # Примеры других path-policies (раскомментируйте при необходимости):
     # /avatars:

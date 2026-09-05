@@ -30,7 +30,7 @@ import (
 // Logger — единый интерфейс логирования из observability.
 type Logger = observability.Logger
 
-// errLimitExceeded — сигнал превышения лимита политики (C1).
+// errLimitExceeded — сигнал превышения лимита политики.
 var errLimitExceeded = errors.New("policy limit exceeded")
 
 // publishRetryBase — начальная задержка экспоненциального backoff при
@@ -335,15 +335,6 @@ func (s *Service) publishQueueDepth() int64 {
 		return 0
 	}
 	return int64(len(s.pubQueue))
-}
-
-// publishMetrics возвращает опциональный порт метрик публикации (no-op,
-// если не реализован) и текущую глубину очереди.
-func (s *Service) publishMetrics() (observability.PublishQueueMetrics, int64) {
-	if pm, ok := s.metrics.(observability.PublishQueueMetrics); ok {
-		return pm, s.publishQueueDepth()
-	}
-	return nil, s.publishQueueDepth()
 }
 
 // asyncPublish ставит задачу публикации в bounded-очередь. Данные задачи
@@ -689,7 +680,7 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	}
 	plan := pr.plan
 
-	// C1: проверка application-лимитов ДО обработки. Размер источника берём
+	// Проверка application-лимитов ДО обработки. Размер источника берём
 	// из метаданных открытого объекта (без дополнительного round-trip).
 	// Размеры и DPR — из запроса (уже с учётом DPR-умножения в buildPlan).
 	// Frames/duration для статичных изображений не определяются на
@@ -786,10 +777,6 @@ func (s *Service) sourceKey(req *asset.Request) object.ObjectKey {
 //  1. ватермарка пресета/custom (заполняется при разрешении segment URL
 //     через Policy.Resolve);
 //  2. ватермарка по умолчанию из конфигурации (Deps.DefaultWatermark).
-//
-// Path-policy больше не несёт ватермарку (поле Watermark удалено из
-// PathPolicy в новой архитектуре) — ватермарка приходит только из
-// пресета/custom или глобального дефолта.
 func (s *Service) resolveWatermark(req *asset.Request) *processing.WatermarkSpec {
 	if wm := req.Watermark(); wm != nil {
 		return wm
@@ -1003,7 +990,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		}
 		return nil, outcome(OutcomeProcessing, "process image", procErr)
 	}
-	// C1: post-check application-лимитов (output-bytes). Превышение
+	// Post-check application-лимитов (output-bytes). Превышение
 	// output-bytes — это квота (OutcomeQuota), а не запрет политики:
 	// запрос валиден, но результат не помещается в лимит выхода.
 	check := s.deps.Limits.Check(0, 0, 0, 0, 0, buf.Size(), 0)
@@ -1081,10 +1068,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	pubStart := time.Now()
 	pubErr := s.publishFromBuffer(ctx, key, reader)
 	// Закрываем только reader воркера, но НЕ буфер: он возвращается клиенту
-	// и закрывается через bufferStream.Close() при result.Close() (client
-	// закрывает reader и сам буфер). Раньше здесь был buf.Close(), что
-	// освобождало память преждевременно — клиентский buf.NewReader() в
-	// Generate падал с "buffer closed" и ломался fallback на readResultBuffer.
+	// и закрывается через bufferStream.Close() при result.Close().
 	_ = reader.Close()
 	if pubErr != nil {
 		s.metrics.IncStorageOp(observability.OpResultPublish, true)

@@ -10,19 +10,17 @@ docker pull altrap/imager:latest
 docker pull altrap/imager:1.0.0
 ```
 
-Образ `altrap/imager` берётся с Docker Hub (учётка `altrap`, НЕ репозиторий
+Образ `altrap/imager` берётся с Docker Hub (учётка `altrap`, не репозиторий
 кода) и собирается из релизов (`Dockerfile`, target `from-release`):
 бинарь `imager` скачивается fetcher-стадией с `gitverse.ru/pkg-ru/imager`
 (основной; fallback — теги зеркала `github.com/pkg-ru/imager`)
-(`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)),
-runtime-слой идентичен сборке из исходников (pinned `alpine:3.23`, пакетные
-списки — `docker/build-deps.sh`). Теги публикуются через
-`make docker-release IMAGER_VERSION=<tag>` или автоматически при релизе
-(GitVerse CI, джоба `docker-release` в
-[`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml); настройка секрета
+(`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)).
+Теги публикуются через `make docker-release IMAGER_VERSION=<tag>` или
+автоматически при релизе (GitVerse CI, джоба `docker-release` в
+[`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml)).
 
-Последующие шаги (mounts, пользователь, vars) — одинаковы для pull'нутого и
-для собранного вручную образа:
+Последующие шаги (mounts, пользователь, env) — одинаковы для pull'нутого и
+для собранного вручную образа.
 
 ### Docker Compose (рекомендуется)
 
@@ -39,7 +37,7 @@ Env-переменные: `IMAGER_CONFIG_DIR=/etc/imager/setting` (катало�
 ### Docker вручную
 
 ```bash
-docker build -t imager:production .
+docker build --target from-release -t imager:production .
 docker run -d \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --security-opt no-new-privileges:true \
@@ -70,7 +68,7 @@ docker run -d \
 | Pinned образы | `golang:1.27.0-alpine3.23` / `alpine:3.23`, pinned версии пакетов |
 | Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
 
-**`read_only: true` не используется.** При read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` и `/etc/imager/setting` монтируются `:ro`.
+**`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` и `/etc/imager/setting` монтируются `:ro`.
 
 ## Ресурсы
 
@@ -228,3 +226,5 @@ Workflow: [`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml).
 - `gofmt`, `go vet`, `go test`, `go test -race` (Linux);
 - fuzz smoke: `FuzzParse`, `FuzzParseSize` (domain/asset), `FuzzCleanRelContainment` (storage/fs);
 - `govulncheck`, сборка `cmd/imager`, container build и сканирование Trivy;
+- публикация `altrap/imager` на Docker Hub: автоматически при релизе и
+  вручную через `workflow_dispatch` (джоба `docker-release`).

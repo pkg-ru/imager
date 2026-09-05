@@ -99,7 +99,7 @@ type RemoteStorageConfig struct {
 	// Conn — общие параметры соединения для FTP/SFTP/FTPS, HTTP и S3:
 	// DialTimeout, ReadTimeout, MaxAttempts, MaxIdleConns, MaxConns,
 	// MaxIdleConnsPerHost, IdleConnTimeout. Дефолты задаёт remote.Default*
-	// (единый источник; ранее дублировались здесь и в http-адаптере).
+	// (единый источник).
 	Conn remote.ConnOptions
 	// MetadataTTL — TTL кэша метаданных (S3; 0 = кэш отключён).
 	MetadataTTL time.Duration
@@ -221,7 +221,7 @@ func buildStore(ctx context.Context, cfg RemoteStorageConfig, isResult bool) (an
 // пулом соединений. Без этих настроек SDK использует дефолты, которые не
 // гарантируют bounded connect/read таймауты и достаточный пул для
 // параллельных ReadStream/Open. Дефолты берутся из remote.Default*
-// (единый источник с HTTP-адаптером; прежде константы дублировались здесь).
+// (единый источник с HTTP-адаптером).
 func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client, error) {
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if cfg.Region != "" {

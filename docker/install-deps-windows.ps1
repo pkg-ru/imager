@@ -4,12 +4,9 @@
 # - libvips prebuilt binaries (https://libvips.github.io) - DLLs;
 # - ONNX Runtime prebuilt runtime from GitHub releases - DLL + headers.
 # All DLLs are placed into $env:LOCALAPPDATA\imager\bin, which is prepended to
-# PATH for the current user so that imager.exe finds them at run time.
+# PATH for the current user.
 #
-# Idempotent: each step skips when the target is already present.
-#
-# Usage (PowerShell, admin rights not required for winget user scope unless it
-# insists; elevated shell recommended):
+# Usage (elevated shell recommended):
 #   powershell -ExecutionPolicy Bypass -File docker\install-deps-windows.ps1
 $ErrorActionPreference = 'Stop'
 
@@ -47,10 +44,9 @@ if (Test-Path (Join-Path $InstallDir 'libvips-42.dll')) {
     Expand-Archive -Path $zip -DestinationPath $env:TEMP -Force
 
     Log "Copying libvips DLLs to $InstallDir ..."
-    # The zip has bin/ subdir with all DLLs (incl. libglib, libheif, libjxl...).
     $src = Join-Path $VipsExtract 'bin'
     if (-not (Test-Path $src)) {
-        # fallback: some releases unpack bin directly under the zip root
+        # fallback: bin unpacked under a versioned subdir
         $src = Join-Path $VipsExtract 'vips-dev-w64-all-*\bin'
         if (-not (Test-Path $src)) { Die "libvips archive layout unexpected under $VipsExtract" }
     }

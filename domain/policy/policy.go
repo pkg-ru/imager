@@ -159,7 +159,7 @@ func (e *ResolveError) Error() string {
 // Resolve превращает segment Request в канонический Request с применёнными
 // настройками пресета/custom.
 //
-// Алгоритм (см. ТЗ «РЕЗОЛВ»):
+// Алгоритм:
 //  1. Найти path-policy: longest-prefix match. Нет "/" и нет совпадений →
 //     deny (ReasonPathNotAllowed).
 //  2. Декомпозиция segment (без @dpr URL):

@@ -146,7 +146,7 @@ type OperationCacheOpts struct {
 
 // NewOperationCacheOpts создаёт настройки operation cache. value=true/false
 // фиксирует явное значение из конфигурации; explicit=false означает «ключ
-// не задан» → включено по умолчанию (обратная совместимость).
+// не задан» → включено по умолчанию.
 func NewOperationCacheOpts(value, explicit bool) OperationCacheOpts {
 	return OperationCacheOpts{value: value, set: explicit}
 }
@@ -179,7 +179,7 @@ type Options struct {
 	// keep (сохранить embedded-профиль в выход). Нулевое значение = strip.
 	Color ColorMode
 	// OperationCache — настройки operation cache libvips.
-	// Нулевое значение = включено (умолчание, обратная совместимость);
+	// Нулевое значение = включено (умолчание);
 	// false = нулевые лимиты кэша при Startup (кэш отключён).
 	OperationCache OperationCacheOpts
 	// WatermarkCache — настройки in-memory кэша файлов ватермарок.

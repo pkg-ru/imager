@@ -13,7 +13,7 @@ import (
 // Поля приватны и неизменяемы; создаётся только через конструкторы
 // (NewRequest, NewSegmentRequest, NewPresetRequest, Parse).
 //
-// Новая грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
+// Грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
 // где segment — имя пресета ИЛИ custom-имя (размер). Transform-коды в URL
 // отсутствуют: операция определяется полем crop пресета/custom.
 //
@@ -25,8 +25,8 @@ import (
 //
 // Для канонического запроса (NewRequest, программное создание) заполняются
 // Transform, Size, DPR и OutputFormats, а SegmentName пуст. Build() в этом
-// случае использует старую форму {transform}-{size}@{dpr}.{out} (совместимость
-// с программными вызовами; парсер такую форму не разбирает).
+// случае строит URL формы {transform}-{size}@{dpr}.{out} (парсер такую
+// форму не разбирает).
 type Request struct {
 	path         string
 	sourceName   SourceName
@@ -120,8 +120,8 @@ func NewSegmentRequest(path string, sourceName SourceName, sourceFormat Format, 
 	}, nil
 }
 
-// NewPresetRequest создаёт preset Request (обратно-совместимая обёртка
-// NewSegmentRequest). dpr — фиксированный DPR (1-3), как раньше.
+// NewPresetRequest создаёт preset Request (обёртка NewSegmentRequest).
+// dpr — фиксированный DPR (1-3).
 func NewPresetRequest(path string, sourceName SourceName, sourceFormat Format, presetName PresetName, dpr DPR, outputFormat Format) (*Request, error) {
 	return NewSegmentRequest(path, sourceName, sourceFormat, SegmentName(presetName), dpr, outputFormat)
 }

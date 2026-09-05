@@ -7,7 +7,7 @@
 #   docker run --rm -v "%cd%":/src -w /src imager:test \
 #       sh -c "go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
 # Модели ONNX скачиваются самим тестовым контейнером (тот же
-# docker/download-models.sh, примонтирован в rw-каталог); см. models/README.md.
+# docker/download-models.sh, примонтирован в rw-каталог).
 # Пример с монтированием каталога и env-переменными источников:
 #   docker run --rm -v "%cd%/models":/etc/imager/models -v "%cd%":/src -w /src \
 #       -e IMAGER_MODEL_FACE_URL=... -e IMAGER_MODEL_OBJECT_URL=... imager:test \

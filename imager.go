@@ -160,19 +160,16 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 	// недоступны, извлечение кадра вернёт понятную ошибку на запросе.
 	videoExt := ffmpeg.NewDefault()
 	app, err := composition.Build(context.Background(), composition.AppOptions{
-		Config:         rc.Pipeline,
-		HTTP:           rc.HTTP,
-		ConfigDir:      cfgDir,
-		SourceDir:      rc.SourceDir,
-		ResultDir:      rc.ResultDir,
-		SourceStorage:  rc.Source,
-		ResultStorage:  rc.Result,
-		Processor:      proc.Processor,
-		Limits:         rc.Limits,
-		BufferMaxBytes: rc.BufferMaxBytes,
-		// Quality по умолчанию — из единой секции encoders
-		// (encoders.default-quality); старый processing.default-quality
-		// полностью удалён (S2).
+		Config:          rc.Pipeline,
+		HTTP:            rc.HTTP,
+		ConfigDir:       cfgDir,
+		SourceDir:       rc.SourceDir,
+		ResultDir:       rc.ResultDir,
+		SourceStorage:   rc.Source,
+		ResultStorage:   rc.Result,
+		Processor:       proc.Processor,
+		Limits:          rc.Limits,
+		BufferMaxBytes:  rc.BufferMaxBytes,
 		DefaultQuality:  rc.Encoders.DefaultQuality,
 		MetadataEnabled: rc.MetadataEnabled,
 		MetadataDir:     rc.MetadataDir,

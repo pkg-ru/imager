@@ -123,7 +123,7 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 		return nil, outcome(OutcomeInvalid, "build processing plan", err)
 	}
 
-	// C1: проверка application-лимитов ДО обработки. Размер источника —
+	// Проверка application-лимитов ДО обработки. Размер источника —
 	// размер кадра (x.jpg или извлечённого). Размеры и DPR — из запроса.
 	var w, h int
 	if !plan.Size.Original {

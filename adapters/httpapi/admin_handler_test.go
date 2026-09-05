@@ -83,12 +83,6 @@ func (f *adminFakeGenerator) addResult(url string) {
 	f.results[url] = &generatev2.Result{URL: url, Key: object.ObjectKey(url)}
 }
 
-func (f *adminFakeGenerator) setErr(url string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.errs[url] = err
-}
-
 func (f *adminFakeGenerator) Generate(_ context.Context, req *asset.Request) (*generatev2.Result, error) {
 	url, err := req.Build()
 	if err != nil {

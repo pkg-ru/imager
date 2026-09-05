@@ -170,9 +170,8 @@ func baseName(p string) string {
 	return p
 }
 
-// isTempName сообщает, является ли имя файла временным файлом публикации.
-// Учитываются как новые имена вида ".tmp-<base>-<UnixNano>" (конкурентно
-// безопасные), так и старый суффикс "<key>.tmp" для совместимости.
+// isTempName сообщает, является ли имя файла временным файлом публикации:
+// ".tmp-<base>-<UnixNano>" (конкурентно безопасное) или "<key>.tmp".
 func isTempName(name string) bool {
 	return strings.HasPrefix(name, ".tmp-") || strings.HasSuffix(name, ".tmp")
 }
@@ -492,9 +491,8 @@ func (r *ResultStore) walk(c conn, dir string, stats *object.StoreStats) error {
 //
 // Обход использует ту же логику, что и walk (Stats): файлы удаляются через
 // DELE, подкаталоги — через RMD (после опустошения). Временные файлы
-// публикации (.tmp-* и старый суффикс .tmp) пропускаются. Идемпотентно:
-// если каталога нет — возвращает (0, nil). Возвращает число удалённых
-// файлов.
+// публикации (isTempName) пропускаются. Идемпотентно: если каталога нет —
+// возвращает (0, nil). Возвращает число удалённых файлов.
 func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKey) (int64, error) {
 	full, err := r.Opts.key(prefix)
 	if err != nil {

@@ -113,7 +113,7 @@ endif
 build-prod:
 	cd cmd/imager && go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
 
-# Сборка образа из исходников (исторический таргет, локально/CI).
+# Сборка образа из исходников (локально/CI).
 .PHONY: docker-build
 docker-build:
 	docker build -t imager:production .
@@ -121,9 +121,11 @@ docker-build:
 # Сборка прод-образа из GitHub releases (default target from-release); см.
 # Dockerfile. Сборка из исходников — docker-build-from-source.
 # Пример: make docker-build-release IMAGER_VERSION=1.0.0
+# --target from-release обязателен: без него docker build собирает последнюю
+# стадию Dockerfile (from-source) и IMAGER_VERSION игнорируется.
 .PHONY: docker-build-release
 docker-build-release:
-	docker build --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
+	docker build --target from-release --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
 		-t $(IMAGER_IMAGE):latest \
 		-t $(IMAGER_IMAGE):$(VERSION_TAG) .
 

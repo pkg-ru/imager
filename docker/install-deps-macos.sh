@@ -19,9 +19,9 @@ fi
 log "Updating Homebrew..."
 brew update
 
-log "Installing vips, ffmpeg, onnxruntime, pkg-config (may take a while)..."
-# --formula ensures the tap-resolved formulae; onnxruntime ships libonnxruntime
-# + headers, which is what the `onnx` build tag needs.
+log "Installing vips, ffmpeg, onnxruntime, pkg-config..."
+# --formula: явные формулы; onnxruntime содержит libonnxruntime + заголовки,
+# которые требуются сборке с тегом onnx.
 brew install --formula vips ffmpeg onnxruntime pkg-config
 
 log "Done."
