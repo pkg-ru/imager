@@ -9,7 +9,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/pkg-ru/imager/ports/videoframe"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
 // testJPEG генерирует маленькое JPEG-изображение (4x4) в памяти. Используется

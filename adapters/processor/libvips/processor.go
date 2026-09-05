@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/processor/detection"
-	"github.com/pkg-ru/imager/adapters/processor/shared"
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/ports/bounded"
-	"github.com/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/ports/bounded"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота (bounded
@@ -128,7 +128,7 @@ func (o ShrinkOnLoadOpts) Enabled() bool {
 	return o.value
 }
 
-// OperationCacheOpts — настройки operation cache libvips (Фаза 5b).
+// OperationCacheOpts — настройки operation cache libvips.
 //
 // libvips кэширует результаты операций (vips_cache): кэш полезен для
 // повторяющихся операций на одних и тех же изображениях, но для
@@ -172,24 +172,24 @@ type Options struct {
 	// ShrinkOnLoad — настройки shrink-on-load при декодировании. Нулевое
 	// значение = включено (умолчание).
 	ShrinkOnLoad ShrinkOnLoadOpts
-	// Color — политика ICC color management (Фаза 5a): strip (дефолт,
+	// Color — политика ICC color management: strip (дефолт,
 	// удалять профиль), transform (конвертация в sRGB перед обработкой),
 	// keep (сохранить embedded-профиль в выход). Нулевое значение = strip.
 	Color ColorMode
-	// OperationCache — настройки operation cache libvips (Фаза 5b).
+	// OperationCache — настройки operation cache libvips.
 	// Нулевое значение = включено (умолчание, обратная совместимость);
 	// false = нулевые лимиты кэша при Startup (кэш отключён).
 	OperationCache OperationCacheOpts
-	// WatermarkCache — настройки in-memory кэша файлов ватермарок (Фаза 3).
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
 	// Нулевое значение = кэш включён с дефолтами (см.
 	// DefaultWatermarkCacheOpts).
 	WatermarkCache WatermarkCacheOpts
-	// DetectionSem — настройки отдельного detection-семафора (Фаза 4):
+	// DetectionSem — настройки отдельного detection-семафора:
 	// тяжёлые CPU-bound ONNX-инференсы выполняются вне libvips-слотов.
 	// Нулевое значение = дефолты (см. DetectionSemaphoreOpts.Normalized).
 	DetectionSem DetectionSemaphoreOpts
-	// VipsMetricsInterval — интервал периодического сбора vips-метрик
-	// (observability, Фаза 4). 0 = дефолт observability.DefaultVipsMetricsInterval.
+	// VipsMetricsInterval — интервал периодического сбора vips-метрик.
+	// 0 = дефолт observability.DefaultVipsMetricsInterval.
 	VipsMetricsInterval time.Duration
 	// Detector — детектор лиц/объектов для операций face-crop/object-crop.
 	// nil = детекция недоступна: запросы с fc/oc вернут понятную ошибку.

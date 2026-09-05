@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/internal/testutil"
-	"github.com/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/internal/testutil"
+	"gitverse.ru/pkg-ru/imager/observability"
 )
 
 // fakePubMetrics — observability.Metrics + PublishQueueMetrics со счётчиками
-// глубины очереди и publish-ошибок (для проверки S1-метрик).
+// глубины очереди и publish-ошибок (для проверки метрик публикации).
 type fakePubMetrics struct {
 	queueDepth    atomic.Int64
 	publishErrors atomic.Int64
@@ -116,7 +116,7 @@ func waitStore(t *testing.T, st *testutil.MemResultStore, key object.ObjectKey) 
 	t.Fatalf("timed out waiting for object %q in store", key)
 }
 
-// asyncEnv собирает Service с асинхронной публикацией (S1).
+// asyncEnv собирает Service с асинхронной публикацией.
 func asyncEnv(t *testing.T, res *slowResultStore, metrics observability.Metrics, q *PublishQueueConfig) *testEnv {
 	t.Helper()
 	env := newTestEnv(t, func(d *Deps) {

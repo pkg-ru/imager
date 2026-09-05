@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/domain/policy"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/internal/testutil"
-	"github.com/pkg-ru/imager/ports/coordinator"
+	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/internal/testutil"
+	"gitverse.ru/pkg-ru/imager/ports/coordinator"
 )
 
 // testEnv — окружение для тестов.
@@ -593,5 +593,43 @@ func TestBuildPlanCropBothDimensionsKept(t *testing.T) {
 	}
 	if plan.Operation != processing.OpCrop {
 		t.Errorf("plan.Operation = %q, want %q", plan.Operation, processing.OpCrop)
+	}
+}
+
+// TestBuildPlanDPRMultiplication проверяет, что итоговый размер плана =
+// базовый размер × dpr: умножение происходит ВНУТРИ (base*dpr), а НЕ
+// пред-умножением в конфиге. Для 100x100 с dpr: 2 план даёт 200x200.
+func TestBuildPlanDPRMultiplication(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		name string
+		size string
+		dpr  int
+		want processing.Size
+	}{
+		// dpr=1: множитель 1 — размер без изменений.
+		{"dpr=1", "100x100", 1, processing.Size{Width: 100, Height: 100}},
+		// dpr=2: итоговый размер = base*2.
+		{"dpr=2", "100x100", 2, processing.Size{Width: 200, Height: 200}},
+		{"dpr=3", "100x100", 3, processing.Size{Width: 300, Height: 300}},
+		// Только ширина: 100 * 2 = 200 (высота 0 = пропорционально).
+		{"dpr=2 width-only", "100x", 2, processing.Size{Width: 200, Height: 0}},
+		// Только высота: 200 * 2 = 400.
+		{"dpr=2 height-only", "x200", 2, processing.Size{Width: 0, Height: 400}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", asset.TransformCrop, c.size, c.dpr, "webp"))
+			if err != nil {
+				t.Fatalf("buildPlan error: %v", err)
+			}
+			if plan.Size != c.want {
+				t.Errorf("plan.Size = %dx%d, want %dx%d", plan.Size.Width, plan.Size.Height, c.want.Width, c.want.Height)
+			}
+			if plan.DPR != c.dpr {
+				t.Errorf("plan.DPR = %d, want %d", plan.DPR, c.dpr)
+			}
+		})
 	}
 }

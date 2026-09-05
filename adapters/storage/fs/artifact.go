@@ -3,7 +3,7 @@ package fs
 import (
 	"io"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // fileArtifact — object.Artifact поверх открытого os.File. Инкапсулирует

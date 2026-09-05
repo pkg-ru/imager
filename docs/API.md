@@ -1,6 +1,6 @@
 # API
 
-Сервис отдаёт изображения по каноническим и preset URL. Тела запросов не принимает; используются только методы `GET`, `HEAD`, `OPTIONS`.
+Сервис отдаёт изображения по каноническим (custom) и preset URL. Тела запросов не принимает (кроме админ-эндпоинтов); используются только методы `GET`, `HEAD`, `OPTIONS`.
 
 ## Эндпоинты
 
@@ -10,26 +10,18 @@
 | `/healthz` | GET | Liveness: `200 {"status":"alive"}` / `503 {"status":"dead"}` |
 | `/readyz` | GET | Readiness: `200 {"status":"ready"}` / `503 {"status":"not_ready"}` |
 | `/metrics` | GET | Метрики в Prometheus exposition format (может быть защищён токеном/IP — см. [DEPLOYMENT.md](DEPLOYMENT.md)) |
-| `/debug/vars` | GET | Сырые expvar-переменные |
 | `/admin/assets/generate` | POST | Фоновая генерация ассетов (только при `admin.enabled: true`) |
 | `/admin/assets/delete` | DELETE | Удаление ассетов (только при `admin.enabled: true`) |
 
-Подробности админ-эндпоинтов — в разделе [Админ-эндпоинты](#админ-эндпоинты); требования безопасности — [SECURITY.md](SECURITY.md).
+`/debug/vars` не регистрируется; все expvar-метрики доступны через `/metrics`.
 
 ## Формат asset URL
 
 ```text
-Канонический:
-/{path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
-
-Канонический без transform (resize):
-/{path}/{source_name}-{source_format}/{size}@{dpr}.{output_format}
-
-Preset:
-/{path}/{source_name}-{source_format}/{preset_name}@{dpr}.{output_format}
+/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
 ```
 
-Ведущий `/` необязателен. `{path}` может отсутствовать.
+Единая грамматика для канонических и preset URL: `segment` — имя пресета (`policy.presets`) **или** custom-имя (размер-грамматика `x`, `x200`, `200x`, `200x200`), опционально с `@dpr`-суффиксом. **Transform-коды в URL отсутствуют**: операция (resize/crop/smart-crop/face-crop/object-crop) определяется только полем `crop` пресета/custom. Ведущий `/` необязателен; `{path}` может отсутствовать.
 
 ### Компоненты
 
@@ -37,67 +29,45 @@ Preset:
 |-----------|----------|
 | `path` | Логический путь исходника в хранилище; запрещены `..`, `%2f`, control-символы |
 | `source_name` | Имя исходного файла без расширения; до 128 символов; любые Unicode-символы кроме `/`, `\`, `..`, control-символов |
-| `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl` |
-| `transform` | Код операции (см. таблицу ниже); необязателен |
-| `size` | Целевой размер: `120x80`, `x400` (только высота), `300x` (только ширина), `x` (исходный размер) |
+| `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl`, а также видео `mp4\|webm\|mov\|mkv\|avi\|m4v` (ассеты из видео строятся из кадра — см. [PROCESSING.md](PROCESSING.md)) |
+| `segment` | Имя пресета (≤64 символа, без дефисов; буквы, цифры, `_`, `.`, `@`) или custom-имя: `120x80`, `x400`, `300x`, `x` (исходный размер) |
 | `dpr` | Device pixel ratio; отсутствие = 1; явно допустимы только `2` и `3` (`@1`/`@0` — ошибка) |
 | `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl` |
-| `preset_name` | Имя пресета из конфигурации; до 64 символов, без дефисов; допустимы буквы, цифры, `_`, `.`, `@` |
 
-### Transform-коды
-
-| Код | Операция |
-|-----|----------|
-| *(отсутствует)* | Resize под заданный размер |
-| `c` | Центрированный crop |
-| `t` | Только trim (обрезка однотонных полей), затем resize |
-| `ct` | Trim → центрированный crop |
-| `sc` | Smart-crop (attention-область; требует `-tags libvips`) |
-| `sct` | Trim → smart-crop |
-| `fc` | Face-crop (детекция лиц; требует `-tags libvips,onnx` и настроенные модели) |
-| `fct` | Trim → face-crop |
-| `oc` | Object-crop (детекция объектов; требует `-tags libvips,onnx` и модели) |
-| `oct` | Trim → object-crop |
-
-Trim всегда применяется первым; координаты детекции/attention относятся к уже подрезанному изображению. Комбинации вида `tc` недопустимы.
+Разрешение сегмента описано в [CONFIGURATION.md](CONFIGURATION.md#policy) (path-policies, deny-by-default).
 
 ### Правила разбора @dpr
 
-- канонический URL (`transform-size` или `size`): последний `@` — суффикс dpr URL;
-- preset URL с одним `@`: это часть имени пресета (`thumb@2`), dpr URL = 1;
-- preset URL с двумя `@` (`thumb@2@3`): последний `@` — dpr URL, имя пресета — всё до него.
+- последний `@` — суффикс dpr URL; имя сегмента — всё до него;
+- имя сегмента (пресет **или** custom) может содержать фиксированный `@dpr`-суффикс (`thumb@2`, `200x100@2`): тогда URL обязан содержать тот же `@dpr`. В конфигурации такой пресет/custom обязан иметь `dpr: N` (равный суффиксу) — иначе ошибка старта, см. [правила dpr](CONFIGURATION.md#правила-dpr);
+- при разрешении сегмента с фиксированным dpr явный `@dpr` в URL, отличный от фиксированного, — ошибка;
+- расширение в URL обязано совпадать с `output-formats` пресета/custom.
 
-При разрешении пресета с фиксированным dpr явный `@dpr` в URL, отличный от фиксированного, — ошибка. Расширение в URL обязано совпадать с `output-formats` пресета.
+Полная матрица — в [CONFIGURATION.md](CONFIGURATION.md#правила-dpr).
 
 ## Примеры
 
 Исходник `test.jpg` лежит в корне source-хранилища (`source_name=test`, `source_format=jpg`):
 
 ```bash
-# Resize до ширины 640
+# Пресет thumb (200x200, если задан в path-policy "/")
+curl -o thumb.webp http://localhost:8080/test-jpg/thumb.webp
+
+# Пресет thumb@2 (dpr фиксирован именем)
+curl -o thumb2.webp http://localhost:8080/test-jpg/thumb@2.webp
+
+# Custom: ширина 640
 curl -o out.webp http://localhost:8080/test-jpg/640x.webp
 
-# Resize только по высоте 400
+# Custom: только высота 400
 curl -o out.png http://localhost:8080/test-jpg/x400.png
 
-# Исходный размер, конвертация в AVIF
+# Custom: исходный размер, конвертация в AVIF
 curl -o out.avif http://localhost:8080/test-jpg/x.avif
 
-# Центрированный crop 120x80, DPR 2 (реально 240x160)
+# Custom 120x80@2 с DPR 2 (реально 240x160);
+# в path-policy такой custom обязан иметь dpr: 2 (см. правила dpr)
 curl -o out.webp http://localhost:8080/test-jpg/120x80@2.webp
-
-# Trim + центрированный crop 300x300
-curl -o out.avif http://localhost:8080/test-jpg/ct-300x300.avif
-
-# Smart-crop 800x600
-curl -o out.webp http://localhost:8080/test-jpg/sc-800x600.webp
-
-# Face-crop 300x300 с DPR 3
-curl -o out.jpeg http://localhost:8080/test-jpg/fc-300x300@3.jpeg
-
-# Пресеты из config/generate.yaml
-curl -o thumb.webp http://localhost:8080/test-jpg/thumb.webp      # 200x200 WebP
-curl -o thumb2.webp http://localhost:8080/test-jpg/thumb@2.webp   # 400x400 WebP
 
 # С путём: исходник thumbs/photo.jpg
 curl -o out.webp http://localhost:8080/thumbs/photo-jpg/thumb.webp
@@ -105,6 +75,8 @@ curl -o out.webp http://localhost:8080/thumbs/photo-jpg/thumb.webp
 # Условный запрос
 curl -I -H "If-None-Match: \"etag-from-first-response\"" http://localhost:8080/test-jpg/thumb.webp   # 304
 ```
+
+Примеры конфигурации пресетов/customs и path-policies — в [config/generate.yaml](../config/generate.yaml).
 
 ## Заголовки ответов
 
@@ -132,7 +104,7 @@ curl -I -H "If-None-Match: \"etag-from-first-response\"" http://localhost:8080/t
 | HTTP | code | Когда возникает |
 |------|------|-----------------|
 | `400` | `invalid` | Некорректный asset URL или запрос |
-| `403` | `forbidden` | Запрос запрещён политикой или превышен лимит политики |
+| `403` | `forbidden` | Запрос запрещён политикой или превышен лимит `application.limits` |
 | `404` | `not_found` | Источник/результат не найден; применяется not-found fallback (`pixel`/`image`/`page`/`redirect`) |
 | `405` | `method_not_allowed` | Метод отличен от GET/HEAD/OPTIONS (заголовок `Allow`) |
 | `414` | `invalid` | URL длиннее `http.max-url-len` |
@@ -147,36 +119,17 @@ Fallback-ответы и ошибки используют `Cache-Control` из 
 
 ### Source fallback
 
-При ошибке ассета, когда **исходный файл существует**, сервис может отдать исходный файл вместо пикселя/ошибки. Включается секцией `http.source-fallback` (см. [CONFIGURATION.md](CONFIGURATION.md#httpsource-fallback)). По умолчанию выключен.
-
-Fallback применяется к следующим ошибкам:
-
-- **неканонический URL** (ошибка разбора `parse`);
-- **несуществующий пресет** (`preset_not_found`);
-- **недопустимый план** (`invalid_plan`);
-- **запрещённая политика** (`policy_denied`).
-
-`OutcomeNotFound` (исходника нет) **не** покрывается source fallback — в этом случае применяется обычный not-found fallback (`pixel`/`image`/`page`/`redirect`).
-
-Когда fallback срабатывает, вместо JSON-ошибки отдаётся исходный файл с его оригинальными заголовками:
-
-| Заголовок | Значение |
-|-----------|----------|
-| `Content-Type` | Из метаданных исходника, иначе по расширению, иначе `application/octet-stream` |
-| `Content-Length` | Размер исходного файла |
-| `Content-Disposition` | `inline; filename="<name>.<format>"` |
-| `Cache-Control` | Из `http.source-fallback.cache-control` (по умолчанию `no-store`) |
-| `ETag` | Из метаданных исходника (если есть) |
-
-HTTP-статус ответа задаётся `http.source-fallback.status` — `200` или `404` (по умолчанию `404`). Выбор `200` означает, что CDN/браузеры будут кэшировать ответ как успешный; `404` — как ошибочный. Подробнее о выборе — в [CONFIGURATION.md](CONFIGURATION.md#httpsource-fallback).
+При ошибке ассета, когда **исходный файл существует**, сервис может отдать исходный файл. Включается секцией `http.source-fallback`; применяется к ошибкам: неканонический URL, несуществующий пресет, недопустимый план, запрещённая политика. `OutcomeNotFound` не покрывается. Статус и заголовки ответа — [CONFIGURATION.md](CONFIGURATION.md#httpsource-fallback).
 
 ### Observability ошибок asset URL
 
-Ошибки канонических URL/пресетов (неканонический URL, несуществующий пресет, недопустимый план, запрещённая политика) фиксируются при `observability.asset-errors.enabled: true` (по умолчанию включено):
+Ошибки канонических URL/пресетов фиксируются при `observability.asset-errors.enabled: true` (по умолчанию включено):
 
 - **структурные логи** с полями `kind` (`parse` | `preset_not_found` | `invalid_plan` | `policy_denied`), `url`, `preset`, `reason` на уровне `observability.asset-errors.log-level` (по умолчанию `warn`);
-- **счётчик** `imager_asset_errors` в `/metrics` и `/debug/vars` — по категории `kind` (например `imager_asset_errors_parse`, `imager_asset_errors_preset_not_found`);
-- **top bad paths** — при `observability.asset-errors.top-paths.enabled: true` bounded LRU-реестр проблемных путей (до `max-entries`, по умолчанию 1024) с отчётом топ-`report-top` (по умолчанию 20) путей. Ключ — путь исходника (`key-mode: source`) или sha256-хэш первых 16 байт URL (`key-mode: hash`). Отчёт публикуется в `/debug/vars` (expvar) и доступен в `/metrics`.
+- **счётчик** `imager_asset_errors` — по категории `kind` (например `imager_asset_errors_parse`, `imager_asset_errors_preset_not_found`);
+- **top bad paths** — при `observability.asset-errors.top-paths.enabled: true` bounded LRU-реестр проблемных путей (до `max-entries`, по умолчанию 1024) с отчётом топ-`report-top` (по умолчанию 20) путей. Ключ — путь исходника (`key-mode: source`) или sha256-хэш первых 16 байт URL (`key-mode: hash`).
+
+Все счётчики и отчёты доступны в `/metrics` (expvar-реестр). Параметры секции — [CONFIGURATION.md](CONFIGURATION.md#observabilityasset-errors).
 
 Метрики не содержат raw user input в unbounded виде: `url` — путь запроса без query, `preset` — имя пресета, `reason` — категория причины.
 
@@ -186,7 +139,7 @@ Deny-by-default: cross-origin ответы получают CORS-заголов�
 
 ## Админ-эндпоинты
 
-Админ-эндпоинты управляют ассетами: фоновая генерация всех/выбранных ассетов исходника и удаление ассетов. Они **выключены по умолчанию** и регистрируются в mux только при `admin.enabled: true` (см. [CONFIGURATION.md](CONFIGURATION.md#admin)). При включении обязателен непустой `admin.token`, иначе старт завершится ошибкой (fail-fast).
+Админ-эндпоинты управляют ассетами: фоновая генерация всех/выбранных ассетов исходника и удаление ассетов. Выключены по умолчанию (`admin.enabled: false`); при включении обязателен непустой `admin.token`, иначе fail-fast при старте. Параметры секции — [CONFIGURATION.md](CONFIGURATION.md#admin), рекомендации безопасности — [SECURITY.md](SECURITY.md#админ-эндпоинты).
 
 Все админ-запросы требуют авторизации:
 
@@ -268,10 +221,9 @@ Authorization: Bearer <token>
 |------|------|-----------------|
 | `200` | — | Синхронный режим (`wait: true`), генерация завершена |
 | `202` | — | Асинхронный режим, задача поставлена в очередь |
-| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL, `cannot-enumerate` (например, `unsafe` authorization без `size-rules`) |
+| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL, `cannot-enumerate` (хранилище не поддерживает перечисление) |
 | `403` | `forbidden` | Неверный/отсутствующий bearer-токен |
 | `404` | `not_found` | Исходник не существует (режим A) |
-| `501` | `not_implemented` | Хранилище результатов не поддерживает перечисление (не применимо к generate) |
 | `503` | `overloaded` | Очередь задач переполнена (`admin.queue-size`) |
 | `504` | `timeout` | Превышен таймаут режима `wait=true` (`admin.wait-timeout`) |
 
@@ -305,10 +257,7 @@ curl -X POST http://localhost:8080/admin/assets/generate \
 {"source": "thumbs/photo.jpg"}
 ```
 
-Работает для всех хранилищ (fs, s3, ftp, sftp): используется пакетное
-`DeleteByPrefix` (PrefixDeleter), а при его отсутствии — fallback на
-`List` + одиночный `Delete`. Если хранилище не поддерживает ни то, ни
-другое — `501`.
+Используется пакетное `DeleteByPrefix` (PrefixDeleter), при его отсутствии — fallback на `List` + одиночный `Delete`. Если хранилище не поддерживает ни то, ни другое — `501`.
 
 **Режим B** — удалить перечисленные ассеты (канонические URL):
 
@@ -361,4 +310,3 @@ curl -X DELETE http://localhost:8080/admin/assets/delete \
   -H "Content-Type: application/json" \
   -d '{"assets": ["/thumbs/photo-jpg/thumb.webp"]}'
 # → 200 {"status":"completed","deleted":1}
-```

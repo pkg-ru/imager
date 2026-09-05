@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/pkg-ru/imager/adapters/httpapi"
-	"github.com/pkg-ru/imager/adapters/storage/fs"
-	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/app/adminsvc"
-	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/app/learning"
-	"github.com/pkg-ru/imager/config"
-	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/ports/detector"
-	"github.com/pkg-ru/imager/ports/metadata"
-	"github.com/pkg-ru/imager/ports/processor"
-	"github.com/pkg-ru/imager/ports/storage"
-	"github.com/pkg-ru/imager/ports/videoframe"
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/fs"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/app/adminsvc"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/app/learning"
+	"gitverse.ru/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
+	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"gitverse.ru/pkg-ru/imager/ports/metadata"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
 // AppOptions — параметры сборки нового pipeline (composition root).
@@ -71,7 +71,7 @@ type AppOptions struct {
 	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
 	VideoExtractor videoframe.Extractor
 
-	// AsyncPublish — флаг асинхронной публикации результата (S1). true
+	// AsyncPublish — флаг асинхронной публикации результата. true
 	// (умолчание для production) = публикация в кэш выполняется фоновыми
 	// воркерами после ответа клиенту; false = публикация синхронная (прежнее
 	// поведение, кэш готов сразу после Generate) — используется в тестах,
@@ -196,7 +196,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	learningSvc := learning.NewService(learningCtrl, learningRec)
 
 	// Use case.
-	// S1: асинхронная публикация результата в кэш. В production включена по
+	// Асинхронная публикация результата в кэш. В production включена по
 	// умолчанию (AsyncPublish=true): публикация выполняется bounded-очередью
 	// фоновых воркеров, ответ клиенту не ждёт записи в remote. Тесты, которым
 	// нужен готовый кэш сразу после Generate, отключают её (AsyncPublish=false

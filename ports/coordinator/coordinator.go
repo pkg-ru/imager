@@ -6,7 +6,7 @@ package coordinator
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // Keyed — интерфейс keyed координации. Гарантирует, что для одного и того же

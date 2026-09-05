@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
 )
 
 // TestParseRuntimeConfigDetection проверяет декодирование секции detection
@@ -935,7 +935,7 @@ libvips:
 }
 
 // TestParseRuntimeConfigLibvipsDetectionSem проверяет декодирование секции
-// libvips.detection (detection-семофор, Фаза 4) и libvips.metrics-interval.
+// libvips.detection (detection-семофор) и libvips.metrics-interval.
 func TestParseRuntimeConfigLibvipsDetectionSem(t *testing.T) {
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"
@@ -1046,7 +1046,7 @@ libvips:
 }
 
 // TestParseRuntimeConfigLibvipsColor — декодирование политики color
-// management (Фаза 5a): явные режимы, дефолт (strip) и fail-fast на
+// management: явные режимы, дефолт (strip) и fail-fast на
 // неизвестном значении.
 func TestParseRuntimeConfigLibvipsColor(t *testing.T) {
 	// transform.
@@ -1108,8 +1108,8 @@ libvips:
 	}
 }
 
-// TestParseRuntimeConfigLibvipsOperationCache — декодирование operation cache
-// (Фаза 5b): явное false/true и дефолт (включено).
+// TestParseRuntimeConfigLibvipsOperationCache — декодирование operation cache:
+// явное false/true и дефолт (включено).
 func TestParseRuntimeConfigLibvipsOperationCache(t *testing.T) {
 	// Явное false → отключено.
 	rc, err := ParseRuntimeConfig([]byte(`

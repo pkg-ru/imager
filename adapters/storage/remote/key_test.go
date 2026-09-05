@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 func TestCanonicalKey(t *testing.T) {

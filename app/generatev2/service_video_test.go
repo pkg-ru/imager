@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/ports/metadata"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/ports/metadata"
 )
 
 // videoEnv собирает testEnv с включённым VideoExtractor и метаданными.

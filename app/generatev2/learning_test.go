@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // fakeLearning — управляемый fake LearningController для тестов.

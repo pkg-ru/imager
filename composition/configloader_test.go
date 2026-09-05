@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // TestLoadConfigDirBaseOnly проверяет, что загрузка одного обязательного

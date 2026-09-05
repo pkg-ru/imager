@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 )
 
 func newTestMetaStore(t *testing.T) (*MetadataStore, string) {

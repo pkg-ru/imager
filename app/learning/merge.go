@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
 )
 
 // Чистые функции слияния наблюдений в состояние path-policies.

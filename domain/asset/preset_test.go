@@ -3,7 +3,7 @@ package asset
 import (
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // TestPresetResolveDifferentSourceFormats проверяет, что один пресет работает

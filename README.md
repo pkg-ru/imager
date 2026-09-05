@@ -1,8 +1,7 @@
 # Imager
 
-[![CI](https://github.com/pkg-ru/imager/actions/workflows/ci.yml/badge.svg)](https://github.com/pkg-ru/imager/actions/workflows/ci.yml)
+[![CI](https://gitverse.ru/pkg-ru/imager/badges/workflows/ci.yml/badge.svg)](https://gitverse.ru/pkg-ru/imager/actions)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Go Reference](https://pkg.go.dev/badge/github.com/pkg-ru/imager.svg)](https://pkg.go.dev/github.com/pkg-ru/imager)
 
 Imager — сервис обработки изображений на лету: генерирует, кэширует и отдаёт
 изображения по каноническим URL без предварительной генерации или этапа сборки.
@@ -27,9 +26,9 @@ GET /photos/city-skyline-jpg/300x@2.webp
 - **Анимированные изображения** — GIF/WebP/APNG с лимитами на кадры и
   длительность.
 - **Водяные знаки** — настраиваемое наложение с кэшированием.
-- **Политика deny-by-default** — режимы авторизации (`safe`/`unsafe`), правила
-  размеров, политики путей и жёсткие лимиты (байты источника/результата,
-  пиксели, кадры, длительность).
+- **Политика deny-by-default** — path-policies по префиксам пути разрешают
+  только явно перечисленные пресеты/custom-размеры; жёсткие лимиты (байты
+  источника/результата, пиксели, кадры, длительность) — в `application.limits`.
 - **Бэкенды хранилища** — `fs`, `s3`, `sftp`, `ftp`/`ftps` (источник и результат
   независимо друг от друга), read-only источники `http`.
 - **Наблюдаемость** — структурированное JSON-логирование, метрики Prometheus на
@@ -43,18 +42,18 @@ GET /photos/city-skyline-jpg/300x@2.webp
 ### Docker Compose (рекомендуется)
 
 ```bash
-git clone https://github.com/pkg-ru/imager.git
+git clone https://gitverse.ru/pkg-ru/imager.git
 cd imager
 docker compose up -d --build
 curl http://localhost:8080/healthz   # {"status":"alive"}
 ```
 
-Конфигурация монтируется read-only из `./config`. О защите продакшена см.
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Конфигурация монтируется read-only из `./config` в `/etc/imager/config`
+(подробнее — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 
 ### Сборка из исходников
 
-Требуется **Go ≥ 1.25**. Сборка по умолчанию использует процессоры-заглушки и
+Требуется **Go ≥ 1.27**. Сборка по умолчанию использует процессоры-заглушки и
 подходит для разработки и CI:
 
 ```bash
@@ -82,7 +81,7 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 
 | Компонент | Назначение | Обязательность |
 |-----------|------------|----------------|
-| Go ≥ 1.25 | Сборка из исходников | Да (для локальных сборок) |
+| Go ≥ 1.27 | Сборка из исходников | Да (для локальных сборок) |
 | libvips ≥ 8.13 + заголовки | Основной движок обработки (все форматы, включая APNG) | Рекомендуется |
 | C-компилятор, `pkg-config` | CGO-сборка govips (`-tags libvips`) | При `-tags libvips` |
 | Кодеки: libheif, libde265, libjxl, librsvg, poppler, libraw | HEIF/AVIF, JPEG XL, SVG, PDF, RAW | Для соответствующих форматов |
@@ -91,8 +90,10 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 
 ## Конфигурация
 
-Все настройки задаются в YAML; CLI-флагов и переменных окружения приложения нет,
-кроме `IMAGER_CONFIG_DIR` (каталог с файлами конфигурации). Конфигурация
+Все настройки задаются в YAML; CLI-флагов у приложения нет. Переменные
+окружения: `IMAGER_CONFIG_DIR` (каталог с файлами конфигурации) и
+`IMAGER_S3_ACCESS_KEY`/`IMAGER_S3_SECRET_KEY` (S3-credentials; значение из YAML
+приоритетнее). Конфигурация
 разделена на три слоя, каждый переопределяется файлом `-local.yaml`,
 игнорируемым git:
 
@@ -127,7 +128,6 @@ observability/         Logging, metrics, middleware
 bootstrap/             Process bootstrap helpers
 config/                Example configuration files
 docs/                  Documentation
-example/               Example files (not-found page)
 ```
 
 Проект построен по архитектуре ports-and-adapters: `domain` не имеет внешних
@@ -160,11 +160,13 @@ make check     # fmt + vet + test + race
 make fuzz      # fuzz smoke tests
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) собирает и тестирует
-все комбинации build tags (`default`, `libvips`, `onnx`, `libvips,onnx`)
-на Linux и Windows, запускает `go vet`, `gofmt`, `govulncheck`, fuzz smoke-тесты
-и сканирование контейнера Trivy.
+CI ([.gitverse/workflows/ci.yml](.gitverse/workflows/ci.yml)) собирает и тестирует
+все комбинации build tags (`default`/`onnx` на Linux и Windows, `libvips`/
+`libvips,onnx` на Linux), запускает `go vet`, `go test -race` (Linux),
+`gofmt`, `govulncheck`, fuzz smoke-тесты и сканирование контейнера Trivy.
 
-## Лицензия
+## Лицензия и правообладатель
+
+© 2025 [Алтухов Владислав Владимирович](https://altuh.ru/about).
 
 Проект распространяется по лицензии [GNU General Public License v3.0](LICENSE).

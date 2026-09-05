@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // TestHealthHeadNoBody проверяет, что для HEAD health-эндпоинты пишут только

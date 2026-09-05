@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/policy"
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 func wmDecls(names ...string) map[string]WatermarkConfig {

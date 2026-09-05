@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pkg-ru/imager/ports/videoframe"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
 // requireFFmpeg проверяет доступность ffmpeg/ffprobe и пропускает тест,

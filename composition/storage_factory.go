@@ -24,13 +24,13 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/pkg-ru/imager/adapters/storage/fs"
-	"github.com/pkg-ru/imager/adapters/storage/ftp"
-	httpadapter "github.com/pkg-ru/imager/adapters/storage/http"
-	"github.com/pkg-ru/imager/adapters/storage/remote"
-	s3adapter "github.com/pkg-ru/imager/adapters/storage/s3"
-	"github.com/pkg-ru/imager/adapters/storage/sftp"
-	"github.com/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/fs"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/ftp"
+	httpadapter "gitverse.ru/pkg-ru/imager/adapters/storage/http"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	s3adapter "gitverse.ru/pkg-ru/imager/adapters/storage/s3"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/sftp"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
 )
 
 // DefaultHTTPSpoolMaxBytes — безопасный дефолт лимита spool для HTTP source

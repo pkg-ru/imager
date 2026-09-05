@@ -1,19 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 ###############################################################################
-# Builder: собирает production binary из cmd/imager (новый composition root).
-# Pinned base image для воспроизводимости.
-#
-# CGO_ENABLED=1 + libvips-dev: сборка с тэком "-tags libvips" (govips, cgo).
-# Дополнительные C-инструменты: gcc (через build-base), pkgconf, musl-dev.
-# Библиотеки, необходимые govips для кодирования/декодирования форматов:
-#   vips-dev (сам libvips), libheif-dev (HEIF/AVIF), libjxl-dev (JPEG XL),
-#   librsvg-dev (SVG), libpoppler-glib-dev (PDF), libraw-dev (RAW) — гипотетически.
-#
-# ONNX Runtime (детекция лиц/объектов): сборка с тэком "onnx" + cgo-библиотека
-# onnxruntime (бэкенд github.com/yalue/onnxruntime_go). Пакет onnxruntime
-# 1.29.0 доступен только в edge-репозитории Alpine (musl); libstdc++/libgcc
-# 15.2 из edge требуются из-за C++23-символа в onnxruntime.
+# Builder: собирает production binary из cmd/imager.
+# CGO_ENABLED=1 + -tags libvips (govips, cgo). Кодеки: vips, heif, jxl, rsvg,
+# poppler, libraw. ONNX Runtime (детекция) — -tags onnx: пакет onnxruntime
+# есть только в edge-репозитории Alpine (musl); libstdc++/libgcc из edge
+# требуются из-за C++23-символа в onnxruntime.
 ###############################################################################
 FROM golang:1.27.0-alpine3.23 AS builder
 
@@ -51,34 +43,25 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
 
 WORKDIR /src
 
-# Сначала копируем только модули для кэширования слоя зависимостей.
+# Сначала модули — для кэширования слоя зависимостей. Локальный replace-модуль
+# govips должен быть в контейнере до `go mod download`.
 COPY go.mod go.sum ./
 COPY go.work go.work.sum ./
-# Локальный replace-модуль govips (go.mod: replace ... => ./govips) должен
-# присутствовать в контейнере, иначе `go mod download` не сможет прочитать
-# govips/go.mod. Копируем всю директорию сразу (она же нужна и для go build).
 COPY govips/ ./govips/
 RUN go mod download
 
-# Копируем исходники и собираем с тэками.
 COPY . .
 RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
-# Runtime: минимальный образ с libvips (единственный движок) и FFmpeg.
-# libvips покрывает все форматы, включая APNG (≥ 8.13). Pinned base image.
-# Non-root пользователь, read-only root layout.
+# Runtime: минимальный образ с libvips (все форматы, включая APNG) и FFmpeg.
+# Pinned base image. Non-root пользователь.
 ###############################################################################
 FROM alpine:3.23
 
-# Pinned версии пакетов для воспроизводимости (apk --no-cache).
-# libvips — основной процессор; сопутствующие библиотеки кодеков:
-#   libheif (HEIF/AVIF), libde265 (HEVC), libjxl (JPEG XL),
-#   poppler (PDF), libraw (RAW), librsvg (SVG), ghostscript (PDF/PS).
-# ffmpeg — пост-обработка видео (если нужна).
-# onnxruntime — runtime для бинаря, собранного с тэком "onnx" (детекция
-# лиц/объектов). Обновление libstdc++/libgcc обязательно: edge-пакет
-# собран с C++23 (символ std::__format::__locale_encoding_to_utf8).
+# Pinned версии пакетов для воспроизводимости. onnxruntime — runtime для
+# бинаря с -tags onnx; обновление libstdc++/libgcc обязательно (edge-пакет
+# собран с C++23).
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
@@ -100,60 +83,39 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
     && addgroup -S -g 10001 imager \
     && adduser -S -D -H -u 10001 -G imager imager
 
-# Часовой пояс.
 ENV TZ=Europe/Moscow
 
-# Writable каталоги: только source/result и tmp. Root fs остаётся read-only
-# (read_only: true в compose). /tmp — tmpfs в compose.
+# Writable каталоги: source/result и /etc/imager/models (root fs и /tmp —
+# в compose: /tmp — tmpfs).
 RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
     && chown -R imager:imager /data \
     && chmod 0750 /data /data/source /data/result \
     && chown root:imager /etc/imager/models \
     && chmod 0755 /etc/imager/models
 
-# Копируем static binary и базовый конфиг. Каталог конфигурации задаётся
-# через IMAGER_CONFIG_DIR (единственная env-переменная). Локальная
-# конфигурация (setting-local.yaml) монтируется в compose.
+# Static binary, базовый конфиг и ONNX-модели (в compose ./models монтируется
+# поверх для обновления без пересборки).
 COPY --from=builder /out/imager /usr/local/bin/imager
 COPY config/setting.yaml /etc/imager/setting.yaml
-
-# ONNX модели (YuNet для лиц, SSD для объектов) — копируются в образ;
-# в compose дополнительно монтируется ./models для обновления без пересборки.
 COPY models/face_detection_yunet_2023mar.onnx /etc/imager/models/
 COPY models/ssd_mobilenet_v1_12.onnx /etc/imager/models/
 
-# Dynamic binary: копируем libvips-зависимости через ld-linux. В Alpine
-# динамическая линковка разрешена; пакеты уже установлены в runtime.
-# (govips-библиотеки ищутся через ldconfig автоматически.)
-# libonnxruntime грузится через dlopen (библиотека установлена выше).
-
-# Restrictive permissions: бинарь 0755, конфиг 0640 (не содержит секретов,
-# но ограничиваем чтение).
+# Restrictive permissions: бинарь 0755, конфиг 0640, модели 0644.
 RUN chmod 0755 /usr/local/bin/imager \
     && chmod 0640 /etc/imager/setting.yaml \
     && chown root:imager /etc/imager/setting.yaml \
     && chmod 0644 /etc/imager/models/*
 
-# Non-root runtime user.
 USER imager:imager
 
-# Healthcheck: liveness endpoint. wget из busybox.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
-# Экспонируем HTTP-порт (readiness/liveness/metrics/asset).
 EXPOSE 8080
 
-# Writable пути: /data (source/result) и /etc/imager/models.
-# /etc/imager/models объявлен VOLUME, чтобы Docker создал writable mountpoint
-# (анонимный volume) в верхнем слое. Без этого bind-mount ./models поверх
-# каталога, существующего в read-only нижнем слое overlayfs, падает с
-# "mkdirat .../etc/imager/models: read-only file system". В compose поверх
-# этого mountpoint монтируется ./models:ro.
+# VOLUME для /etc/imager/models обязателен: иначе bind-mount ./models поверх
+# каталога в read-only нижнем слое overlayfs падает (mkdirat ...: read-only
+# file system). В compose поверх mountpoint монтируется ./models:ro.
 VOLUME ["/data/source", "/data/result", "/etc/imager/models"]
 
-# Production entrypoint: новый composition root (cmd/imager).
-# Единственная env-переменная — IMAGER_CONFIG_DIR (путь к каталогу
-# с setting.yaml / setting-local.yaml). Остальное — в YAML; см.
-# docs/PRODUCTION.md.
 CMD ["/usr/local/bin/imager"]

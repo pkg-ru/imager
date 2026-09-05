@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/observability"
 )
 
 // recordingMetrics — fake Metrics, записывающий IncAssetError.

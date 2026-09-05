@@ -18,11 +18,11 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"github.com/pkg-ru/imager/adapters/processor/detection"
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // startupOnce гарантирует однократный Startup govips на процесс.
@@ -62,12 +62,12 @@ func newLibvipsBackend(opts Options) (backend, error) {
 		opts:    opts,
 		wmCache: newWatermarkCache(opts.WatermarkCache),
 	}
-	// Vips-метрики (Фаза 4): регистрируем провайдер снимков libvips +
+	// Vips-метрики: регистрируем провайдер снимков libvips +
 	// кэша ватермарок этого движка в observability (периодический сборщик,
 	// отказоустойчивый). Повторное создание движка заменяет провайдер.
 	registerVipsStatsProvider(opts.VipsMetricsInterval, b.wmCache)
 	startupOnce.Do(func() {
-		// Лимиты кэша (Фаза 5b): при отключённом operation cache передаются
+		// Лимиты кэша: при отключённом operation cache передаются
 		// НУЛЕВЫЕ значения. В govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша
 		// (vips_cache_set_max_mem(0) / vips_cache_set_max(0) /
 		// vips_cache_set_max_files(0)); значение < 0 = default govips.
@@ -82,7 +82,7 @@ func newLibvipsBackend(opts Options) (backend, error) {
 			MaxCacheMem:      cacheMem,
 			MaxCacheFiles:    cacheFiles,
 			MaxCacheSize:     cacheSize,
-			// CollectStats (Фаза 4): включает счётчик операций govips
+			// CollectStats: включает счётчик операций govips
 			// (ReadRuntimeStats) для метрики imager_vips_operations_total.
 			CollectStats: true,
 		}
@@ -138,7 +138,7 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 	}
 	defer img.Close()
 
-	// ICC color management (Фаза 5a): политика transform конвертирует
+	// ICC color management: политика transform конвертирует
 	// embedded-профиль в sRGB ПЕРЕД пиксельной обработкой. Fast-path:
 	// sRGB-совместимые профили и изображения уже в sRGB без профиля не
 	// конвертируются (нулевой оверхед). Ошибки lcms не роняют запрос —
@@ -285,7 +285,7 @@ func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing
 	if ip.Sequential {
 		params.Access.Set(vips.AccessSequential)
 	}
-	// Shrink-on-load (Фаза 2): предварительное уменьшение при декодировании.
+	// Shrink-on-load: предварительное уменьшение при декодировании.
 	// Заголовок читается лёгкой загрузкой libvips (пиксели декодируются
 	// лениво — это дёшево); решение принимает чистая функция
 	// resolveShrinkOnLoad. При любой ошибке чтения заголовка shrink просто
@@ -322,7 +322,7 @@ func (b *libvipsBackend) resolveShrinkForLoad(data []byte, plan *processing.Proc
 	return resolveShrinkOnLoad(plan, src, head.Orientation(), b.opts.ShrinkOnLoad.Enabled())
 }
 
-// applyColorManagement применяет политику ICC color management (Фаза 5a) к
+// applyColorManagement применяет политику ICC color management к
 // загруженному изображению ПЕРЕД пиксельной обработкой.
 //
 // Режимы:
@@ -417,7 +417,7 @@ func (b *libvipsBackend) tryPassthrough(ctx context.Context, data []byte, plan *
 		MetaFields:  head.GetFields(),
 		HasICC:      head.HasICCProfile(),
 	}
-	// sRGB-совместимость embedded-профиля (Фаза 5a): проверка по
+	// sRGB-совместимость embedded-профиля: проверка по
 	// сигнатуре/имени БЕЗ lcms-конверсии; false при битом/отсутствующем
 	// профиле. Значимо только для режима transform.
 	if src.HasICC {
@@ -795,7 +795,7 @@ func hexToColor(hex string) *vips.Color {
 // согласовано с поведением trim/crop для анимации.
 // applyDetectionCrop выполняет детекторную обрезку (face-crop/object-crop).
 //
-// Двухуровневые семафоры (Фаза 4): при self-detection (модель вызывается
+// Двухуровневые семафоры: при self-detection (модель вызывается
 // здесь) тяжёлый CPU-bound ONNX-инференс выполняется ВНЕ libvips-слота —
 // слот перекладывается на detection-семофор (handoffToDetection) и
 // возвращается обратно (reacquireVips) после инференса. Лёгкие cgo-операции
@@ -861,7 +861,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 			return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
 		}
 
-		// Handoff (Фаза 4): захватываем detection-слот и освобождаем
+		// Handoff: захватываем detection-слот и освобождаем
 		// libvips-слот НА ВРЕМЯ ИНФЕРЕНСА. Порядок строго детерминирован
 		// (см. detectionsemaphore.go): Acquire detection при удержании
 		// libvips-слота → Release libvips. При ошибке ожидания libvips-слот
@@ -989,7 +989,7 @@ func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, p
 // корректного отображения; orientation к этому моменту уже применён при
 // загрузке (AutoRotate). RemoveICCProfile удаляет цветовой профиль.
 //
-// keepICC (Фаза 5a, режим ColorKeep) сохраняет embedded-профиль в выходе:
+// keepICC (режим ColorKeep) сохраняет embedded-профиль в выходе:
 // профиль описывает цвет пикселей, и при совпадении формата/без конверсии
 // он остаётся валидным. В режиме transform конвертированные пиксели уже в
 // sRGB, профиль (sRGB) удаляется как лишний. В режиме strip (дефолт)
@@ -1013,7 +1013,7 @@ func stripAllMetadata(img *vips.ImageRef, keepICC bool) error {
 func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.ProcessingPlan) ([]byte, error) {
 	// Единая принудительная зачистка метаданных на готовом ассете — до
 	// экспорта, независимо от поддержки strip конкретным кодеком. Режим
-	// keep (Фаза 5a) сохраняет embedded-профиль в выходе (keepICC=true).
+	// keep сохраняет embedded-профиль в выходе (keepICC=true).
 	if err := stripAllMetadata(img, b.opts.Color == ColorKeep); err != nil {
 		return nil, err
 	}

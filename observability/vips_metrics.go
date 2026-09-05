@@ -1,6 +1,6 @@
-// Периодический сборщик vips-метрик (Фаза 4): tracked memory/allocs, open
-// files, operation cache hits/misses libvips + метрики кэша ватермарок
-// (hit/miss/size) из watermarkcache.go Фазы 3.
+// Периодический сборщик vips-метрик: tracked memory/allocs, open files,
+// operation cache hits/misses libvips + метрики кэша ватермарок
+// (hit/miss/size) из watermarkcache.go.
 //
 // Архитектура: observability НЕ зависит от govips (пакет собирается без
 // cgo). Значения поставляются через VipsStatsProvider — функцию, возвращающую
@@ -41,7 +41,7 @@ type VipsSnapshot struct {
 	// операций по именам), поэтому экспортируется агрегат.
 	OperationsTotal int64
 	// WatermarkCacheHits / WatermarkCacheMisses — накопительные hit/miss
-	// кэша файлов ватермарок (Фаза 3).
+	// кэша файлов ватермарок.
 	WatermarkCacheHits   int64
 	WatermarkCacheMisses int64
 	// WatermarkCacheEntries — текущее число записей кэша ватермарок.

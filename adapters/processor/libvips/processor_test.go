@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // fakeBackend — тестовый движок без cgo: возвращает данные или ошибку.

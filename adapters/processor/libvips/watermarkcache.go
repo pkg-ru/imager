@@ -127,7 +127,7 @@ type watermarkCache struct {
 	inflight map[string]*watermarkCall
 	bytes    int64 // суммарный размер закэшированных байтов
 
-	// Метрики (Фаза 4): накопительные hit/miss для observability.
+	// Метрики: накопительные hit/miss для observability.
 	hits   int64
 	misses int64
 
@@ -279,7 +279,7 @@ func (c *watermarkCache) totalBytes() int64 {
 	return c.bytes
 }
 
-// stats возвращает снимок метрик кэша (Фаза 4): число записей, суммарные
+// stats возвращает снимок метрик кэша: число записей, суммарные
 // байты, накопительные hit/miss. Потокобезопасно.
 func (c *watermarkCache) stats() (entries int, bytes, hits, misses int64) {
 	c.mu.Lock()

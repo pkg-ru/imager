@@ -13,7 +13,7 @@
 package libvips
 
 import (
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // sourceInfo — лёгкие метаданные исходника, достаточные для решения о
@@ -70,7 +70,7 @@ var passthroughMetaAllowlist = map[string]bool{
 //     была бы no-op); в режиме keep допускается любой профиль (профиль
 //     сохраняется в выходе как есть).
 //
-// colorMode — политика color management (Фаза 5a; ColorStrip/ColorTransform/
+// colorMode — политика color management (ColorStrip/ColorTransform/
 // ColorKeep). Функция чистая и консервативная: любое сомнение → false.
 func passthroughEligible(plan *processing.ProcessingPlan, src sourceInfo, colorMode ColorMode) bool {
 	if plan == nil {
@@ -119,7 +119,7 @@ func passthroughEligible(plan *processing.ProcessingPlan, src sourceInfo, colorM
 			return false
 		}
 	}
-	// ICC-профиль: политика color management (Фаза 5a).
+	// ICC-профиль: политика color management.
 	switch colorMode {
 	case ColorTransform:
 		// sRGB-совместимый профиль не требует конверсии (fast-path) —

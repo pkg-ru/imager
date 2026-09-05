@@ -1,4 +1,4 @@
-// Двухуровневая схема семафоров для libvips-процессора (Фаза 4).
+// Двухуровневая схема семафоров для libvips-процессора.
 //
 // Проблема: ONNX-инференс детекции (face-crop/object-crop) — CPU-bound
 // операция, которая раньше выполнялась ВНУТРИ слота libvips-семафора,
@@ -34,7 +34,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
 )
 
 // DefaultDetectionConcurrencyFactor — знаменатель дефолтного лимита

@@ -1,7 +1,7 @@
 package remote
 
 import (
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // IsConnErr отличает ошибки соединения (требуют переподключения/discard и

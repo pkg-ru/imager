@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/ports/admin"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/ports/admin"
 )
 
 // AdminHandler — HTTP-обработчик административных эндпоинтов.

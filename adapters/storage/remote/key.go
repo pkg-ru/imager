@@ -10,7 +10,7 @@ package remote
 import (
 	"strings"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // CanonicalKey нормализует ObjectKey в безопасный канонический ключ для

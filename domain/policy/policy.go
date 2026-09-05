@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // PathPolicy — скомпилированная path-policy для конкретного префикса пути.

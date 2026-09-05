@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // fakeRecorder — управляемый fake PolicyRecorder: запоминает последний req.

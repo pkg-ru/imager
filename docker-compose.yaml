@@ -8,14 +8,11 @@ services:
     stop_signal: INT
     stop_grace_period: 15s
 
-    # Production hardening: non-root (в Dockerfile), dropped capabilities,
-    # no-new-privileges, tmpfs для /tmp.
-    # ВАЖНО: read_only: true НЕ используется. При read-only rootfs Docker не
-    # может создать mountpoint для bind-mount ./models:/etc/imager/models
-    # (mkdirat .../etc/imager/models: read-only file system), т.к. каталог
-    # лежит в read-only слое. Без read_only rootfs writable, mountpoint
-    # создаётся, а сами модели/конфиг монтируются :ro (неизменяемы).
-    # Writable остаются только /data и /tmp (tmpfs).
+    # Hardening: non-root (в Dockerfile), dropped capabilities, no-new-privileges,
+    # tmpfs для /tmp. read_only: true НЕ используется: при read-only rootfs
+    # Docker не создаст mountpoint для bind-mount ./models (каталог лежит в
+    # read-only слое). Корень остаётся writable, а модели/конфиг монтируются
+    # :ro (неизменяемы); writable — только /data и /tmp (tmpfs).
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     security_opt:
@@ -34,7 +31,7 @@ services:
           cpus: "0.25"
           memory: 128M
 
-    # Healthcheck (liveness) — дублирует HEALTHCHECK из Dockerfile.
+    # Liveness — дублирует HEALTHCHECK из Dockerfile.
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 30s
@@ -42,17 +39,14 @@ services:
       start_period: 10s
       retries: 3
 
-    # Только HTTP (8080). TLS/443 не включён в production scope.
+    # Только HTTP (8080); TLS/443 вне production scope.
     ports:
       - "8080:8080"
 
-    # Конфигурация монтируется read-only в ОТДЕЛЬНЫЙ каталог /etc/imager/config.
-    # ВАЖНО: нельзя монтировать ./config в /etc/imager — это перекрыло бы
-    # /etc/imager/models из образа и не позволило бы создать mountpoint для
-    # bind-mount ./models (mkdirat .../etc/imager/models: read-only file system).
-    # Модели ONNX монтируются отдельно (./models) в /etc/imager/models, чтобы
-    # их можно было обновлять без пересборки образа (в Dockerfile также
-    # запечены копии).
+    # Конфиг монтируется :ro в ОТДЕЛЬНЫЙ каталог /etc/imager/config (нельзя
+    # монтировать ./config в /etc/imager — перекроет /etc/imager/models из
+    # образа). Модели ./models — отдельно в /etc/imager/models, чтобы обновлять
+    # их без пересборки образа (в Dockerfile также запечены копии).
     volumes:
       - ./config:/etc/imager/config:ro
       - ./models:/etc/imager/models:ro
@@ -60,16 +54,12 @@ services:
       - ./data/result:/data/result:rw
 
     environment:
-      # Единственная env-переменная: путь к каталогу с настройками.
-      # Все остальные настройки — в YAML (setting.yaml / setting-local.yaml),
+      # Единственная env-переменная: путь к каталогу с настройками;
+      # остальное — в YAML (setting.yaml / setting-local.yaml).
       IMAGER_CONFIG_DIR: /etc/imager/config
 
     networks:
       - default
-
-volumes:
-  imager_source:
-  imager_result:
 
 networks:
   default:

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // wantOutcome проверяет, что err является *OutcomeError с указанной

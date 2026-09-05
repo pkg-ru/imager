@@ -91,8 +91,8 @@ type Metrics interface {
 	IncAssetError(kind AssetErrorKind)
 }
 
-// PublishQueueMetrics — ОПЦИОНАЛЬНЫЙ порт метрик асинхронной публикации
-// (S1). Не входит в базовый интерфейс Metrics, чтобы не ломать сторонние
+// PublishQueueMetrics — ОПЦИОНАЛЬНЫЙ порт метрик асинхронной публикации.
+// Не входит в базовый интерфейс Metrics, чтобы не ломать сторонние
 // реализации; application-слой использует type-assert и no-op при отсутствии.
 type PublishQueueMetrics interface {
 	// SetPublishQueueDepth обновляет текущую глубину bounded-очереди
@@ -350,8 +350,8 @@ func (m *StdMetrics) SetHttpInflight(v int64) {
 }
 
 // IncHttpInflight атомарно увеличивает число обрабатываемых HTTP-запросов.
-// Quick win (Q6): expvar.Int.Add использует atomic.AddInt64 — одна атомарная
-// операция вместо неатомарной пары Value()+1/Set() (две операции с гонкой).
+// expvar.Int.Add использует atomic.AddInt64 — одна атомарная операция вместо
+// неатомарной пары Value()+1/Set() (две операции с гонкой).
 func (m *StdMetrics) IncHttpInflight() {
 	if m.httpInflight != nil {
 		m.httpInflight.Add(1)

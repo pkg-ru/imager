@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,6 +21,14 @@ func presetCfg(name string, width, height uint32, outFmts ...string) PresetConfi
 		Height:        dynamic.Uint32(height),
 		OutputFormats: formats,
 	}
+}
+
+// presetCfgWithDPR — пресет с явным dpr (для @N-суффиксов и фиксированного
+// множителя; @N требует dpr == N).
+func presetCfgWithDPR(name string, width, height uint32, dpr uint32, outFmts ...string) PresetConfig {
+	c := presetCfg(name, width, height, outFmts...)
+	c.DPR = dynamic.NewNullable(dynamic.Uint32(dpr))
+	return c
 }
 
 // presetsMap — хелпер построения map пресетов: имя = ключ.
@@ -83,12 +91,24 @@ func TestValidateConfigInvalid(t *testing.T) {
 		{Presets: map[string]PresetConfig{"a@1": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
 		// Конфликт dpr в имени vs настройки.
 		{Presets: map[string]PresetConfig{"a@2": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(3))}}},
+		// Имя с @2 без dpr в настройках — ошибка (dpr обязателен и == 2).
+		{Presets: map[string]PresetConfig{"a@2": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
+		// Имя без @N с dpr: 2 — ошибка (без суффикса допустимо только dpr: 1).
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(2))}}},
+		// Имя без @N с dpr: 3 — ошибка (без суффикса допустимо только dpr: 1).
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}, DPR: dynamic.NewNullable(dynamic.Uint32(3))}}},
 		// Custom: невалидное имя.
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"bogus": presetCfg("", 0, 0, "webp")}}}},
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@0": presetCfg("", 0, 0, "webp")}}}},
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@1": presetCfg("", 0, 0, "webp")}}}},
-		// Custom: конфликт dpr в имени vs настройки.
+		// Custom: имя с @2 без dpr в настройках — ошибка (dpr обязателен и == 2).
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@2": presetCfg("", 0, 0, "webp")}}}},
+		// Custom: имя с @2 с dpr: 3 в настройках — ошибка (конфликт, должен быть 2).
 		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200@2": {DPR: dynamic.NewNullable(dynamic.Uint32(3)), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}}}},
+		// Custom: имя без @N с dpr: 2 — ошибка (без суффикса допустимо только dpr: 1).
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200": {DPR: dynamic.NewNullable(dynamic.Uint32(2)), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}}}},
+		// Custom: имя без @N с dpr: 3 — ошибка (без суффикса допустимо только dpr: 1).
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{"200x200": {DPR: dynamic.NewNullable(dynamic.Uint32(3)), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}}}},
 	}
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {
@@ -101,11 +121,12 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 	loop := true
 	valid := &Config{
 		Presets: map[string]PresetConfig{
+			// Пресет без @N с dpr: 1 (фиксированный множитель 1) — валиден.
 			"thumb": {
 				Crop:  dynamic.String("center"),
 				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp"), dynamic.String("avif")},
-				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
+				DPR:           dynamic.NewNullable(dynamic.Uint32(1)),
 				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
 				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
 			},
@@ -132,7 +153,8 @@ func TestValidateConfigValidPathPolicies(t *testing.T) {
 			"/users": {
 				Presets: dynamic.StringSlice{dynamic.String("thumb")},
 				Customs: map[string]PresetConfig{
-					"200x100@2": presetCfg("", 0, 0, "webp", "avif"),
+					// Имя с @2 требует dpr: 2.
+					"200x100@2": presetCfgWithDPR("", 0, 0, 2, "webp", "avif"),
 				},
 			},
 			// Без ведущего "/" и с завершающим "/" — нормализуются.
@@ -149,6 +171,29 @@ func TestValidateConfigValidPathPolicies(t *testing.T) {
 	}
 	if err := ValidateConfig(valid); err != nil {
 		t.Errorf("expected valid config with path-policies, got %v", err)
+	}
+}
+
+// TestValidateConfigValidCustomNameDPR — позитивные кейсы правил @N для
+// customs (пункт C): имя без @N без dpr — ок (wildcard); имя без @N с
+// dpr: 1 — ок; имя с @N с dpr == N — ок.
+func TestValidateConfigValidCustomNameDPR(t *testing.T) {
+	valid := &Config{
+		PathPolicies: map[string]PathPolicyConfig{
+			"/": {
+				Customs: map[string]PresetConfig{
+					// Без @N, dpr не задан — wildcard: допустимы x.webp/x@2.webp/x@3.webp.
+					"x": presetCfg("", 0, 0, "webp"),
+					// Без @N, dpr: 1 — ок (фиксированный множитель 1).
+					"200x200": {DPR: dynamic.NewNullable(dynamic.Uint32(1)), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+					// Имя с @2, dpr: 2 — ок.
+					"200x100@2": presetCfgWithDPR("", 0, 0, 2, "webp"),
+				},
+			},
+		},
+	}
+	if err := ValidateConfig(valid); err != nil {
+		t.Errorf("expected valid config, got %v", err)
 	}
 }
 
@@ -353,7 +398,7 @@ func TestCompileDuplicatePreset(t *testing.T) {
 	cfg := Config{
 		Presets: map[string]PresetConfig{
 			"thumb":   presetCfg("thumb", 120, 80, "webp"),
-			"thumb@2": presetCfg("thumb@2", 240, 160, "webp"),
+			"thumb@2": presetCfgWithDPR("thumb@2", 240, 160, 2, "webp"),
 		},
 	}
 	if _, err := Compile(cfg, nil, nil); err != nil {
@@ -366,7 +411,7 @@ func TestCompileDuplicatePresetWithDPRSuffix(t *testing.T) {
 	cfg := Config{
 		Presets: map[string]PresetConfig{
 			"thumb":   presetCfg("thumb", 120, 80, "webp"),
-			"thumb@2": presetCfg("thumb@2", 240, 160, "webp"),
+			"thumb@2": presetCfgWithDPR("thumb@2", 240, 160, 2, "webp"),
 		},
 	}
 	if _, err := Compile(cfg, nil, nil); err != nil {
@@ -379,11 +424,12 @@ func TestCompileCustomSizeFromName(t *testing.T) {
 		PathPolicies: map[string]PathPolicyConfig{
 			"/": {
 				Customs: map[string]PresetConfig{
-					"200x200":   presetCfg("", 0, 0, "webp"),
-					"200x":      presetCfg("", 0, 0, "webp"),
-					"x200":      presetCfg("", 0, 0, "webp"),
-					"x":         presetCfg("", 0, 0, "webp"),
-					"200x100@2": presetCfg("", 0, 0, "webp"),
+					"200x200": presetCfg("", 0, 0, "webp"),
+					"200x":    presetCfg("", 0, 0, "webp"),
+					"x200":    presetCfg("", 0, 0, "webp"),
+					"x":       presetCfg("", 0, 0, "webp"),
+					// Имя с @2 требует dpr: 2.
+					"200x100@2": presetCfgWithDPR("", 0, 0, 2, "webp"),
 				},
 			},
 		},

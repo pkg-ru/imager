@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/pkg-ru/imager/ports/videoframe"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
 // defaultFPS — частота кадров по умолчанию, если ffprobe не смог её

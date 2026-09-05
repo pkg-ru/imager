@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
 )
 
 // stateOf — хелпер построения state.

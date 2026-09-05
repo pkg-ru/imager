@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
 )
 
 // MemArtifact — object.Artifact поверх []byte (потокобезопасный).

@@ -1,4 +1,4 @@
-// Package imager — публичный фасад библиотеки github.com/pkg-ru/imager.
+// Package imager — публичный фасад библиотеки gitverse.ru/pkg-ru/imager.
 //
 // Предоставляет высокоуровневый API для внешних приложений:
 //
@@ -20,14 +20,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/httpapi"
-	"github.com/pkg-ru/imager/adapters/pixel"
-	"github.com/pkg-ru/imager/adapters/storage/fs"
-	"github.com/pkg-ru/imager/adapters/videoframe/ffmpeg"
-	"github.com/pkg-ru/imager/app/learning"
-	"github.com/pkg-ru/imager/bootstrap"
-	"github.com/pkg-ru/imager/composition"
-	"github.com/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/pixel"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/fs"
+	"gitverse.ru/pkg-ru/imager/adapters/videoframe/ffmpeg"
+	"gitverse.ru/pkg-ru/imager/app/learning"
+	"gitverse.ru/pkg-ru/imager/bootstrap"
+	"gitverse.ru/pkg-ru/imager/composition"
+	"gitverse.ru/pkg-ru/imager/observability"
 )
 
 // ConfigDirEnv — единственная env-переменная: путь к каталогу с настройками.
@@ -171,7 +171,7 @@ func NewServer(cfgDir string, opts ...Option) (*Server, error) {
 		MetadataDir:     rc.MetadataDir,
 		Detector:        proc.Detector,
 		VideoExtractor:  videoExt,
-		// S1: асинхронная публикация результата в кэш (production).
+		// Асинхронная публикация результата в кэш (production).
 		// Ответ клиенту не ждёт записи в remote; ошибки публикации
 		// логируются и инкрементируют метрику, результат остаётся
 		// доступным для повторной генерации.

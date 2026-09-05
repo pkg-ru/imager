@@ -1,4 +1,4 @@
-module github.com/pkg-ru/imager
+module gitverse.ru/pkg-ru/imager
 
 go 1.27.0
 

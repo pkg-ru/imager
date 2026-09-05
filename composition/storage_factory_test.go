@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
 )
 
 func TestBuildSourceStoreEmptyKindReturnsNil(t *testing.T) {

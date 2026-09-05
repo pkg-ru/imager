@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
 	"gopkg.in/yaml.v3"
 )
 

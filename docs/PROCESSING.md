@@ -17,7 +17,7 @@
 
 Канонический ключ кэша — сам canonical URL без хеширования: закэшированный ассет доступен по человекочитаемому имени.
 
-## Асинхронная публикация (S1)
+## Асинхронная публикация
 
 В production публикация результата в result-хранилище (кэш) выполняется **фоновыми воркерами** из bounded-очереди, а не на пути ответа клиенту. Это убирает задержку записи в remote (fsync/upload с retry до ~2 с) из критического пути запроса.
 
@@ -43,35 +43,39 @@
 
 ## Операции
 
+Операция (resize/crop/smart-crop/face-crop/object-crop) задаётся **только** полем `crop` пресета/custom; `trim` — независимый фильтр. Transform-коды в URL не кодируются; сегмент URL — имя пресета или custom-имя (размер-грамматика, например `640x`, `x400`, `120x80`, `x`).
+
 Порядок применения: **auto-orient → rotate → flip → trim → crop/resize**.
 
-### Resize
+### Resize (`crop: ""`)
 
-Применяется, когда transform отсутствует. Размер из URL умножается на DPR:
+Размер из URL-грамматики умножается на DPR:
 
 ```text
-/test-jpg/640x.webp     ширина 640, высота пропорционально
-/test-jpg/x400.webp     высота 400
-/test-jpg/120x80.webp   точный размер 120x80
-/test-jpg/x.webp        исходный размер (конвертация формата)
+/test-jpg/640x.webp     custom 640x: ширина 640, высота пропорционально
+/test-jpg/x400.webp     custom x400: высота 400
+/test-jpg/120x80.webp   custom 120x80: точный размер
+/test-jpg/x.webp        custom x: исходный размер (конвертация формата)
 ```
 
-### Crop (`c`)
+Custom с суффиксом `@N` в имени (например `120x80@2` — реально 240×160) обязан в конфигурации иметь `dpr: N` (правила dpr — [CONFIGURATION.md](CONFIGURATION.md#правила-dpr)).
+
+### Crop (`crop: center`)
 
 Центрированная обрезка под целевой размер.
 
-### Smart-crop (`sc`)
+### Smart-crop (`crop: smart`)
 
 Обрезка по attention-области (libvips). Требует сборки с `-tags libvips`.
 
-### Trim (`t`, а также суффикс `t` в `ct`/`sct`/`fct`/`oct`)
+### Trim (`trim: true`)
 
 Обрезка однотонных полей перед кропом/ресайзом. Настройки глобальные (`processing.default-trim-*`):
 
 - `default-trim-mode`: `auto` — цвет фона определяется по краевому пикселю; `color` — фиксированный `default-trim-color`;
 - `default-trim-tolerance`: допуск сравнения `[0,1]`.
 
-### Face-crop (`fc`) и Object-crop (`oc`)
+### Face-crop (`crop: face`) и Object-crop (`crop: object`)
 
 Обрезка по bounding box детекции. Требуют сборки с `-tags libvips,onnx`, C-библиотеки ONNX Runtime и настроенных моделей. Пустой путь модели отключает операцию — запрос вернёт ошибку `501 unsupported_format`.
 
@@ -87,7 +91,7 @@
 
 ## Водяные знаки
 
-Водяной знак описывается в секции `watermarks` (map: ключ = имя ватермарки) и применяется по имени. Приоритет: пресет → path-policy → `processing.default-watermark`.
+Водяной знак описывается в секции `watermarks` (map: ключ = имя ватермарки) и применяется по имени. Приоритет: пресет/custom (поле `watermark`) → `processing.default-watermark`.
 
 ```yaml
 watermarks:
@@ -100,10 +104,11 @@ watermarks:
 
 Семантика полей соответствует CSS `background-position` / `background-repeat` / `background-size`.
 
-Ограничения:
+Поведение:
 
 - libvips реализует position/repeat/size полностью;
-- анимированные выходы (GIF/WebP/APNG) с водяным знаком на libvips возвращают ошибку обработки (композит применился бы только к первому кадру).
+- на анимированных выходах (GIF/WebP/APNG) водяной знак накладывается **на каждый кадр** с сохранением delay/loop (`compositeWatermarkPerFrame`); APNG — на каждый APNG-чанк кадра;
+- все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
 Файл водяного знака обязан существовать на старте, иначе конфигурация отклоняется.
 
@@ -135,7 +140,7 @@ detection:
 
 Для GIF/WebP/APNG/HEIF поддерживаются:
 
-- ограничение числа кадров (`frames` в пресете, `policy.global.limits.frames`);
+- ограничение числа кадров (`frames` в пресете, `application.limits.frames`);
 - ограничение длительности (`duration`, мс);
 - зацикливание (`loop`: nil = `processing.default-loop`, true = бесконечно, false = однопроходно).
 
@@ -143,7 +148,7 @@ APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 
 ## Качество и сжатие
 
-- `quality` пресета (0–100; 0 = `processing.default-quality`) применяется к lossy-форматам (JPEG/WebP);
+- `quality` пресета (0–100; 0 = `processing.default-quality`) применяется ко всем lossy-форматам: JPEG, WebP, AVIF, HEIF/HEIC, JPEG XL;
 - PNG управляется уровнем сжатия: `libvips.encoders.png-compression-level` (0–9);
 - WebP: `libvips.encoders.webp-reduction-effort` (0–6).
 
@@ -151,8 +156,8 @@ APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 
 Три слоя защиты (значения — [CONFIGURATION.md](CONFIGURATION.md)):
 
-1. **Политика** (`policy.global.limits`): размер источника/выхода, размеры, DPR, кадры, длительность — проверяются до и после обработки.
+1. **Application** (`application.limits`): размер источника/выхода, размеры, DPR, кадры, длительность, concurrency — проверяются независимо от политики до и после обработки.
 2. **Движок**: libvips `limits.*` (timeout, output-bytes, concurrency, threads, cache).
-3. **Application**: `application.output-limit` (bounded writer прерывает запись), context deadline (`http.generate-timeout` → `504`), admission control (`http.max-concurrent-requests` → `503`).
+3. **HTTP-слой**: context deadline (`http.generate-timeout` → `504`), admission control (`http.max-concurrent-requests` → `503`).
 
 Перегрузка процессора (переполнение очереди слотов) возвращает клиенту `503 overloaded` с `Retry-After: 1`.

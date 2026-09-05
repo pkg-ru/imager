@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // mustReqSize строит канонический Request с произвольным Size (в т.ч.

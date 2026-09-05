@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/config"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/internal/testutil"
+	"gitverse.ru/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/internal/testutil"
 )
 
 // testConfigYAML — валидная конфигурация с path-policy "/" (разрешает пресет

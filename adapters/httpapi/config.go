@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
 )
 
 // DefaultGenerateTimeout — таймаут генерации ассета по умолчанию.
@@ -100,10 +100,8 @@ type TopPathsConfig struct {
 }
 
 // AdminConfig — конфигурация административных эндпоинтов.
-//
-// По умолчанию admin-эндпоинты ВЫКЛЮЧЕНЫ (enabled: false). При включении
-// обязателен непустой bearer-токен, иначе старт завершается ошибкой
-// (fail-fast) — endpoindы не могут работать с пустой авторизацией.
+// По умолчанию выключены (enabled: false); при включении обязателен непустой
+// bearer-токен, иначе старт завершается ошибкой (fail-fast).
 type AdminConfig struct {
 	// Enabled — включать ли admin-эндпоинты (POST /admin/assets/generate,
 	// DELETE /admin/assets/delete). Дефолт false.

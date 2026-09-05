@@ -15,7 +15,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // makePalettePng создаёт PNG с ограниченной палитрой (8 уникальных цветов),

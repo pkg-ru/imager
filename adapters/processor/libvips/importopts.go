@@ -16,7 +16,7 @@
 package libvips
 
 import (
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // importPlan — решённые import-параметры (платформенно-независимые).

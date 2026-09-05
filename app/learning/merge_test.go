@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
 )
 
 // fmts — хелпер построения dynamic.StringSlice.

@@ -8,22 +8,22 @@
 docker compose up -d --build
 ```
 
-Конфигурация монтируется из `./config` в `/etc/imager` read-only; внутри — три слоя: `setting.yaml` (обязательный) + `setting-local.yaml`, `generate.yaml` + `generate-local.yaml`, `failback.yaml` + `failback-local.yaml` (остальные опциональны). Порт `8080`.
+Конфигурация монтируется из `./config` в `/etc/imager/config` read-only, модели ONNX — `./models` в `/etc/imager/models` (`:ro`). `IMAGER_CONFIG_DIR=/etc/imager/config` — единственная env-переменная. Три слоя конфигурации (`setting`/`generate`/`failback`) описаны в [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации). Порт `8080`.
 
 ### Docker вручную
 
 ```bash
 docker build -t imager:production .
 docker run -d \
-  --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   -p 8080:8080 \
-  -v /host/config:/etc/imager:ro \
-  -v imager_source:/data/source \
-  -v imager_result:/data/result \
-  -e IMAGER_CONFIG_DIR=/etc/imager \
+  -v /host/config:/etc/imager/config:ro \
+  -v /host/models:/etc/imager/models:ro \
+  -v /host/source:/data/source:ro \
+  -v /host/result:/data/result:rw \
+  -e IMAGER_CONFIG_DIR=/etc/imager/config \
   imager:production
 ```
 
@@ -35,13 +35,15 @@ docker run -d \
 
 | Мера | Реализация |
 |------|------------|
-| Non-root | Пользователь `imager` (uid/gid 10001) в Dockerfile |
-| Read-only root fs | `read_only: true`; writable только `/data/source`, `/data/result` (volumes) и `/tmp` (tmpfs, noexec/nosuid) |
+| Non-root | Пользователь `imager` (uid 10001) в Dockerfile |
 | Dropped capabilities | `cap_drop: ALL`, `cap_add: []` |
 | no-new-privileges | `security_opt: no-new-privileges:true` |
+| tmpfs | `/tmp`: `rw,noexec,nosuid,size=64m` |
 | Права доступа | Бинарь `0755`, конфиг `0640`, каталоги данных `0750` |
 | Pinned образы | `golang:1.27.0-alpine3.23` / `alpine:3.23`, pinned версии пакетов |
 | Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
+
+**`read_only: true` не используется.** При read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — только bind-mounts `/data/result` (`:rw`) и tmpfs `/tmp`; `/data/source` монтируется `:ro` (исходники изменяются только через деплой), `/etc/imager/config` и `/etc/imager/models` — `:ro`.
 
 ## Ресурсы
 
@@ -59,7 +61,7 @@ Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 512M`; r
 
 1. прекращает принимать новые соединения;
 2. дожидается активных запросов до `server.shutdown-timeout` (по умолчанию 15s);
-3. закрывает хранилища, процессоры и пул буферов, останавливает janitor.
+3. дренирует очередь асинхронной публикации (см. [PROCESSING.md](PROCESSING.md#асинхронная-публикация)), закрывает хранилища, процессоры и пул буферов, останавливает janitor.
 
 Compose использует `stop_signal: INT` и `stop_grace_period: 15s`.
 
@@ -70,22 +72,18 @@ Compose использует `stop_signal: INT` и `stop_grace_period: 15s`.
 | `/healthz` | Liveness: `200 {"status":"alive"}`; `503` если процесс завершается |
 | `/readyz` | Readiness: `200 {"status":"ready"}`; `503` при shutdown |
 | `/metrics` | Метрики Prometheus exposition format |
-| `/debug/vars` | Сырые expvar-переменные |
 
 Health/metrics остаются доступными при перегрузке asset-обработки (admission control применяется только к asset-запросам).
 
 ## nginx как фронт-прокси
 
-Раздача готовых файлов через `try_files`, проксирование генерации, проброс/скрытие эндпоинтов и выравнивание заголовков ответа описаны в отдельной документации:
-
-- **[NGINX.md](NGINX.md)** — настройка nginx как фронт-прокси перед imager.
+Настройка описана в [NGINX.md](NGINX.md): раздача готовых файлов через `try_files`, проксирование генерации, проброс/скрытие эндпоинтов и выравнивание заголовков.
 
 Ключевые моменты:
 
-- **Раздача готовых файлов.** Ключ результата совпадает с путём в URL (без ведущего `/`), поэтому `try_files $uri @imager` с `root` на `result.path` отдаёт уже сгенерированные ассеты напрямую, не нагружая imager. Пути задаются в `source.path` / `result.path` (см. [STORAGE.md](STORAGE.md)).
-- **Проксирование.** `proxy_pass` на адрес imager с пробросом `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`; таймауты `proxy_read_timeout`/`proxy_send_timeout` должны быть больше `http.generate-timeout` (по умолчанию 30s).
-- **Эндпоинты.** В паблик пробрасываются asset URL (`/`), `/healthz`, `/readyz`. Служебные `/metrics`, `/debug/vars`, `/admin/*` рекомендуется закрыть (см. [NGINX.md](NGINX.md#3-общая-конфигурация-nginx)).
-- **Заголовки.** Для идентичности ответов используйте `server_tokens off`, `etag off`, `if_modified_since off`, `expires off` и `proxy_pass_header`/`proxy_hide_header` (см. [NGINX.md](NGINX.md#11-etag-и-last-modified)).
+- **Раздача готовых файлов.** Ключ результата совпадает с путём в URL (без ведущего `/`), поэтому `try_files $uri @imager` с `root` на `result.path` отдаёт уже сгенерированные ассеты напрямую. Пути задаются в `source.path` / `result.path` (см. [STORAGE.md](STORAGE.md)).
+- **Проксирование.** `proxy_pass` на адрес imager с пробросом `Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`; таймауты проксирования должны быть больше `http.generate-timeout` (по умолчанию 30s).
+- **Эндпоинты.** В паблик пробрасываются asset URL (`/`), `/healthz`, `/readyz`. Служебные `/metrics` и `/admin/*` рекомендуется закрыть.
 
 ## Наблюдаемость
 
@@ -115,7 +113,7 @@ Health/metrics остаются доступными при перегрузке
 
 ## Рекомендуемый production-профиль
 
-Конфигурация разделена на три слоя (см. [CONFIGURATION.md](CONFIGURATION.md)). Ниже — профиль по файлам-слоям.
+**Три слоя конфигурации**, слияние и приоритеты — [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации). Секреты — только в `*-local.yaml` (не коммитятся).
 
 `setting-local.yaml` (фундамент; секреты не коммитятся):
 
@@ -154,43 +152,52 @@ libvips:
 
 application:
   buffer-max-bytes: 524288000
+  limits:
+    source-bytes: 10485760
+    output-bytes: 10485760
 
 observability:
   log-level: "warn"
 ```
 
-`generate-local.yaml` (генерация ассетов):
+`generate-local.yaml` (генерация ассетов — path-policies + application.limits):
 
 ```yaml
 policy:
-  global:
-    authorization: "safe"
-    allowed-presets: ["thumb", "thumb@2"]
-    size-rules: ["0-2000x0-2000"]
-    limits:
-      source-bytes: 10485760
-      output-bytes: 10485760
+  presets:
+    thumb:
+      width: 200
+      height: 200
+      output-formats: [webp, avif]
+      dpr: 1
+  path-policies:
+    "/":
+      presets: ["thumb"]
+      customs:
+        x:
+          output-formats: [webp]
 
 application:
-  output-limit: 10485760
+  limits:
+    source-bytes: 10485760
+    output-bytes: 10485760
 ```
 
 Чек-лист перед запуском:
 
 - [ ] `*-local.yaml` с секретами не коммитятся; секреты не в базовых `*.yaml`;
-- [ ] `authorization: "safe"` и настроены `allowed-presets`/`size-rules`;
-- [ ] заданы лимиты `source-bytes`/`output-bytes` и `application.output-limit`;
+- [ ] настроены `policy.path-policies` (deny-by-default) и лимиты `application.limits`;
 - [ ] `max-concurrent-requests` соответствует ресурсам контейнера;
 - [ ] healthcheck балансировщика указывает на `/healthz` (liveness) и `/readyz` (readiness);
 - [ ] `/metrics` закрыт от публичного доступа;
-- [ ] каталоги source/result смонтированы на достаточные volumes; для fs-result работает janitor;
+- [ ] `/data/source` смонтирован `:ro`, `/data/result` — на достаточный `:rw` volume; для fs-result работает janitor;
 - [ ] TLS терминируется на reverse-proxy (сервис слушает plain HTTP).
 
 ## CI
 
-Workflow: `.github/workflows/ci.yml`.
+Workflow: [`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml).
 
-- `gofmt`, `go vet`, `go test`, `go test -race`;
-- fuzz smoke: `FuzzParse`, `FuzzParseSize` (domain/asset), `FuzzCleanRelContainment`, `FuzzSafeKey` (storage/fs);
-- contract-тесты хранилищ (`contract.Run` для ResultStore, `contract.RunSource` для SourceStore) на FS-адаптерах;
-- сборка `cmd/imager` и container build; сканирование образа; секреты — только через GitHub Secrets.
+- матрица build tags: `default`/`onnx` на Linux и Windows, `libvips`/`libvips,onnx` на Linux (CGO);
+- `gofmt`, `go vet`, `go test`, `go test -race` (Linux);
+- fuzz smoke: `FuzzParse`, `FuzzParseSize` (domain/asset), `FuzzCleanRelContainment` (storage/fs);
+- `govulncheck`, сборка `cmd/imager`, container build и сканирование Trivy.

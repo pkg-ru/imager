@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 func TestResultStoreNotFound(t *testing.T) {

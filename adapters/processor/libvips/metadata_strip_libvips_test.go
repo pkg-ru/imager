@@ -20,7 +20,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // makeBasePng создаёт простой PNG 4x4 (сплошной красный).

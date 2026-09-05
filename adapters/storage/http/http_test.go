@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 func TestNewSourceStoreValidation(t *testing.T) {

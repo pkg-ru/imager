@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // TestHandlerMaxURLLenRejected проверяет ограничение длины URL (request limit).

@@ -1,4 +1,4 @@
-// Тесты shrink-on-load (Фаза 2): вычисление коэффициента предварительного
+// Тесты shrink-on-load: вычисление коэффициента предварительного
 // уменьшения при декодировании. Файл без build-tag: тестируемая логика
 // платформенно-независима (shrinkonload.go).
 package libvips
@@ -6,7 +6,7 @@ package libvips
 import (
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 func mustPlanShrink(t *testing.T, mutate func(p *processing.ProcessingPlan)) *processing.ProcessingPlan {

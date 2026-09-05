@@ -9,22 +9,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/domain/policy"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/ports/bounded"
-	"github.com/pkg-ru/imager/ports/buffer"
-	"github.com/pkg-ru/imager/ports/coordinator"
-	"github.com/pkg-ru/imager/ports/detector"
-	"github.com/pkg-ru/imager/ports/generation"
-	"github.com/pkg-ru/imager/ports/metadata"
-	"github.com/pkg-ru/imager/ports/processor"
-	"github.com/pkg-ru/imager/ports/storage"
-	"github.com/pkg-ru/imager/ports/videoframe"
+	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/ports/bounded"
+	"gitverse.ru/pkg-ru/imager/ports/buffer"
+	"gitverse.ru/pkg-ru/imager/ports/coordinator"
+	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"gitverse.ru/pkg-ru/imager/ports/generation"
+	"gitverse.ru/pkg-ru/imager/ports/metadata"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
 // Logger — единый интерфейс логирования из observability.
@@ -43,7 +43,7 @@ const publishRetryMax = 2 * time.Second
 // publishRetryAttempts — максимальное число попыток публикации.
 const publishRetryAttempts = 3
 
-// Параметры асинхронной публикации (S1). Публикация результата в кэш
+// Параметры асинхронной публикации. Публикация результата в кэш
 // выполняется в фоновых воркерах из bounded-очереди, чтобы не держать ответ
 // клиента на времени записи в remote (fsync/upload с retry до 2s).
 const (
@@ -132,8 +132,8 @@ type Deps struct {
 	// (если сегмент — размер-грамматика), но НЕ сохраняются в storage.
 	Learning LearningController
 
-	// PublishQueue — настройки фоновой (асинхронной) публикации результата
-	// (S1). Публикация выполняется воркерами из bounded-очереди после ответа
+	// PublishQueue — настройки фоновой (асинхронной) публикации результата.
+	// Публикация выполняется воркерами из bounded-очереди после ответа
 	// клиенту, чтобы не держать ответ на времени записи в remote.
 	// nil = асинхронная публикация выключена (публикации синхронные, прежнее
 	// поведение) — используется в тестах, где кэш должен быть готов сразу
@@ -143,7 +143,7 @@ type Deps struct {
 	PublishQueue *PublishQueueConfig
 }
 
-// PublishQueueConfig — конфигурация фоновой публикации (S1).
+// PublishQueueConfig — конфигурация фоновой публикации.
 type PublishQueueConfig struct {
 	// Disabled — если true, публикация выполняется синхронно (прежнее
 	// поведение). false (умолчание) = асинхронная публикация.
@@ -184,7 +184,7 @@ type Service struct {
 	log     Logger
 	metrics observability.Metrics
 
-	// Асинхронная публикация (S1): bounded-очередь и воркеры, выполняющие
+	// Асинхронная публикация: bounded-очередь и воркеры, выполняющие
 	// publish результата в кэш в фоне, чтобы ответ клиенту не ждал записи
 	// в remote (fsync/upload с retry). nil-очередь = асинхронная публикация
 	// выключена (все публикации синхронные, прежнее поведение).
@@ -209,7 +209,7 @@ type publishTask struct {
 	reader io.ReadSeekCloser
 }
 
-// publishQueueEnabled сообщает, включена ли асинхронная публикация (S1):
+// publishQueueEnabled сообщает, включена ли асинхронная публикация:
 // заданный конфиг (не nil) и Disabled=false. nil/Disabled=true — синхронная
 // публикация (прежнее поведение, публикация на пути ответа).
 func (s *Service) publishQueueEnabled() bool {
@@ -266,7 +266,7 @@ func New(d Deps) (*Service, error) {
 		metrics = observability.NopMetrics()
 	}
 	s := &Service{deps: d, log: log, metrics: metrics}
-	// S1: bounded-очередь + воркеры асинхронной публикации. Публикация
+	// Bounded-очередь + воркеры асинхронной публикации. Публикация
 	// идёт в фоне; при переполнении очереди — fallback на синхронный
 	// publish, чтобы не терять результаты. При выключенном конфиге
 	// (nil/Disabled) воркеры не запускаются — публикация синхронная.
@@ -968,7 +968,7 @@ func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
 // Возвращает Buffer, из которого клиент читает результат.
 //
 // Отдача клиенту идёт из Buffer (куда процессор записал результат), а не из
-// remote. Публикация выполняется асинхронно (S1): результат ставится в
+// remote. Публикация выполняется асинхронно: результат ставится в
 // bounded-очередь фоновых воркеров и возвращается клиенту СРАЗУ, без
 // ожидания записи в remote. Waiters singleflight получают reader из общего
 // refcount-буфера (фаза 2), поэтому их ответ НЕ зависит от завершения
@@ -1019,7 +1019,7 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 		return buf, nil
 	}
 
-	// Публикация: асинхронно через bounded-очередь (S1). Открываем ОТДЕЛЬНЫЙ
+	// Публикация: асинхронно через bounded-очередь. Открываем ОТДЕЛЬНЫЙ
 	// reader из refcount-буфера ДО помещения задачи в очередь: клиент может
 	// закрыть свой reader/буфер сразу после ответа, и данные должны остаться
 	// живыми для воркера (refcount удерживает память/file, пока открыт хотя

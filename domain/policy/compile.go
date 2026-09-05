@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/asset"
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // Config — конфигурация политики (DTO, не связан с YAML).
@@ -180,13 +180,12 @@ func ValidateConfig(cfg *Config) error {
 					Reason: fmt.Sprintf("custom name %q is not a valid size: %v", cname, err),
 				})
 			}
-			// Конфликт dpr в имени vs настройки.
-			if cc.DPR.Set && nameDPR != 0 && asset.DPR(cc.DPR.Value.Unwrap()) != nameDPR {
-				errs = append(errs, &ValidationError{
-					Path:   cb + ".dpr",
-					Reason: fmt.Sprintf("dpr %d conflicts with dpr %d in custom name %q", cc.DPR.Value.Unwrap(), nameDPR.Int(), cname),
-				})
-			}
+			// Соответствие @N-суффикса имени и поля dpr (те же правила, что
+			// для пресетов): имя с @N (2/3) требует dpr == N (отсутствие или
+			// другое значение — ошибка конфигурации); имя без @N — wildcard:
+			// dpr не фиксирован, допустим любой @dpr в URL, а если поле dpr
+			// задано — только dpr: 1.
+			validateNameDPR(&errs, cb, "custom", cname, cc)
 			validatePresetConfig(&errs, cb, cname, cc, nil)
 		}
 	}
@@ -213,23 +212,18 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 		}
 		presetNames[name] = true
 		// Имя пресета: @0/@1 запрещены, @2/@3 допустимы.
-		if _, nameDPR, err := asset.SplitPresetNameDPR(name); err != nil {
+		_, nameDPR, err := asset.SplitPresetNameDPR(name)
+		if err != nil {
 			*errs = append(*errs, &ValidationError{Path: base + ".name", Reason: err.Error()})
 		} else if nameDPR.Int() == asset.DefaultDPR {
 			*errs = append(*errs, &ValidationError{
 				Path:   base + ".name",
 				Reason: fmt.Sprintf("preset name %q: dpr suffix @1 is not allowed", name),
 			})
-		}
-		// Конфликт dpr в имени vs настройки.
-		if p.DPR.Set {
-			_, nameDPR, _ := asset.SplitPresetNameDPR(name)
-			if nameDPR != 0 && asset.DPR(p.DPR.Value.Unwrap()) != nameDPR {
-				*errs = append(*errs, &ValidationError{
-					Path:   base + ".dpr",
-					Reason: fmt.Sprintf("dpr %d conflicts with dpr %d in preset name %q", p.DPR.Value.Unwrap(), nameDPR.Int(), name),
-				})
-			}
+		} else {
+			// Соответствие @N-суффикса имени и поля dpr: имя с @N (2/3)
+			// требует dpr == N; без @N допустимо только dpr: 1.
+			validateNameDPR(errs, base, "preset", name, p)
 		}
 	}
 
@@ -292,6 +286,52 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 	}
 	if _, err := processing.ParseFlip(flip); err != nil {
 		*errs = append(*errs, &ValidationError{Path: base + ".flip", Reason: err.Error()})
+	}
+}
+
+// validateNameDPR проверяет соответствие фиксированного @N-суффикса имени
+// пресета/custom и поля dpr в настройках. Правила одинаковы для пресетов
+// и customs:
+//
+//   - имя с суффиксом @N (N = 2/3) жёстко фиксирует dpr: поле dpr ОБЯЗАНО
+//     присутствовать и быть РАВНО N. Отсутствие dpr или другое значение —
+//     ошибка конфигурации;
+//   - имя без суффикса @N — wildcard-dpr: dpr не закреплён в имени, в URL
+//     допустим любой @N. Если поле dpr задано, единственное допустимое
+//     значение — 1 (фиксированный множитель 1; @dpr в URL запрещён).
+//
+// kind используется в сообщениях об ошибках ("preset"/"custom"). Суффиксы
+// @0 (ошибка парсинга) и @1 обрабатываются вызывающим кодом.
+func validateNameDPR(errs *ValidationErrors, base, kind, name string, p PresetConfig) {
+	_, nameDPR, err := asset.SplitPresetNameDPR(name)
+	if err != nil || nameDPR.Int() == asset.DefaultDPR {
+		return // ошибки суффикса обрабатываются вызывающим кодом
+	}
+	if nameDPR != 0 {
+		// Имя с суффиксом @N: поле dpr обязательно и должно быть РАВНО N.
+		if !p.DPR.Set {
+			*errs = append(*errs, &ValidationError{
+				Path:   base + ".dpr",
+				Reason: fmt.Sprintf("%s name %q: dpr is required for @%d suffix (set dpr: %d)", kind, name, nameDPR.Int(), nameDPR.Int()),
+			})
+			return
+		}
+		if asset.DPR(p.DPR.Value.Unwrap()) != nameDPR {
+			*errs = append(*errs, &ValidationError{
+				Path:   base + ".dpr",
+				Reason: fmt.Sprintf("%s name %q: dpr %d conflicts with dpr %d in name (must be equal)", kind, name, p.DPR.Value.Unwrap(), nameDPR.Int()),
+			})
+		}
+		return
+	}
+	// Имя без суффикса @N: допустимо только dpr: 1.
+	if p.DPR.Set {
+		if v := p.DPR.Value.Unwrap(); v != uint32(asset.DefaultDPR) {
+			*errs = append(*errs, &ValidationError{
+				Path:   base + ".dpr",
+				Reason: fmt.Sprintf("%s name %q: dpr %d is not allowed without @dpr suffix (only dpr: %d)", kind, name, v, asset.DefaultDPR),
+			})
+		}
 	}
 }
 

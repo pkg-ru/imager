@@ -1,6 +1,6 @@
 package learning
 
-import "github.com/pkg-ru/imager/domain/asset"
+import "gitverse.ru/pkg-ru/imager/domain/asset"
 
 // service.go — точка сборки фундамента learning-mode: связывает
 // Controller (runtime-флаг) и Recorder (сборщик наблюдений).

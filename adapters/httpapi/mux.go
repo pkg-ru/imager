@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/web/static"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/web/static"
 )
 
 // MetricsAuthConfig — конфигурация защиты /metrics endpoint.

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/observability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,21 +30,11 @@ const (
 // может быть переопределён (например, в тестах) для проверки warning'ов.
 var configLogger observability.Logger = observability.NopLogger()
 
-// LoadConfigDir загружает конфигурацию из каталога dir, объединяя три слоя:
-//
-//   - setting:  `${dir}/setting.yaml` (обязательный) + `${dir}/setting-local.yaml`;
-//   - generate: `${dir}/generate.yaml` + `${dir}/generate-local.yaml` (оба опциональны);
-//   - failback: `${dir}/failback.yaml` + `${dir}/failback-local.yaml` (оба опциональны).
-//
-// Для каждой пары выполняется deep merge base ← local (вложенные map мержатся
-// рекурсивно, скаляры заменяются, списки заменяются целиком). Затем три слоя
-// объединяются в порядке setting → generate → failback; при совпадении
-// top-level ключа между несколькими базовыми файлами в лог пишется warning.
-//
-// Результат strict-декодируется в единый typed RuntimeConfig. Неизвестные
-// поля в любом из файлов отклоняются (fail-fast). Отсутствие generate/failback
-// и любых *-local файлов — нормальная ситуация (значения берутся из умолчаний
-// схемы или из setting.yaml).
+// LoadConfigDir загружает конфигурацию из каталога dir: три слоя (setting,
+// generate, failback), каждый с опциональным *-local файлом, deep merge
+// base ← local и объединением в порядке setting → generate → failback.
+// Результат strict-декодируется в единый RuntimeConfig (неизвестные поля
+// отклоняются).
 func LoadConfigDir(dir string) (*RuntimeConfig, error) {
 	setting, err := loadLayer(dir, BaseConfigFile, LocalConfigFile, true)
 	if err != nil {

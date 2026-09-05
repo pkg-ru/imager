@@ -17,14 +17,14 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/pkg-ru/imager/adapters/processor/detection"
-	"github.com/pkg-ru/imager/adapters/processor/libvips"
-	"github.com/pkg-ru/imager/adapters/processor/routing"
-	"github.com/pkg-ru/imager/composition"
-	"github.com/pkg-ru/imager/domain/processing"
-	"github.com/pkg-ru/imager/observability"
-	"github.com/pkg-ru/imager/ports/detector"
-	"github.com/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/libvips"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/routing"
+	"gitverse.ru/pkg-ru/imager/composition"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/observability"
+	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
 
 // Logger — узкий интерфейс логирования composition root (реализуется

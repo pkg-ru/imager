@@ -18,7 +18,7 @@
 package libvips
 
 import (
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 // shrinkOnLoadInfo — лёгкие метаданные исходника, достаточные для решения о

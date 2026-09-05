@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 // TestGenerateCacheStampedeSingleFlight проверяет, что при конкурентных

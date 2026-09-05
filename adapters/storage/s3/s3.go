@@ -22,10 +22,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"github.com/pkg-ru/imager/adapters/lru"
-	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/adapters/lru"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
 )
 
 // multipartPartSize — размер одной части multipart upload (5 МБ минимум S3).

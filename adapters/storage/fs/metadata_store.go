@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/pkg-ru/imager/coordination/singleflight"
-	"github.com/pkg-ru/imager/domain/filemeta"
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/ports/metadata"
+	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/ports/metadata"
 )
 
 // Ограничения sidecar-хранилища:

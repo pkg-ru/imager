@@ -3,7 +3,7 @@ package detection
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 )
 
 // PortDetector is a thin adapter over detection.Detector implementing the

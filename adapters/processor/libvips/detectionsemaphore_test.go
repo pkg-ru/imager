@@ -1,4 +1,4 @@
-// Тесты двухуровневых семафоров (Фаза 4): порядок захвата (handoff),
+// Тесты двухуровневых семафоров: порядок захвата (handoff),
 // fallback при отказе ожидания, конфиг-валидация DetectionSemaphoreOpts.
 //
 // Файл без build-tag: логика detectionsemaphore.go не зависит от govips и
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
 )
 
 func newTestGate(vipsMax, detMax int, detMaxWait time.Duration) *detectionGate {

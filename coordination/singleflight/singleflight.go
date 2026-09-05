@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg-ru/imager/domain/object"
-	"github.com/pkg-ru/imager/ports/coordinator"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/ports/coordinator"
 )
 
 // Ограничения по умолчанию.
@@ -30,7 +30,7 @@ const (
 	// DefaultMaxKeyLen — максимальная длина ключа в байтах.
 	DefaultMaxKeyLen = 1024
 	// DefaultMaxKeys — максимальное число одновременно отслеживаемых ключей.
-	// Quick win (Q5): поднято с 4096 до 16384 — больше одновременных ключей
+	// Поднято с 4096 до 16384 — больше одновременных ключей
 	// без отклонения ErrTooManyKeys при высокой кардинальности URL.
 	DefaultMaxKeys = 16384
 	// DefaultWaitTimeout — таймаут ожидания завершения владельца (0 = без

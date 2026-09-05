@@ -9,11 +9,11 @@ import (
 	"github.com/pkg-ru/dynamic"
 	"gopkg.in/yaml.v3"
 
-	"github.com/pkg-ru/imager/adapters/httpapi"
-	"github.com/pkg-ru/imager/adapters/processor/libvips"
-	"github.com/pkg-ru/imager/adapters/storage/remote"
-	"github.com/pkg-ru/imager/app/generatev2"
-	"github.com/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/libvips"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/config"
 )
 
 // DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
@@ -113,14 +113,14 @@ type LibvipsConfig struct {
 	ShrinkOnLoad libvips.ShrinkOnLoadOpts
 	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
 	WatermarkCache libvips.WatermarkCacheOpts
-	// DetectionSem — настройки detection-семафора (Фаза 4): отдельный лимит
+	// DetectionSem — настройки detection-семафора: отдельный лимит
 	// конкурентности ONNX-инференса вне libvips-слотов.
 	DetectionSem libvips.DetectionSemaphoreOpts
-	// Color — политика ICC color management (Фаза 5a): strip (дефолт,
+	// Color — политика ICC color management: strip (дефолт,
 	// удалять профиль), transform (конвертация в sRGB перед обработкой),
 	// keep (сохранить embedded-профиль в выход).
 	Color libvips.ColorMode
-	// OperationCache — настройки operation cache libvips (Фаза 5b).
+	// OperationCache — настройки operation cache libvips.
 	// Включено по умолчанию (обратная совместимость); false = нулевые
 	// лимиты кэша при Startup (кэш отключён).
 	OperationCache libvips.OperationCacheOpts
@@ -314,23 +314,23 @@ type LibvipsYAML struct {
 	ShrinkOnLoad ShrinkOnLoadYAML `yaml:"shrink-on-load"`
 	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
 	WatermarkCache WatermarkCacheYAML `yaml:"watermark-cache"`
-	// DetectionSem — настройки detection-семафора (Фаза 4).
+	// DetectionSem — настройки detection-семафора.
 	DetectionSem DetectionSemYAML `yaml:"detection"`
-	// Color — политика ICC color management (Фаза 5a): strip/transform/keep.
+	// Color — политика ICC color management: strip/transform/keep.
 	Color ColorYAML `yaml:"color"`
-	// OperationCache — настройки operation cache (Фаза 5b).
+	// OperationCache — настройки operation cache.
 	OperationCache OperationCacheYAML `yaml:"operation-cache"`
 	// MetricsInterval — интервал сбора vips-метрик (duration; 0 = дефолт 15s).
 	MetricsInterval dynamic.String `yaml:"metrics-interval"`
 }
 
-// ColorYAML — YAML-представление политики color management (Фаза 5a).
+// ColorYAML — YAML-представление политики color management.
 type ColorYAML struct {
 	// Mode — режим: strip (дефолт), transform, keep.
 	Mode dynamic.String `yaml:"mode"`
 }
 
-// OperationCacheYAML — YAML-представление настроек operation cache (Фаза 5b).
+// OperationCacheYAML — YAML-представление настроек operation cache.
 type OperationCacheYAML struct {
 	// Enabled — включить operation cache libvips (nil = включено по
 	// умолчанию, обратная совместимость).
@@ -1056,7 +1056,7 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 	if l.ShrinkOnLoad.Enabled.Set {
 		cfg.ShrinkOnLoad = libvips.NewShrinkOnLoadOpts(l.ShrinkOnLoad.Enabled.Value.Unwrap(), true)
 	}
-	// Кэш ватермарок (Фаза 3): fail-fast валидация значений на старте.
+	// Кэш ватермарок: fail-fast валидация значений на старте.
 	wc := libvips.WatermarkCacheOpts{Enabled: true}
 	if l.WatermarkCache.Enabled.Set {
 		wc.Enabled = l.WatermarkCache.Enabled.Value.Unwrap()
@@ -1077,7 +1077,7 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		return LibvipsConfig{}, fmt.Errorf("watermark-cache: %w", err)
 	}
 	cfg.WatermarkCache = wc
-	// Detection-семофор (Фаза 4): fail-fast валидация значений на старте.
+	// Detection-семофор: fail-fast валидация значений на старте.
 	ds := libvips.DetectionSemaphoreOpts{
 		Concurrency: int(l.DetectionSem.Concurrency.Unwrap()),
 	}
@@ -1095,7 +1095,7 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		return LibvipsConfig{}, fmt.Errorf("detection: %w", err)
 	}
 	cfg.DetectionSem = ds
-	// Цветовой менеджмент (Фаза 5a): строгая политика mode (strip/transform/
+	// Цветовой менеджмент: строгая политика mode (strip/transform/
 	// keep). Empty = strip (дефолт, обратная совместимость); неизвестное
 	// значение — fail-fast ошибка конфигурации.
 	colorMode, err := libvips.ParseColorMode(l.Color.Mode.Unwrap())
@@ -1103,7 +1103,7 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		return LibvipsConfig{}, fmt.Errorf("color: %w", err)
 	}
 	cfg.Color = colorMode
-	// Operation cache (Фаза 5b): nil (ключ не задан) = включено по умолчанию.
+	// Operation cache: nil (ключ не задан) = включено по умолчанию.
 	if l.OperationCache.Enabled.Set {
 		cfg.OperationCache = libvips.NewOperationCacheOpts(l.OperationCache.Enabled.Value.Unwrap(), true)
 	}

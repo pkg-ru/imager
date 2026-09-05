@@ -19,7 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pkg-ru/imager/ports/buffer"
+	"gitverse.ru/pkg-ru/imager/ports/buffer"
 )
 
 // ErrBufferLimit — сигнал превышения лимита размера буфера.

@@ -10,7 +10,7 @@ package detector
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 )
 
 // Detector detects faces and objects on an RGB image.

@@ -3,7 +3,7 @@ package ftp
 import (
 	"context"
 
-	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
 )
 
 // store — общая часть SourceStore и ResultStore: опции и доступ к пулу.

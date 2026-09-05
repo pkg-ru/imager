@@ -44,8 +44,8 @@ func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Gauge http_inflight: инкрементируем на время обработки запроса.
 	// Используем type-assert, чтобы не расширять публичный интерфейс Metrics.
-	// Quick win (Q6): атомарный Inc/Dec (expvar.Int.Add) вместо неатомарной
-	// пары Value()+1/Set() — исключает гонку между параллельными запросами.
+	// Атомарный Inc/Dec (expvar.Int.Add) вместо неатомарной пары Value()+1/Set()
+	// — исключает гонку между параллельными запросами.
 	if sm, ok := m.metrics.(*StdMetrics); ok {
 		sm.IncHttpInflight()
 	}

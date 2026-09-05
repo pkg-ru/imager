@@ -6,7 +6,7 @@ package libvips
 import (
 	"testing"
 
-	"github.com/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
 func mustPlanFull(t *testing.T, mutate func(p *processing.ProcessingPlan)) *processing.ProcessingPlan {
@@ -261,7 +261,7 @@ func TestPassthroughEligibleNegative(t *testing.T) {
 }
 
 // TestPassthroughEligibleColorMode — взаимодействие ICC-профиля и политики
-// color management (Фаза 5a): passthrough допускается для sRGB-совместимого
+// color management: passthrough допускается для sRGB-совместимого
 // профиля в режиме transform и для любого профиля в режиме keep; в режиме
 // strip (и для не-sRGB профиля в transform) — отклоняется.
 func TestPassthroughEligibleColorMode(t *testing.T) {

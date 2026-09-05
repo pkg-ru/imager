@@ -12,7 +12,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 )
 
 // SourceStore открывает исходные объекты по ключу. Реализации могут быть

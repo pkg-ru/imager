@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/pkg-ru/imager/ports/bounded"
+	"gitverse.ru/pkg-ru/imager/ports/bounded"
 )
 
 // Регрессия: вывод ровно max байт должен читаться до EOF, а не отклоняться

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"github.com/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
 )
 
 func mustReq(t *testing.T, url string) *asset.Request {
@@ -122,13 +122,14 @@ func TestPresetAllowedWithDPR(t *testing.T) {
 }
 
 func TestPresetDPRSetDeniesSuffix(t *testing.T) {
-	// Пресет banner с dpr: 2 в настройках: @2 в URL запрещён.
+	// Пресет banner с dpr: 1 в настройках (фиксированный множитель 1):
+	// @2 в URL запрещён — вариант @N требует отдельного пресета banner@2.
 	cfg := baseCfg()
 	pc := cfg.Presets["banner"]
-	pc.DPR = dynamic.NewNullable(dynamic.Uint32(2))
+	pc.DPR = dynamic.NewNullable(dynamic.Uint32(1))
 	cfg.Presets["banner"] = pc
 	p := mustPolicy(t, cfg)
-	// Без суффикса — допустимо, итоговый dpr=2.
+	// Без суффикса — допустимо, итоговый dpr=1.
 	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
 	d := p.Authorize(req)
 	if !d.Allowed {
@@ -148,7 +149,7 @@ func TestPresetDPRSetDeniesSuffix(t *testing.T) {
 func TestPresetNameWithDPR(t *testing.T) {
 	// Пресет "banner@2": в URL допустим ТОЛЬКО banner@2.
 	cfg := baseCfg()
-	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfg("banner@2", 200, 0, "webp")}
+	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfgWithDPR("banner@2", 200, 0, 2, "webp")}
 	pp := cfg.PathPolicies["/"]
 	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
 	cfg.PathPolicies["/"] = pp
@@ -205,12 +206,13 @@ func TestCustomWithDPRWildcard(t *testing.T) {
 }
 
 func TestCustomDPRSetDeniesSuffix(t *testing.T) {
-	// Custom 200x200 с dpr: 2 в настройках: @2 в URL запрещён.
+	// Custom 200x200 с dpr: 1 в настройках (фиксированный множитель 1):
+	// @2 в URL запрещён — для варианта @N нужен отдельный custom 200x200@2.
 	cfg := baseCfg()
 	cfg.PathPolicies["/"].Customs["200x200"] = PresetConfig{
 		Width: dynamic.Uint32(200), Height: dynamic.Uint32(200),
 		OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
-		DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
+		DPR:           dynamic.NewNullable(dynamic.Uint32(1)),
 	}
 	p := mustPolicy(t, cfg)
 	req := mustReq(t, "/photos/photo-1-jpg/200x200@2.webp")
@@ -229,9 +231,10 @@ func TestCustomDPRSetDeniesSuffix(t *testing.T) {
 }
 
 func TestCustomExactNameWithDPR(t *testing.T) {
-	// Точный custom "200x100@2": URL 200x100@2 матчится точным именем.
+	// Точный custom "200x100@2" (имя с @2 требует dpr: 2): URL 200x100@2
+	// матчится точным именем.
 	cfg := baseCfg()
-	cfg.PathPolicies["/"].Customs["200x100@2"] = presetCfg("", 0, 0, "webp", "avif")
+	cfg.PathPolicies["/"].Customs["200x100@2"] = presetCfgWithDPR("", 0, 0, 2, "webp", "avif")
 	p := mustPolicy(t, cfg)
 	req := mustReq(t, "/photos/photo-1-jpg/200x100@2.webp")
 	d := p.Authorize(req)
@@ -332,10 +335,11 @@ func TestResolveDPRFromURL(t *testing.T) {
 }
 
 func TestResolveDPRFromSettings(t *testing.T) {
-	// Пресет banner с dpr: 2: URL без суффикса → итоговый dpr=2.
+	// Пресет banner с dpr: 1 (фиксированный множитель): URL без суффикса →
+	// итоговый dpr=1.
 	cfg := baseCfg()
 	pc := cfg.Presets["banner"]
-	pc.DPR = dynamic.NewNullable(dynamic.Uint32(2))
+	pc.DPR = dynamic.NewNullable(dynamic.Uint32(1))
 	cfg.Presets["banner"] = pc
 	p := mustPolicy(t, cfg)
 	req := mustReq(t, "/photos/photo-1-jpg/banner.webp")
@@ -343,15 +347,15 @@ func TestResolveDPRFromSettings(t *testing.T) {
 	if !d.Allowed {
 		t.Fatalf("expected allowed, got %+v", d)
 	}
-	if got := resolved.DPR().Int(); got != 2 {
-		t.Errorf("resolved DPR = %d, want 2", got)
+	if got := resolved.DPR().Int(); got != 1 {
+		t.Errorf("resolved DPR = %d, want 1", got)
 	}
 }
 
 func TestResolveDPRFromName(t *testing.T) {
 	// Пресет "banner@2": URL banner@2 → dpr=2 из имени.
 	cfg := baseCfg()
-	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfg("banner@2", 200, 0, "webp")}
+	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfgWithDPR("banner@2", 200, 0, 2, "webp")}
 	pp := cfg.PathPolicies["/"]
 	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
 	cfg.PathPolicies["/"] = pp
@@ -369,7 +373,7 @@ func TestResolveDPRFromName(t *testing.T) {
 func TestResolveDPRConflict(t *testing.T) {
 	// Пресет "banner@2": URL banner@3 → конфликт dpr.
 	cfg := baseCfg()
-	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfg("banner@2", 200, 0, "webp")}
+	cfg.Presets = map[string]PresetConfig{"banner@2": presetCfgWithDPR("banner@2", 200, 0, 2, "webp")}
 	pp := cfg.PathPolicies["/"]
 	pp.Presets = dynamic.StringSlice{dynamic.String("banner@2")}
 	cfg.PathPolicies["/"] = pp

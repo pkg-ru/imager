@@ -17,7 +17,7 @@
 package generatev2
 
 import (
-	"github.com/pkg-ru/imager/ports/generation"
+	"gitverse.ru/pkg-ru/imager/ports/generation"
 )
 
 // OutcomeKind — категория исхода генерации для маппинга в HTTP-статусы.

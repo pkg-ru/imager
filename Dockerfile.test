@@ -1,16 +1,12 @@
 # syntax=docker/dockerfile:1.7
 ###############################################################################
-# Dockerfile.test — контейнер для запуска тестов с libvips (cgo/govips) и
-# ONNX Runtime (реальная детекция лиц/объектов).
-#
-# Аналог builder-стадии production Dockerfile: golang + vips-dev + кодеки +
-# onnxruntime (edge, musl). Сборка и прогон тестов — с тэгами "libvips,onnx":
+# Dockerfile.test — контейнер для тестов с libvips (cgo/govips) и ONNX Runtime
+# (реальная детекция). Аналог builder-стадии production Dockerfile; прогон —
+# с тэгами "libvips,onnx":
 #   docker build -f Dockerfile.test -t imager:test .
 #   docker run --rm -v "%cd%":/src -w /src imager:test \
 #       sh -c "go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
-#
-# Модели ONNX и тестовое изображение ожидаются в ./models (монтируется в
-# /src/models через -v) — тесты реального инференса находят их автоматически.
+# Модели ONNX и тестовые изображения — в ./models (монтируется в /src/models).
 ###############################################################################
 FROM golang:1.27.0-alpine3.23
 
@@ -18,12 +14,10 @@ ENV CGO_ENABLED=1 \
     GOOS=linux \
     GOARCH=amd64
 
-# Зависимости для cgo (libvips, govips) — те же, что в production builder.
-# Без пиннинга версий: golang:1.27.0-alpine3.23 базируется на Alpine 3.23, где
-# версии пакетов совпадают с production (vips 8.17, tzdata 2026c).
-# onnxruntime и libstdc++/libgcc — из edge (C++23-символ в onnxruntime).
-# dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.23 для golang:1.27.0-alpine3.23).
+# cgo-зависимости (libvips, govips) — те же, что в production builder, без
+# пиннинга (golang:1.27.0-alpine3.23 базируется на Alpine 3.23). onnxruntime и
+# libstdc++/libgcc — из edge (C++23-символ). dl-cdn.alpinelinux.org недоступен
+# из Docker — репозитории переопределены на mirror.yandex.ru.
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
     && apk add --no-cache --update \
