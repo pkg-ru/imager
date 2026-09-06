@@ -187,10 +187,18 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	}
 	var learningRec *learning.Recorder
 	if opt.ConfigDir != "" {
+		// Имена пресетов из конфигурации: сегмент, совпадающий с пресетом
+		// (например face-fix), наблюдается как пресет и попадает в presets
+		// path-policy в generate-local.yaml.
+		presetNames := make(map[string]struct{}, len(opt.Config.Policy.Presets))
+		for name := range opt.Config.Policy.Presets {
+			presetNames[name] = struct{}{}
+		}
 		learningRec, err = learning.NewRecorder(learning.Deps{
-			ConfigDir: opt.ConfigDir,
-			Initial:   opt.Config.Policy,
-			Logger:    opt.HTTP.Logger,
+			ConfigDir:   opt.ConfigDir,
+			Initial:     opt.Config.Policy,
+			PresetNames: presetNames,
+			Logger:      opt.HTTP.Logger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("composition: build: learning recorder: %w", err)

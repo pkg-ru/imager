@@ -67,6 +67,21 @@ func TestParseSegment(t *testing.T) {
 			url:  "/fig-ego-znaet/chto-za-papka/bugoga-gif/x.webp",
 			want: "fig-ego-znaet/chto-za-papka/bugoga-gif/x.webp",
 		},
+		{
+			name: "preset name with dash (face-fix), source name without dash",
+			url:  "/test/my-png/face-fix.png",
+			want: "test/my-png/face-fix.png",
+		},
+		{
+			name: "preset name with dash (face-fix), source name with dash",
+			url:  "/test/my-png-png/face-fix.png",
+			want: "test/my-png-png/face-fix.png",
+		},
+		{
+			name: "preset name with dash and dpr",
+			url:  "/test/my-png/face-fix@2.webp",
+			want: "test/my-png/face-fix@2.webp",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,6 +123,53 @@ func TestParseSegmentFields(t *testing.T) {
 	}
 	if want := "photos/photo-1-jpg/banner.webp"; got != want {
 		t.Errorf("Build() = %q, want %q", got, want)
+	}
+}
+
+// TestParseSegmentNameWithDash проверяет разбор сегмента с дефисом в имени
+// (пресет face-fix): имена сегмента и source_name-source_format разделяются
+// структурно (по "/"), дефис в имени пресета не мешает.
+func TestParseSegmentNameWithDash(t *testing.T) {
+	req, err := Parse("/test/my-png/face-fix.png")
+	if err != nil {
+		t.Fatalf("Parse(/test/my-png/face-fix.png) error: %v", err)
+	}
+	if req.SegmentName().String() != "face-fix" {
+		t.Errorf("SegmentName = %q, want face-fix", req.SegmentName())
+	}
+	if req.SourceName().String() != "my" {
+		t.Errorf("SourceName = %q, want my", req.SourceName())
+	}
+	if req.SourceFormat().String() != "png" {
+		t.Errorf("SourceFormat = %q, want png", req.SourceFormat())
+	}
+	if req.Path() != "test" {
+		t.Errorf("Path = %q, want test", req.Path())
+	}
+}
+
+// TestNewSegmentNameDashRules проверяет правила дефисов в имени сегмента:
+// обычные дефисные имена пресетов разрешены; имена, конфликтующие с
+// URL-грамматикой ("имя-формат", "префикс-размер"), отклоняются.
+func TestNewSegmentNameDashRules(t *testing.T) {
+	valid := []string{"face-fix", "object-fix", "face-fix-trim", "banner@2", "a-b-c"}
+	for _, s := range valid {
+		if _, err := NewSegmentName(s); err != nil {
+			t.Errorf("NewSegmentName(%q) error: %v, want nil", s, err)
+		}
+	}
+	invalid := []string{
+		"t-x50",     // префикс-размер
+		"sc-120x80", // префикс-размер
+		"crop-200x", // префикс-размер
+		"my-png",    // имя-формат
+		"photo-jpg", // имя-формат
+		"img-",      // trailing dash
+	}
+	for _, s := range invalid {
+		if _, err := NewSegmentName(s); err == nil {
+			t.Errorf("NewSegmentName(%q) = nil error, want error", s)
+		}
 	}
 }
 

@@ -568,11 +568,15 @@ func (s *Service) learningEnabled() bool {
 }
 
 // learningResolve разрешает segment-запрос, не подходящий по правилам,
-// дефолтными настройками learning-mode: resize, размер из сегмента
-// (размер-грамматика), dpr из URL или 1, выходной формат из URL.
+// настройками learning-mode:
+//   - размер-грамматика ("120x60"): resize, размер из сегмента, dpr из URL
+//     или 1, выходной формат из URL;
+//   - имя глобального пресета (PresetNames): настройки берутся из реального
+//     пресета (PresetSet.Resolve), чтобы запрос /test/my-png/face-fix.png
+//     генерировался в learning-mode и наблюдение попадало в path-policies.
 //
-// Возвращает (nil, false), если сегмент НЕ является размер-грамматикой
-// (имя несуществующего пресета) — такой запрос остаётся 403, в path-policies
+// Возвращает (nil, false), если сегмент НЕ является размер-грамматикой и
+// НЕ входит в PresetNames — такой запрос остаётся 403, в path-policies
 // такие записи не попадают.
 func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
 	if req == nil || !req.IsPreset() {
@@ -580,7 +584,17 @@ func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
 	}
 	size, err := asset.ParseSize(req.SegmentName().String())
 	if err != nil {
-		return nil, false
+		// Не размер: попробовать разрешить глобальным пресетом по имени.
+		// Resolve возвращает ошибку для неизвестного имени — это ок
+		// (запрос остаётся 403).
+		if s.deps.Presets == nil {
+			return nil, false
+		}
+		resolved, rerr := s.deps.Presets.Resolve(req)
+		if rerr != nil {
+			return nil, false
+		}
+		return resolved, true
 	}
 	dpr := req.DPR()
 	if dpr == 0 {

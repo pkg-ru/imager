@@ -55,12 +55,13 @@ const (
 // Допустимые символы компонентов.
 const (
 	// segmentNameChars — символы, допустимые в имени сегмента (пресета или
-	// custom). Дефисы запрещены, чтобы имя сегмента в URL
-	// {source_name}-{source_format}/{segment}.{output_format} можно было
-	// однозначно отделить от source_format последним дефисом. "@" допустим:
-	// имя может содержать фиксированный суффикс @dpr (например "banner@2"
-	// или "200x100@2").
-	segmentNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@."
+	// custom). "@" допустим: имя может содержать фиксированный суффикс @dpr
+	// (например "banner@2" или "200x100@2"). Дефис допустим, но с
+	// ограничениями (см. validateSegmentName): сегмент не может выглядеть
+	// как размер-грамматика с префиксом ("120x80") или как
+	// "имя-валидный-формат" ("my-png") — иначе однозначное отделение
+	// {source_name}-{source_format} от сегмента в URL нарушается.
+	segmentNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.-"
 	// formatChars — символы, допустимые в формате.
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
@@ -144,13 +145,61 @@ func (f Format) String() string { return string(f) }
 // при создании пресета; здесь проверяется только набор символов и длина.
 type SegmentName string
 
-// NewSegmentName создаёт SegmentName с валидацией длины и символов.
-// Дефисы в имени сегмента запрещены (см. segmentNameChars).
+// segmentFormatSuffixes — суффиксы "имя-формат" (после последнего дефиса),
+// запрещённые в имени сегмента: сегмент вида "my-png" конфликтовал бы с
+// грамматикой {source_name}-{source_format} (последний дефис source-части
+// отделяет формат). Список — расширения медиа-форматов движка (см.
+// domain/processing.ParseFormat и mediaFormats generatev2).
+var segmentFormatSuffixes = map[string]struct{}{
+	"jpg": {}, "jpeg": {}, "png": {}, "webp": {}, "gif": {},
+	"avif": {}, "heif": {}, "heic": {}, "apng": {}, "jxl": {},
+}
+
+// NewSegmentName создаёт SegmentName с валидацией длины, символов и формы
+// имени (см. validateSegmentName).
 func NewSegmentName(s string) (SegmentName, error) {
 	if err := validateComponent("segment name", s, segmentNameChars, MaxPresetNameLen); err != nil {
 		return "", err
 	}
+	if err := validateSegmentName(s); err != nil {
+		return "", err
+	}
 	return SegmentName(s), nil
+}
+
+// validateSegmentName отклоняет имена сегментов с дефисом, которые
+// конфликтуют с URL-грамматикой:
+//
+//   - "префикс-размер-грамматика" (t-x50, sc-120x80, crop-200x, fc-120x80@2):
+//     такой сегмент выглядел бы как {source_name}-{source_format}/{custom}
+//     в укороченном URL и ломал бы однозначность разбора;
+//   - "имя-валидный-формат" (my-png, photo-jpg): такой сегмент выглядел бы
+//     как {source_name}-{source_format}.
+//
+// Дефисы в "обычных" именах пресетов (face-fix, object-fix-trim)
+// разрешены.
+func validateSegmentName(s string) error {
+	dash := strings.LastIndex(s, "-")
+	if dash < 0 {
+		return nil // дефисов нет — ограничений нет
+	}
+	suffix := s[dash+1:]
+	if suffix == "" {
+		return fmt.Errorf("segment name %q: trailing dash", s)
+	}
+	size := strings.SplitN(suffix, "@", 2)[0]
+	// "префикс-размер-грамматика": правая часть последнего дефиса выглядит
+	// как размер (x, x200, 200x, 120x80 — в т.ч. с переполнением значений).
+	// Матчится ФОРМА размера, а не валидность ParseSize: "c-99999999999x80"
+	// должно отклоняться так же, как "sc-120x80".
+	if looksLikeSize(size) {
+		return fmt.Errorf("segment name %q: looks like size grammar with prefix", s)
+	}
+	// "имя-валидный-формат": правая часть последнего дефиса — медиа-формат.
+	if _, ok := segmentFormatSuffixes[strings.ToLower(suffix)]; ok {
+		return fmt.Errorf("segment name %q: looks like name-format pair", s)
+	}
+	return nil
 }
 
 // String возвращает строковое представление.

@@ -119,12 +119,81 @@ func TestIntegrationLearningModeExtendsOutputFormats(t *testing.T) {
 	if !strings.Contains(doc, "220x200:") {
 		t.Errorf("generate-local.yaml missing custom 220x200:\n%s", doc)
 	}
+	// Flow-style: форматы выводятся в одну строку "output-formats: [...]"
+	// (yaml.v3 Style: FlowStyle), а не block-списком "- webp".
 	for _, f := range []string{"gif", "jpg", "webp"} {
-		if n := strings.Count(doc, "- "+f); n != 1 {
+		if n := strings.Count(doc, f); n != 1 {
 			t.Errorf("format %q occurs %d times, want 1:\n%s", f, n, doc)
 		}
 	}
+	if !strings.Contains(doc, "output-formats: [gif, jpg, webp]") {
+		t.Errorf("expected flow-style output-formats [gif, jpg, webp]:\n%s", doc)
+	}
 }
+
+// TestIntegrationLearningModePresetObservation — пресет с дефисом в имени
+// (face-fix), НЕ покрытый path-policies: при learning-mode запрос
+// /test/my-png/face-fix.png должен (1) генерироваться и отдаваться клиенту,
+// (2) после Learning.Stop() попадать в generate-local.yaml как presets
+// записи пути /test (flow-style).
+func TestIntegrationLearningModePresetObservation(t *testing.T) {
+	cfgDir := t.TempDir()
+	rc, err := ParseRuntimeConfig([]byte(testConfigYAMLLearningPreset))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(preset): %v", err)
+	}
+	app, srcDir, _ := buildFSApp(t, func(o *AppOptions) {
+		o.ConfigDir = cfgDir
+		o.Config = rc.Pipeline
+	})
+	seedSource(t, srcDir, "test/my-png.png", []byte("RAWIMAGE"))
+	if !app.Learning.Enabled() {
+		t.Fatal("learning-mode should be enabled from config")
+	}
+
+	// URL пользователя: сегмент face-fix, source my-png (source name
+	// "my-png" + format png — разделение по последнему дефису), выходной
+	// формат png.
+	req := httptest.NewRequest(http.MethodGet, "/test/my-png-png/face-fix.png", nil)
+	rec := httptest.NewRecorder()
+	app.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("face-fix.png: status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+	}
+
+	app.Learning.Stop()
+	localFile := filepath.Join(cfgDir, "generate-local.yaml")
+	data, err := os.ReadFile(localFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", localFile, err)
+	}
+	doc := string(data)
+	if !strings.Contains(doc, "/test:") {
+		t.Errorf("generate-local.yaml missing observed path /test:\n%s", doc)
+	}
+	// Пресет face-fix попадает в presets path-policy (flow-style список).
+	if !strings.Contains(doc, "presets: [face-fix]") {
+		t.Errorf("generate-local.yaml missing presets: [face-fix]:\n%s", doc)
+	}
+}
+
+// testConfigYAMLLearningPreset — конфиг с пресетом face-fix, не покрытым
+// path-policies: learning-mode должен наблюдать его и разрешать генерацию.
+const testConfigYAMLLearningPreset = `
+version: "1"
+policy:
+  learning-mode: true
+  presets:
+    face-fix:
+      crop: face-fix
+      width: 200
+      height: 200
+      output-formats: [webp, avif, jpg, png, gif]
+      quality: 85
+      dpr: 1
+encoders:
+  default-quality: 80
+`
 
 // testConfigYAMLLearningUser — базовый конфиг, поверх которого логика
 // LoadConfigDir теста накатывает generate-local.yaml (как в docker-compose).

@@ -389,6 +389,295 @@ func TestUpdatePathPoliciesExtendsOutputFormatsWhenKeyMissing(t *testing.T) {
 	}
 }
 
+// TestUpdatePathPoliciesPresetFlowStyle — секция presets создаётся как
+// flow-style sequence: `presets: [face-fix]`, а не block-списком.
+func TestUpdatePathPoliciesPresetFlowStyle(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Presets: fmts("face-fix"),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "presets: [face-fix]") {
+		t.Errorf("expected flow-style presets: [face-fix]:\n%s", got)
+	}
+}
+
+// TestUpdatePathPoliciesMergesIntoExistingPresets — новые пресеты
+// добавляются в существующую секцию presets (в т.ч. block-style из
+// исходного файла: узел переводится в flow-style), существующие имена
+// сохраняются, дубликаты не создаются.
+func TestUpdatePathPoliciesMergesIntoExistingPresets(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /test:
+      presets:
+        - face
+        - object
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	// В памяти AddPresetObservation дополнил список face-fix и smart.
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Presets: fmts("face", "object", "face-fix", "smart"),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "presets: [face, object, face-fix, smart]") {
+		t.Errorf("expected merged flow-style presets:\n%s", got)
+	}
+	// Повторная запись — идемпотентность.
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	second, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read second: %v", err)
+	}
+	if string(got) != string(second) {
+		t.Errorf("presets merge not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+// TestUpdatePathPoliciesBlockOutputFormatsConvertsToFlow — существующий
+// block-style output-formats при добавлении форматов переводится в
+// flow-style (требование пользователя: списки в одну строку).
+func TestUpdatePathPoliciesBlockOutputFormatsConvertsToFlow(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /test:
+      customs:
+        "220x200":
+          output-formats:
+            - gif
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"220x200", sizeCustom("gif", "webp")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "output-formats: [gif, webp]") {
+		t.Errorf("expected flow-style output-formats [gif, webp]:\n%s", got)
+	}
+}
+
+// TestUpdatePathPoliciesNullPathPolicies — фикс бага: если в YAML-конфиге
+// ключ path-policies присутствует, но пуст (null: "path-policies:" без
+// значения), запись learning-mode ДОЛЖНА происходить в block-стиле.
+// Раньше null-узел не был mapping'ом — writer возвращал ошибку и ничего
+// не записывал.
+func TestUpdatePathPoliciesNullPathPolicies(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  learning-mode: true
+  path-policies:
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"200x200", sizeCustom("png", "webp")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"path-policies:",
+		"# added by learning-mode",
+		"/test:",
+		"customs:",
+		"200x200:",
+		"output-formats: [png, webp]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file content missing %q:\n%s", want, got)
+		}
+	}
+	// Block-стиль: path-policies НЕ сериализован внутри "{}".
+	if strings.Contains(got, "path-policies: {") {
+		t.Errorf("expected block-style path-policies, got flow:\n%s", got)
+	}
+	// Комментарий стоит ПЕРЕД новым путём.
+	ic := strings.Index(got, "# added by learning-mode")
+	ip := strings.Index(got, "/test:")
+	if ic < 0 || ip < 0 || ic > ip {
+		t.Errorf("comment must precede new path entry:\n%s", got)
+	}
+}
+
+// TestUpdatePathPoliciesEmptyFlowMapBecomesBlock — фикс бага: пустой
+// flow-map "path-policies: {}" при добавлении записей переводится в
+// block-стиль (пустой flow-mapping сбрасывает Style, иначе новые записи
+// сериализуются внутри "{}").
+func TestUpdatePathPoliciesEmptyFlowMapBecomesBlock(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  learning-mode: true
+  path-policies: {}
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"200x200", sizeCustom("png", "webp")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "path-policies: {") {
+		t.Errorf("expected block-style path-policies after fill, got flow:\n%s", got)
+	}
+	for _, want := range []string{
+		"# added by learning-mode",
+		"/test:",
+		"output-formats: [png, webp]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file content missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestUpdatePathPoliciesFlowStylePreserved — если path-policies записан в
+// flow-стиле и содержит данные, новая запись добавляется с сохранением
+// существующего содержимого и flow-стиля узла.
+func TestUpdatePathPoliciesFlowStylePreserved(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  learning-mode: true
+  path-policies: {/ava: {customs: {50x50: {output-formats: [png]}}}}
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf(
+		[2]any{"/ava", policy.PathPolicyConfig{
+			Customs: customs([2]any{"50x50", sizeCustom("png")}),
+		}},
+		[2]any{"/test", policy.PathPolicyConfig{
+			Customs: customs([2]any{"200x200", sizeCustom("png", "webp")}),
+		}},
+	)
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	// Существующая запись /ava сохранена.
+	for _, want := range []string{"/ava:", "50x50:", "png"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("existing flow entry missing %q:\n%s", want, got)
+		}
+	}
+	// Новая запись /test добавлена.
+	if !strings.Contains(got, "/test:") || !strings.Contains(got, "200x200:") {
+		t.Errorf("new flow entry missing:\n%s", got)
+	}
+	// Flow-стиль узла path-policies сохранён.
+	if !strings.Contains(got, "path-policies: {") {
+		t.Errorf("expected flow-style path-policies preserved:\n%s", got)
+	}
+}
+
+// TestUpdatePathPoliciesBlockStyleAddsComment — path-policies в block-стиле
+// с данными: новая запись добавляется в block-стиле с комментарием
+// "# added by learning-mode" перед новым путём; существующие записи не
+// трогаются.
+func TestUpdatePathPoliciesBlockStyleAddsComment(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  learning-mode: true
+  path-policies:
+    /ava:
+      customs:
+        50x50:
+          output-formats: [png]
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf(
+		[2]any{"/ava", policy.PathPolicyConfig{
+			Customs: customs([2]any{"50x50", sizeCustom("png")}),
+		}},
+		[2]any{"/test", policy.PathPolicyConfig{
+			Customs: customs([2]any{"200x200", sizeCustom("png", "webp")}),
+		}},
+	)
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "path-policies: {") {
+		t.Errorf("expected block-style path-policies:\n%s", got)
+	}
+	for _, want := range []string{
+		"/ava:",
+		"50x50:",
+		"output-formats: [png]",
+		"# added by learning-mode",
+		"/test:",
+		"output-formats: [png, webp]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file content missing %q:\n%s", want, got)
+		}
+	}
+	// Комментарий стоит ПЕРЕД новым путём и ПОСЛЕ существующего.
+	ic := strings.Index(got, "# added by learning-mode")
+	iava := strings.Index(got, "/ava:")
+	itest := strings.Index(got, "/test:")
+	if ic < 0 || iava < 0 || itest < 0 || !(iava < ic && ic < itest) {
+		t.Errorf("comment must be between existing and new entries:\n%s", got)
+	}
+}
+
 func TestUpdatePathPoliciesEmptyState(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "generate-local.yaml")

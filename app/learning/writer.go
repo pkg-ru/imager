@@ -110,8 +110,10 @@ func documentRoot(doc *yaml.Node) *yaml.Node {
 
 // findOrCreateMappingValue ищет в mapping-узле m пару с ключом key и
 // возвращает value-узел. Если пары нет — создаёт её (value — пустой
-// mapping) и возвращает новый узел. Если value существующей пары — не
-// mapping, возвращает nil.
+// mapping) и возвращает новый узел. Если value существующей пары — null
+// (ключ без значения в YAML: "key:") — узел заменяется на пустой mapping
+// в block-стиле и возвращается. Если value — не mapping и не null,
+// возвращает nil.
 func findOrCreateMappingValue(m *yaml.Node, key string, withComment bool) *yaml.Node {
 	if m.Kind != yaml.MappingNode {
 		return nil
@@ -119,10 +121,19 @@ func findOrCreateMappingValue(m *yaml.Node, key string, withComment bool) *yaml.
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
 			v := m.Content[i+1]
-			if v.Kind != yaml.MappingNode {
+			switch {
+			case v.Kind == yaml.MappingNode:
+				return v
+			case v.Kind == yaml.ScalarNode && v.Tag == "!!null":
+				// Ключ присутствует, но без значения (null). Заменить
+				// null-узел на пустой block-mapping, иначе запись в
+				// секцию невозможна.
+				nv := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				m.Content[i+1] = nv
+				return nv
+			default:
 				return nil
 			}
-			return v
 		}
 	}
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
@@ -137,10 +148,18 @@ func findOrCreateMappingValue(m *yaml.Node, key string, withComment bool) *yaml.
 // mergePathPolicies синхронизирует mapping-узел ppNode с state:
 // merge существующих, добавление новых (с HeadComment), удаление
 // отсутствующих в state, сортировка ключей.
+//
+// Стиль узла path-policies: пустой (или ставший пустым) flow-mapping
+// "{}" сбрасывается в block-стиль — иначе новые записи сериализуются
+// внутри "{}". Непустой flow-mapping сохраняет flow-стиль.
 func mergePathPolicies(ppNode *yaml.Node, state map[string]policy.PathPolicyConfig) error {
 	if ppNode.Kind != yaml.MappingNode {
 		return fmt.Errorf("path-policies is not a mapping")
 	}
+	// Пустой flow-mapping "{}" (проверяется ДО мержа) сбрасывается в
+	// block-стиль: иначе добавленные записи сериализуются внутри "{}"
+	// (наследование Style от пустого flow-узла).
+	wasEmptyFlow := ppNode.Style == yaml.FlowStyle && len(ppNode.Content) == 0
 
 	// Индекс существующих пар: ключ → (keyNode, valNode).
 	type entry struct {
@@ -197,14 +216,21 @@ func mergePathPolicies(ppNode *yaml.Node, state map[string]policy.PathPolicyConf
 	for _, p := range pairs {
 		ppNode.Content = append(ppNode.Content, p.k, p.v)
 	}
+	// Пустой flow-mapping "{}" сбрасывается в block-стиль (см.
+	// wasEmptyFlow выше). Непустой flow-mapping сохраняет flow-стиль.
+	if wasEmptyFlow {
+		ppNode.Style = 0
+	}
 	return nil
 }
 
 // mergePathPolicyValue мержит PathPolicyConfig в существующий (или новый)
-// value-узел пути: presets не трогаются; customs мержатся по имени —
-// существующий custom сохраняет свои поля, его output-formats РАСШИРЯЕТСЯ
-// форматами из state (существующие значения и их порядок сохраняются,
-// дубликаты не создаются), новые custom-ключи добавляются целиком.
+// value-узел пути: presets мержатся (существующие имена сохраняются,
+// новые добавляются; секция создаётся при отсутствии, style — flow);
+// customs мержатся по имени — существующий custom сохраняет свои поля, его
+// output-formats РАСШИРЯЕТСЯ форматами из state (существующие значения и
+// их порядок сохраняются, дубликаты не создаются), новые custom-ключи
+// добавляются целиком.
 //
 // Без расширения output-formats существующих customs learning-mode не мог
 // бы зафиксировать второй/третий формат размера: AddObservation пополняет
@@ -213,7 +239,43 @@ func mergePathPolicyValue(valNode *yaml.Node, pp policy.PathPolicyConfig) error 
 	if valNode.Kind != yaml.MappingNode {
 		return fmt.Errorf("path policy value is not a mapping")
 	}
-	// Найти узел customs (если есть).
+
+	// Секция presets: список имён (flow-style sequence).
+	if len(pp.Presets) > 0 {
+		var presetsNode *yaml.Node
+		for i := 0; i+1 < len(valNode.Content); i += 2 {
+			if valNode.Content[i].Value == "presets" {
+				presetsNode = valNode.Content[i+1]
+				break
+			}
+		}
+		if presetsNode == nil {
+			k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "presets"}
+			presetsNode = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
+			// Вставить в начало mapping-а (presets — первичное поле
+			// path-policy, как в конфигурации).
+			valNode.Content = append([]*yaml.Node{k, presetsNode}, valNode.Content...)
+		}
+		if presetsNode.Kind != yaml.SequenceNode {
+			return fmt.Errorf("presets is not a sequence")
+		}
+		// Существующие имена сохраняются; новые добавляются в конец.
+		existing := make(map[string]bool, len(presetsNode.Content))
+		for _, c := range presetsNode.Content {
+			existing[strings.ToLower(c.Value)] = true
+		}
+		for _, p := range pp.Presets {
+			if existing[strings.ToLower(string(p))] {
+				continue
+			}
+			existing[strings.ToLower(string(p))] = true
+			presetsNode.Content = append(presetsNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: string(p)})
+		}
+		presetsNode.Style = yaml.FlowStyle
+	}
+
+	// Секция customs.
 	var customsNode *yaml.Node
 	for i := 0; i+1 < len(valNode.Content); i += 2 {
 		if valNode.Content[i].Value == "customs" {
@@ -280,7 +342,7 @@ func mergeCustomOutputFormats(customVal *yaml.Node, add dynamic.StringSlice) {
 	if seqNode == nil {
 		// Ключа нет — создать с добавляемыми форматами.
 		k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "output-formats"}
-		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
 		for _, f := range add {
 			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: string(f)})
 		}
@@ -305,6 +367,9 @@ func mergeCustomOutputFormats(customVal *yaml.Node, add dynamic.StringSlice) {
 		existing[strings.ToLower(fs)] = true
 		seqNode.Content = append(seqNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fs})
 	}
+	// Пользователь хочет flow-style списков: при добавлении элементов в
+	// существующий block-style sequence весь узел переводится в flow.
+	seqNode.Style = yaml.FlowStyle
 }
 
 // presetConfigNode строит YAML-узел custom-записи. Learning-mode создаёт
@@ -314,7 +379,7 @@ func presetConfigNode(cfg policy.PresetConfig) *yaml.Node {
 	m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	if len(cfg.OutputFormats) > 0 {
 		k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "output-formats"}
-		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle}
 		for _, f := range cfg.OutputFormats {
 			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: string(f)})
 		}

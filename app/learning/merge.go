@@ -93,6 +93,36 @@ func AddObservation(state map[string]policy.PathPolicyConfig, path, size, format
 	return true
 }
 
+// AddPresetObservation добавляет наблюдение пресета (path-префикс, preset —
+// имя пресета из конфигурации) в state.
+//
+// В отличие от AddObservation (customs), пресетные наблюдения пополняют
+// pp.Presets — список имён глобальных пресетов, разрешённых на пути.
+// Дедуп: имя уже в списке — no-op. Hoist для пресетов не выполняется:
+// Presets — simple список имён без форматов, сравнение бессмысленно.
+//
+// path нормализуется (normalizePrefix-семантика: ведущий "/", без
+// хвостового).
+func AddPresetObservation(state map[string]policy.PathPolicyConfig, path, preset string) bool {
+	path = normalizePrefix(path)
+	if path == "" || path == "/" {
+		return false
+	}
+	if preset == "" {
+		return false
+	}
+	pp := state[path]
+	for _, p := range pp.Presets {
+		if string(p) == preset {
+			return false
+		}
+	}
+	pp.Presets = append(pp.Presets, dynamic.String(preset))
+	sort.Slice(pp.Presets, func(i, j int) bool { return string(pp.Presets[i]) < string(pp.Presets[j]) })
+	state[path] = pp
+	return true
+}
+
 // HoistIdenticalCustoms спускает (поднимает) идентичные custom-записи
 // к общему предку.
 //

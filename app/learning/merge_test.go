@@ -115,6 +115,17 @@ func TestAddObservation(t *testing.T) {
 			want:    map[string]policy.PathPolicyConfig{},
 		},
 		{
+			name:    "новое пресетное наблюдение",
+			initial: map[string]policy.PathPolicyConfig{},
+			path:    "/test",
+			size:    "120x60",
+			format:  "webp",
+			changed: true,
+			want: map[string]policy.PathPolicyConfig{
+				"/test": {Customs: customs([2]any{"120x60", sizeCustom("webp")})},
+			},
+		},
+		{
 			name:    "пустой формат игнорируется",
 			initial: map[string]policy.PathPolicyConfig{},
 			path:    "/a/b",
@@ -164,6 +175,36 @@ func TestAddObservation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAddPresetObservation(t *testing.T) {
+	state := map[string]policy.PathPolicyConfig{}
+	// Первое наблюдение — создаёт presets.
+	if !AddPresetObservation(state, "/test", "face-fix") {
+		t.Fatal("first AddPresetObservation = false, want true")
+	}
+	// Дубликат — no-op.
+	if AddPresetObservation(state, "/test", "face-fix") {
+		t.Fatal("duplicate AddPresetObservation = true, want false")
+	}
+	// Другой пресет — дополняет список.
+	if !AddPresetObservation(state, "/test", "face") {
+		t.Fatal("second preset AddPresetObservation = false, want true")
+	}
+	pp := state["/test"]
+	if len(pp.Presets) != 2 || string(pp.Presets[0]) != "face" || string(pp.Presets[1]) != "face-fix" {
+		t.Errorf("Presets = %v, want [face face-fix] (sorted)", pp.Presets)
+	}
+	// Нормализация пути: без ведущего "/".
+	state2 := map[string]policy.PathPolicyConfig{}
+	AddPresetObservation(state2, "a/b", "face-fix")
+	if _, ok := state2["/a/b"]; !ok {
+		t.Errorf("normalized path /a/b missing: %v", state2)
+	}
+	// Пустой путь и "/" игнорируются.
+	if AddPresetObservation(state2, "", "face-fix") || AddPresetObservation(state2, "/", "face-fix") {
+		t.Error("empty or root path must be ignored")
 	}
 }
 

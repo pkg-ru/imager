@@ -19,13 +19,14 @@ import (
 // финальная запись в Stop(). Ошибка записи логируется (ERROR), состояние
 // в памяти сохраняется, ретрай на следующем наблюдении.
 type Recorder struct {
-	dir      string // каталог конфигов (файл generate-local.yaml внутри)
-	state    map[string]policy.PathPolicyConfig
-	logger   observability.Logger
-	ch       chan *asset.Request
-	done     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	dir         string // каталог конфигов (файл generate-local.yaml внутри)
+	state       map[string]policy.PathPolicyConfig
+	presetNames map[string]struct{} // имена пресетов из конфигурации
+	logger      observability.Logger
+	ch          chan *asset.Request
+	done        chan struct{}
+	stopOnce    sync.Once
+	wg          sync.WaitGroup
 
 	mu         sync.Mutex
 	dirty      bool        // есть незаписанные изменения
@@ -56,6 +57,10 @@ type Deps struct {
 	// Initial — эффективный конфиг политики из загруженного конфига;
 	// Initial.PathPolicies — начальное состояние.
 	Initial policy.Config
+	// PresetNames — набор имён пресетов из конфигурации (policy.presets).
+	// Сегмент, совпадающий с одним из имён, наблюдается как пресет
+	// (пополняет presets path-policy), а не отбрасывается.
+	PresetNames map[string]struct{}
 	// Logger — логгер (nil = no-op).
 	Logger observability.Logger
 }
@@ -72,13 +77,14 @@ func NewRecorder(d Deps) (*Recorder, error) {
 	}
 	initialState := NormalizeState(d.Initial.PathPolicies)
 	r := &Recorder{
-		dir:       d.ConfigDir,
-		state:     initialState,
-		logger:    logger,
-		ch:        make(chan *asset.Request, channelCap),
-		done:      make(chan struct{}),
-		lastWrite: time.Now(),
-		dirty:     len(initialState) > 0,
+		dir:         d.ConfigDir,
+		state:       initialState,
+		presetNames: d.PresetNames,
+		logger:      logger,
+		ch:          make(chan *asset.Request, channelCap),
+		done:        make(chan struct{}),
+		lastWrite:   time.Now(),
+		dirty:       len(initialState) > 0,
 	}
 	r.wg.Add(1)
 	go r.consume()
@@ -86,10 +92,12 @@ func NewRecorder(d Deps) (*Recorder, error) {
 }
 
 // Observe регистрирует наблюдение (неблокирующе). req == nil игнорируется.
-// Из req извлекаются: path-префикс (без сегмента-файла), size
-// (req.SegmentName() — только если валиден как размер-грамматика через
-// asset.ParseSize; иначе наблюдение игнорируется), format (первый из
-// req.OutputFormats()).
+// Из req извлекаются: path-префикс (каталог исходника), сегмент и формат:
+//   - сегмент — размер-грамматика (asset.ParseSize) → custom-наблюдение
+//     (AddObservation);
+//   - сегмент — имя пресета из Deps.PresetNames → пресетное наблюдение
+//     (AddPresetObservation);
+//   - иначе наблюдение игнорируется.
 func (r *Recorder) Observe(req *asset.Request) {
 	if req == nil {
 		return
@@ -130,15 +138,7 @@ func (r *Recorder) record(req *asset.Request) {
 		return
 	}
 	size := string(req.SegmentName())
-	// Только размер-грамматика ("120x60", "x200", "200x", "x"); имена
-	// пресетов и @dpr-суффиксы игнорируются.
-	if _, err := asset.ParseSize(size); err != nil {
-		return
-	}
 	format := string(req.OutputFormats())
-	if format == "" {
-		return
-	}
 	path := pathPrefix(req.Path())
 
 	r.mu.Lock()
@@ -146,9 +146,25 @@ func (r *Recorder) record(req *asset.Request) {
 	if r.stopped {
 		return
 	}
-	if AddObservation(r.state, path, size, format) {
-		r.dirty = true
-		r.scheduleWriteLocked()
+	// Размер-грамматика ("120x60", "x200", "200x", "x") — custom-наблюдение.
+	if _, err := asset.ParseSize(size); err == nil {
+		if format == "" {
+			return
+		}
+		if AddObservation(r.state, path, size, format) {
+			r.dirty = true
+			r.scheduleWriteLocked()
+		}
+		return
+	}
+	// Не размер: если имя сегмента — известный пресет из конфигурации,
+	// наблюдение пополняет presets path-policy (например /test/my-png/
+	// face-fix.png → /test: presets: [face-fix]).
+	if _, ok := r.presetNames[size]; ok {
+		if AddPresetObservation(r.state, path, size) {
+			r.dirty = true
+			r.scheduleWriteLocked()
+		}
 	}
 }
 

@@ -99,6 +99,60 @@ func TestRecorderObserveEmptyPathIgnored(t *testing.T) {
 	}
 }
 
+func TestRecorderObservePresetObservation(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{
+		ConfigDir: dir,
+		PresetNames: map[string]struct{}{
+			"face-fix": {}, "face": {}, "object": {}, "smart": {},
+		},
+		Logger: observability.NopLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Сегмент — известный пресет (не размер-грамматика): наблюдение
+	// пополняет presets path-policy.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "face-fix", "webp"))
+	// Дубликат — no-op.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "face-fix", "jpg"))
+	// Другой пресет того же пути — дополняет список.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "face", "webp"))
+	rec.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "/test:") {
+		t.Errorf("path prefix missing:\n%s", got)
+	}
+	// Flow-style список пресетов, отсортированный, без дубликатов.
+	if !strings.Contains(got, "presets: [face, face-fix]") {
+		t.Errorf("expected presets: [face, face-fix]:\n%s", got)
+	}
+}
+
+func TestRecorderIgnoresUnknownPreset(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{
+		ConfigDir:   dir,
+		PresetNames: map[string]struct{}{"face-fix": {}},
+		Logger:      observability.NopLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Имя не из PresetNames и не размер — наблюдение отбрасывается.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "unknown-preset", "webp"))
+	rec.Stop()
+
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected no generate-local.yaml for unknown preset, err = %v", err)
+	}
+}
+
 func TestRecorderIgnoresInvalidSize(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
@@ -246,10 +300,15 @@ func TestRecorderExtendsExistingCustomFormats(t *testing.T) {
 			t.Errorf("generate-local.yaml missing %q:\n%s", want, got)
 		}
 	}
+	// Flow-style: все форматы в одной строке "output-formats: [...]",
+	// ровно по одному вхождению каждого формата.
 	for _, f := range []string{"gif", "jpg", "webp"} {
-		if n := strings.Count(got, "- "+f); n != 1 {
+		if n := strings.Count(got, f); n != 1 {
 			t.Errorf("format %q occurs %d times, want 1:\n%s", f, n, got)
 		}
+	}
+	if !strings.Contains(got, "output-formats: [gif, jpg, webp]") {
+		t.Errorf("expected flow-style output-formats [gif, jpg, webp]:\n%s", got)
 	}
 }
 

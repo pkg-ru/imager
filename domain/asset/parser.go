@@ -334,6 +334,29 @@ func ParseSize(s string) (Size, error) {
 	return NewSize(width, height)
 }
 
+// looksLikeSize сообщает, выглядит ли s как размер-грамматика по ФОРМЕ
+// ("x", "x200", "200x", "120x80"), независимо от валидности значений
+// (переполнение всё равно матчится). Используется валидацией имени
+// сегмента: имена вида "префикс-размер" запрещены, чтобы не конфликтовать
+// с разбором {source_name}-{source_format}/{custom}.
+func looksLikeSize(s string) bool {
+	before, after, ok := strings.Cut(s, "x")
+	if !ok {
+		return false
+	}
+	return isAllDigits(before) && isAllDigits(after) && (before != "" || after != "")
+}
+
+// isAllDigits — true, если s пуст или состоит только из ASCII-цифр.
+func isAllDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func parseDimension(s string) (Dimension, error) {
 	v, err := strconv.Atoi(s)
 	if err != nil {
