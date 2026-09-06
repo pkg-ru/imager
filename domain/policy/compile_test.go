@@ -284,20 +284,24 @@ func TestCompilePathPolicyNormalization(t *testing.T) {
 }
 
 func TestCompileCropTrimMapping(t *testing.T) {
+	// Кроп и trim — независимые сущности: пресет переносит поле crop как есть
+	// (значения совпадают с конфигурацией) и булев флаг trim отдельно.
 	cfg := Config{
 		Presets: map[string]PresetConfig{
-			"crop":        {Crop: dynamic.String("center"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"trim":        {Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"both":        {Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"resize":      presetCfg("resize", 120, 80, "webp"),
-			"smart":       {Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"face":        {Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"object":      {Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"face-fix":    {Crop: dynamic.String("face_fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"object-fix":  {Crop: dynamic.String("object_fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"smart-trim":  {Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"face-trim":   {Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
-			"object-trim": {Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"crop":            {Crop: dynamic.String("center"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"trim":            {Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"both":            {Crop: dynamic.String("center"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"resize":          presetCfg("resize", 120, 80, "webp"),
+			"smart":           {Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face":            {Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object":          {Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face-fix":        {Crop: dynamic.String("face-fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object-fix":      {Crop: dynamic.String("object-fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"smart-trim":      {Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face-trim":       {Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object-trim":     {Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face-fix-trim":   {Crop: dynamic.String("face-fix"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object-fix-trim": {Crop: dynamic.String("object-fix"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 		},
 	}
 	compiled, err := Compile(cfg, nil, nil)
@@ -305,58 +309,35 @@ func TestCompileCropTrimMapping(t *testing.T) {
 		t.Fatalf("Compile error: %v", err)
 	}
 	tests := []struct {
-		name string
-		want string
+		name     string
+		wantCrop asset.Crop
+		wantTrim bool
 	}{
-		{"crop", "c"},
-		{"trim", "t"},
-		{"both", "ct"},
-		{"resize", ""},
-		{"smart", "sc"},
-		{"face", "fc"},
-		{"object", "oc"},
-		{"face-fix", "ffx"},
-		{"object-fix", "ofx"},
-		{"smart-trim", "sct"},
-		{"face-trim", "fct"},
-		{"object-trim", "oct"},
+		{"crop", asset.CropCenter, false},
+		{"trim", "", true},
+		{"both", asset.CropCenter, true},
+		{"resize", "", false},
+		{"smart", asset.CropSmart, false},
+		{"face", asset.CropFace, false},
+		{"object", asset.CropObject, false},
+		{"face-fix", asset.CropFaceFix, false},
+		{"object-fix", asset.CropObjectFix, false},
+		{"smart-trim", asset.CropSmart, true},
+		{"face-trim", asset.CropFace, true},
+		{"object-trim", asset.CropObject, true},
+		{"face-fix-trim", asset.CropFaceFix, true},
+		{"object-fix-trim", asset.CropObjectFix, true},
 	}
 	for _, tt := range tests {
 		p, ok := compiled.Presets.Get(tt.name)
 		if !ok {
 			t.Fatalf("preset %q not found", tt.name)
 		}
-		if got := string(p.Transform()); got != tt.want {
-			t.Errorf("preset %q transform = %q, want %q", tt.name, got, tt.want)
+		if got := p.Crop(); got != tt.wantCrop {
+			t.Errorf("preset %q crop = %q, want %q", tt.name, got, tt.wantCrop)
 		}
-	}
-}
-
-func TestTransformFromCropTrim(t *testing.T) {
-	tests := []struct {
-		crop string
-		trim bool
-		want string
-	}{
-		{"", false, ""},
-		{"", true, "t"},
-		{"center", false, "c"},
-		{"center", true, "ct"},
-		{"smart", false, "sc"},
-		{"smart", true, "sct"},
-		{"face", false, "fc"},
-		{"face", true, "fct"},
-		{"object", false, "oc"},
-		{"object", true, "oct"},
-		{"face_fix", false, "ffx"},
-		{"face_fix", true, "ffxt"},
-		{"object_fix", false, "ofx"},
-		{"object_fix", true, "ofxt"},
-	}
-	for _, tt := range tests {
-		got := string(transformFromCropTrim(tt.crop, tt.trim))
-		if got != tt.want {
-			t.Errorf("transformFromCropTrim(%q, %v) = %q, want %q", tt.crop, tt.trim, got, tt.want)
+		if got := p.Trim(); got != tt.wantTrim {
+			t.Errorf("preset %q trim = %v, want %v", tt.name, got, tt.wantTrim)
 		}
 	}
 }

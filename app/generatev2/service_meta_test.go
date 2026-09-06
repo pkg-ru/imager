@@ -220,7 +220,7 @@ func TestGenerateConcurrentDetectionsOneCallPerAsset(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// Один и тот же ассет: одинаковый размер/формат.
-			req := mustReq(t, "", "photo", "png", asset.TransformFaceCrop, "100x100", 1, "webp")
+			req := mustReq(t, "", "photo", "png", asset.CropFace, false, "100x100", 1, "webp")
 			res, err := env.svc.Generate(context.Background(), req)
 			if err != nil {
 				errs <- err
@@ -251,7 +251,7 @@ func TestGenerateResizeNoDetection(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 
 	// Пустой transform = resize (buildPlan → OpResize).
-	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "photo", "png", asset.Crop(""), false, "100x100", 1, "webp")
 	res, err := env.svc.Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -290,7 +290,7 @@ func TestGenerateLargestAIAssetOnlyForAIAsset(t *testing.T) {
 	env := metaFullEnv(t, proc, metaS, det)
 	env.src.Add("photo.png", []byte("SRC"))
 
-	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "photo", "png", asset.Crop(""), false, "100x100", 1, "webp")
 	res, err := env.svc.Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -337,7 +337,7 @@ func TestGenerateNonAIAssetNoLargestAIAsset(t *testing.T) {
 	env := metaFullEnv(t, proc, metaS, det)
 	env.src.Add("photo.png", []byte("SRC"))
 
-	req := mustReq(t, "", "photo", "png", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "photo", "png", asset.Crop(""), false, "100x100", 1, "webp")
 	res, err := env.svc.Generate(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

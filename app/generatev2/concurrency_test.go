@@ -23,7 +23,7 @@ func TestGenerateCacheStampedeSingleFlight(t *testing.T) {
 	env.proc.setBlock(block)
 
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	const n = 16
 	var wg sync.WaitGroup
@@ -81,7 +81,7 @@ func TestGenerateNoResultReRead(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -107,7 +107,7 @@ func TestGenerateConcurrentCloseDoesNotBreakReaders(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	const n = 8
 	results := make([]*Result, n)
@@ -158,7 +158,7 @@ func TestGenerateCancelNoGoroutineLeak(t *testing.T) {
 	env.proc.setBlock(block)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	done := make(chan error, 1)
 	go func() {

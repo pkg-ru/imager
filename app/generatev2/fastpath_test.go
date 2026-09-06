@@ -10,7 +10,7 @@ import (
 
 // mustReqSize строит канонический Request с произвольным Size (в т.ч.
 // original "x").
-func mustReqSize(t *testing.T, path, srcName, srcFmt string, tr asset.Transform, size asset.Size, dpr int, outFmt string) *asset.Request {
+func mustReqSize(t *testing.T, path, srcName, srcFmt string, crop asset.Crop, trim bool, size asset.Size, dpr int, outFmt string) *asset.Request {
 	t.Helper()
 	sn, err := asset.NewSourceName(srcName)
 	if err != nil {
@@ -24,7 +24,7 @@ func mustReqSize(t *testing.T, path, srcName, srcFmt string, tr asset.Transform,
 	if err != nil {
 		t.Fatalf("output format: %v", err)
 	}
-	r, err := asset.NewRequest("", sn, sf, tr, size, asset.DPR(dpr), of)
+	r, err := asset.NewRequest("", sn, sf, crop, trim, size, asset.DPR(dpr), of)
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestGenerateOriginalFastPath(t *testing.T) {
 
 	ctx := context.Background()
 	// size=x, без transform, output == source (png).
-	req := mustReqSize(t, "", "photo", "png", asset.Transform(""), asset.NewOriginalSize(), 1, "png")
+	req := mustReqSize(t, "", "photo", "png", asset.Crop(""), false, asset.NewOriginalSize(), 1, "png")
 
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestGenerateOriginalFastPath(t *testing.T) {
 func TestGenerateOriginalNotFound(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
-	req := mustReqSize(t, "", "missing", "png", asset.Transform(""), asset.NewOriginalSize(), 1, "png")
+	req := mustReqSize(t, "", "missing", "png", asset.Crop(""), false, asset.NewOriginalSize(), 1, "png")
 	_, err := env.svc.Generate(ctx, req)
 	if err == nil {
 		t.Fatal("expected not-found error")
@@ -90,7 +90,7 @@ func TestGenerateOriginalWithTransformNotFastPath(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// transform=crop, size=x → не оригинал (есть transform).
-	req := mustReqSize(t, "", "photo", "png", asset.TransformCrop, asset.NewOriginalSize(), 1, "png")
+	req := mustReqSize(t, "", "photo", "png", asset.CropCenter, false, asset.NewOriginalSize(), 1, "png")
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -108,7 +108,7 @@ func TestGenerateOriginalFormatMismatchNotFast(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// size=x, без transform, но output=webp != source=png → конвертация.
-	req := mustReqSize(t, "", "photo", "png", asset.Transform(""), asset.NewOriginalSize(), 1, "webp")
+	req := mustReqSize(t, "", "photo", "png", asset.Crop(""), false, asset.NewOriginalSize(), 1, "webp")
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -131,7 +131,7 @@ func TestGenerateCachedAssetNoMetadataRead(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
 
 	// Первый запрос — генерация (кэш пуст).
 	res1, err := env.svc.Generate(ctx, req)
@@ -169,7 +169,7 @@ func TestGenerateNonMediaRejected(t *testing.T) {
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
 	// output=html — не медиа-формат.
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 1, "html")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "html")
 	_, err := env.svc.Generate(ctx, req)
 	if err == nil {
 		t.Fatal("expected invalid error for non-media format")

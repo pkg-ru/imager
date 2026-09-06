@@ -532,7 +532,7 @@ processing:
   # Тип: string. Дефолт: "auto".
   #   "auto"  — автоматическое определение цвета фона (по краевому пикселю);
   #   "color" — фиксированный цвет фона (default-trim-color).
-  # Применяется к trim-запросам (t/ct/sct/fct/oct), если в пресете trim не
+  # Применяется к пресетам с trim: true, если в пресете trim не
   # задан. Настройки trim — глобальные (не per-preset).
   default-trim-mode: "auto"
 
@@ -571,8 +571,8 @@ processing:
   default-video-attempts: 3
 
 ########################################
-# detection — детектор лиц/объектов для операций face-crop ("fc") и
-# object-crop ("oc").
+# detection — детектор лиц/объектов для операций face-crop ("face") и
+# object-crop ("object").
 #
 # Детекция выполняется onnx-моделями (ONNX Runtime) внутри процесса libvips:
 #   - face-model:  YuNet; находит лица;
@@ -599,14 +599,14 @@ processing:
 #      (каталог ./models монтируется туда :ro), подробнее models/README.md.
 ########################################
 detection:
-  # face-model — путь к ONNX-модели YuNet для детекции лиц ("fc").
+  # face-model — путь к ONNX-модели YuNet для детекции лиц ("face").
   # Тип: string. Пусто = face-crop отключён (тогда рассматривается
   # IMAGER_MODELS_DIR, см. выше).
   # В Docker ./models монтируется read-only в /etc/imager/models/.
   face-model: "/etc/imager/models/face_detection_yunet_2023mar.onnx"
 
   # object-model — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
-  # объектов ("oc"). Тип: string. Пусто = object-crop отключён (тогда
+  # объектов ("object"). Тип: string. Пусто = object-crop отключён (тогда
   # рассматривается IMAGER_MODELS_DIR).
   object-model: "/etc/imager/models/ssd_mobilenet_v1_12.onnx"
 

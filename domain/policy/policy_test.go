@@ -293,7 +293,7 @@ func TestResolveAppliesSettings(t *testing.T) {
 	if got := resolved.DPR().Int(); got != asset.DefaultDPR {
 		t.Errorf("resolved DPR = %d, want 1", got)
 	}
-	if got := resolved.Transform(); got != "" {
+	if got := resolved.Crop(); got != "" {
 		t.Errorf("resolved transform = %q, want empty (resize)", got)
 	}
 }

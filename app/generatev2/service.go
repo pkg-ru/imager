@@ -587,7 +587,8 @@ func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
 		dpr = asset.DefaultDPR
 	}
 	return req.WithResolved(
-		"", // transform: resize
+		"", // crop: resize
+		false,
 		size,
 		dpr,
 		0, 0, 0, nil, nil, nil,
@@ -820,11 +821,10 @@ func (s *Service) buildPlan(req *asset.Request) (*processing.ProcessingPlan, err
 // Для видео-источников исходным форматом служит JPEG (извлечённый кадр),
 // а не сам видео-формат (процессоры не умеют декодировать видео).
 func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Format) (*processing.ProcessingPlan, error) {
-	// Кроп и trim — НЕЗАВИСИМЫЕ фильтры. Transform URL — код вида
-	// "c"/"t"/"ct"/"sc"/"fc"/"oc"/"sct"/"fct"/"oct": trim в коде всегда
-	// последний ("t"-суффикс). Операция плана — только режим кропа/ресайза,
-	// trim выделяется в отдельное булево поле (применяется первым).
-	op, trim := transformFromPlan(req.Transform())
+	// Кроп и trim — НЕЗАВИСИМЫЕ фильтры. Crop — режим кропа (значения
+	// совпадают с конфигурацией: center/smart/face/object/face-fix/
+	// object-fix), trim — независимый булев флаг (применяется первым).
+	op, trim := cropFromPlan(req.Crop(), req.Trim())
 	outFmt, err := processing.ParseFormat(req.OutputFormats().String())
 	if err != nil {
 		return nil, err
@@ -904,20 +904,37 @@ func (s *Service) resolveTrim() *processing.TrimSpec {
 	return processing.DefaultTrimSpec()
 }
 
-// transformFromPlan маппит Transform URL-код в операцию кропа/ресайза и
-// независимый булев trim:
+// cropFromPlan маппит режим кропа (asset.Crop — значения совпадают с
+// конфигурацией) и независимый булев trim в операцию кропа/ресайза:
 //
-//	""   → resize,      trim=false
-//	"c"  → crop,        trim=false
-//	"t"  → resize,      trim=true   (только trim, без кропа)
-//	"ct" → crop,        trim=true   (сначала trim, затем центрированный кроп)
-//	"sc" → smart-crop,  trim=false
-//	"sct"→ smart-crop,  trim=true
-//	"fc" → face-crop,   trim=false
-//	"fct"→ face-crop,   trim=true
-//	"oc" → object-crop, trim=false
-//	"oct"→ object-crop, trim=true
+//	""          → resize (trim применяется при trim=true)
+//	"center"    → crop
+//	"smart"     → smart-crop
+//	"face"      → face-crop
+//	"object"    → object-crop
+//	"face-fix"  → face-fix-crop
+//	"object-fix" → object-fix-crop
 //
+// Trim возвращается как есть: независимый фильтр, применяется первым.
+func cropFromPlan(c asset.Crop, trim bool) (processing.Operation, bool) {
+	switch c {
+	case asset.CropCenter:
+		return processing.OpCrop, trim
+	case asset.CropSmart:
+		return processing.OpSmartCrop, trim
+	case asset.CropFace:
+		return processing.OpFaceCrop, trim
+	case asset.CropObject:
+		return processing.OpObjectCrop, trim
+	case asset.CropFaceFix:
+		return processing.OpFaceFixCrop, trim
+	case asset.CropObjectFix:
+		return processing.OpObjectFixCrop, trim
+	default:
+		return processing.OpResize, trim
+	}
+}
+
 // isCropOperation сообщает, является ли операция кропом (требует оба
 // измерения целевого размера). Resize — не кроп.
 func isCropOperation(op processing.Operation) bool {
@@ -927,39 +944,6 @@ func isCropOperation(op processing.Operation) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
-	switch t {
-	case asset.TransformCrop:
-		return processing.OpCrop, false
-	case asset.TransformCropTrim:
-		return processing.OpCrop, true
-	case asset.TransformSmartCrop:
-		return processing.OpSmartCrop, false
-	case asset.TransformSmartCropTrim:
-		return processing.OpSmartCrop, true
-	case asset.TransformFaceCrop:
-		return processing.OpFaceCrop, false
-	case asset.TransformFaceCropTrim:
-		return processing.OpFaceCrop, true
-	case asset.TransformObjectCrop:
-		return processing.OpObjectCrop, false
-	case asset.TransformObjectCropTrim:
-		return processing.OpObjectCrop, true
-	case asset.TransformFaceFixCrop:
-		return processing.OpFaceFixCrop, false
-	case asset.TransformFaceFixCropTrim:
-		return processing.OpFaceFixCrop, true
-	case asset.TransformObjectFixCrop:
-		return processing.OpObjectFixCrop, false
-	case asset.TransformObjectFixCropTrim:
-		return processing.OpObjectFixCrop, true
-	case asset.TransformTrim:
-		return processing.OpResize, true
-	default:
-		return processing.OpResize, false
 	}
 }
 
@@ -1296,7 +1280,7 @@ func isOriginalRequest(req *asset.Request) bool {
 	if req == nil {
 		return false
 	}
-	if req.Transform() != "" {
+	if req.Crop() != "" || req.Trim() {
 		return false
 	}
 	if !req.Size().IsOriginal() {

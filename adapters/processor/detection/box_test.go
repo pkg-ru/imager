@@ -478,7 +478,7 @@ func TestBoxFromEdgesSymmetry(t *testing.T) {
 	}
 }
 
-// ===== fix-режимы (face_fix / object_fix): cover-масштаб без зума =====
+// ===== fix-режимы (face-fix / object-fix): cover-масштаб без зума =====
 
 // TestSelectFaceFixCropWiderThanTarget проверяет: оригинал пропорционально
 // ШИРЕ цели → кроп только по X, ПОЛНАЯ высота сохраняется; окно центрируется
@@ -579,7 +579,7 @@ func TestSelectFaceFixCropInvalidImg(t *testing.T) {
 	}
 }
 
-// TestSelectObjectFixCropWiderThanTarget: object_fix аналогичен face_fix
+// TestSelectObjectFixCropWiderThanTarget: object-fix аналогичен face-fix
 // (общее ядро): кроп только по X, полная высота.
 func TestSelectObjectFixCropWiderThanTarget(t *testing.T) {
 	// Кадр 400x200, цель 100x100 → окно 200x200. Объект в центре.
@@ -590,7 +590,7 @@ func TestSelectObjectFixCropWiderThanTarget(t *testing.T) {
 	}
 }
 
-// TestSelectObjectFixCropTallerThanTarget: object_fix, кроп только по Y,
+// TestSelectObjectFixCropTallerThanTarget: object-fix, кроп только по Y,
 // полная ширина; объект у нижнего края → clamp к y=imgH-h.
 func TestSelectObjectFixCropTallerThanTarget(t *testing.T) {
 	// Кадр 200x400, цель 100x100 → окно 200x200 по Y. Объект у нижнего
@@ -602,7 +602,7 @@ func TestSelectObjectFixCropTallerThanTarget(t *testing.T) {
 	}
 }
 
-// TestSelectObjectFixCropNoDetectionFallback: object_fix без детекции →
+// TestSelectObjectFixCropNoDetectionFallback: object-fix без детекции →
 // центрирование по избыточной оси.
 func TestSelectObjectFixCropNoDetectionFallback(t *testing.T) {
 	r := SelectObjectFixCrop(nil, 400, 200, 100, 100, 0)

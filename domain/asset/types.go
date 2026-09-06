@@ -65,60 +65,39 @@ const (
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
-// Transform определяет режим кропа (и наличие trim) в обработке.
+// Crop определяет режим кропа в обработке. Канонические значения совпадают
+// со значениями поля crop пресета/custom в конфигурации.
 //
-// Кроп и trim — НЕЗАВИСИМЫЕ фильтры: кроп выбирает режим обработки
-// (center/smart/face/object), trim — обрезка однотонных полей. Transform
-// НЕ является частью URL-грамматики: он вычисляется из поля crop пресета/
-// custom при компиляции конфигурации.
-type Transform string
+// Кроп и trim — НЕЗАВИСИМЫЕ фильтры: Crop выбирает режим обработки
+// (center/smart/face/object/face-fix/object-fix), trim — булев флаг обрезки
+// однотонных полей. Crop НЕ является частью URL-грамматики: он берётся
+// из поля crop пресета/custom при компиляции конфигурации.
+type Crop string
 
 const (
-	// TransformCrop — центрированная обрезка (crop).
-	TransformCrop Transform = "c"
-	// TransformTrim — только обрезка однотонных полей (trim), без кропа.
-	TransformTrim Transform = "t"
-	// TransformCropTrim — trim + центрированный кроп (код "ct": trim в коде
-	// последний; применяется сначала trim, затем центрированный кроп).
-	TransformCropTrim Transform = "ct"
-	// TransformSmartCrop — умная обрезка (smart-crop).
-	TransformSmartCrop Transform = "sc"
-	// TransformFaceCrop — обрезка по обнаруженным лицам.
-	TransformFaceCrop Transform = "fc"
-	// TransformObjectCrop — обрезка по обнаруженным объектам.
-	TransformObjectCrop Transform = "oc"
-	// TransformFaceFixCrop — cover-масштаб до целевого размера со сдвигом
-	// к лицу, без зума в лицо (кроп только по пропорционально избыточной
-	// оси).
-	TransformFaceFixCrop Transform = "ffx"
-	// TransformObjectFixCrop — cover-масштаб до целевого размера со сдвигом
-	// к объекту, без зума в объект (кроп только по пропорционально
-	// избыточной оси).
-	TransformObjectFixCrop Transform = "ofx"
-	// TransformSmartCropTrim — trim + smart-crop (код "sct": применяется
-	// сначала trim, затем smart-crop).
-	TransformSmartCropTrim Transform = "sct"
-	// TransformFaceCropTrim — trim + face-crop (код "fct").
-	TransformFaceCropTrim Transform = "fct"
-	// TransformObjectCropTrim — trim + object-crop (код "oct").
-	TransformObjectCropTrim Transform = "oct"
-	// TransformFaceFixCropTrim — trim + face-fix-crop (код "ffxt").
-	TransformFaceFixCropTrim Transform = "ffxt"
-	// TransformObjectFixCropTrim — trim + object-fix-crop (код "ofxt").
-	TransformObjectFixCropTrim Transform = "ofxt"
+	// CropCenter — центрированная обрезка (crop).
+	CropCenter Crop = "center"
+	// CropSmart — умная обрезка (smart-crop, attention libvips).
+	CropSmart Crop = "smart"
+	// CropFace — обрезка по обнаруженным лицам (ONNX YuNet).
+	CropFace Crop = "face"
+	// CropObject — обрезка по обнаруженным объектам (ONNX SSD/YOLO).
+	CropObject Crop = "object"
+	// CropFaceFix — cover-масштаб до целевого размера со сдвигом к лицу,
+	// без зума в лицо (кроп только по пропорционально избыточной оси;
+	// ONNX YuNet).
+	CropFaceFix Crop = "face-fix"
+	// CropObjectFix — cover-масштаб до целевого размера со сдвигом к
+	// объекту, без зума в объект (кроп только по пропорционально избыточной
+	// оси; ONNX SSD/YOLO).
+	CropObjectFix Crop = "object-fix"
 )
 
-// ValidTransform проверяет, что transform является допустимым.
-// Разрешены: "", "c", "t", "ct", "sc", "fc", "oc", "sct", "fct", "oct".
-// Trim-код допустим только последним в коде ("tc" и прочие комбинации
-// отклоняются).
-func ValidTransform(t Transform) bool {
-	switch t {
-	case TransformCrop, TransformTrim, TransformCropTrim,
-		TransformSmartCrop, TransformFaceCrop, TransformObjectCrop,
-		TransformFaceFixCrop, TransformObjectFixCrop,
-		TransformSmartCropTrim, TransformFaceCropTrim, TransformObjectCropTrim,
-		TransformFaceFixCropTrim, TransformObjectFixCropTrim:
+// ValidCrop проверяет, что crop является допустимым режимом кропа.
+// Пустое значение "" допустимо и означает resize (кроп не используется).
+func ValidCrop(c Crop) bool {
+	switch c {
+	case CropCenter, CropSmart, CropFace, CropObject, CropFaceFix, CropObjectFix:
 		return true
 	}
 	return false

@@ -369,12 +369,12 @@ policy:
        height: 80
        output-formats: [webp]
      face-fix:
-       crop: face_fix
+       crop: face-fix
        width: 120
        height: 80
        output-formats: [webp]
      object-fix:
-       crop: object_fix
+       crop: object-fix
        width: 120
        height: 80
        output-formats: [webp]
@@ -394,31 +394,35 @@ policy:
 		t.Fatalf("Compile: %v", err)
 	}
 	cases := []struct {
-		name      string
-		transform asset.Transform
+		name     string
+		crop     asset.Crop
+		wantTrim bool
 	}{
-		// crop: center → c.
-		{"center", asset.TransformCrop},
-		// crop: smart → sc.
-		{"smart", asset.TransformSmartCrop},
-		// crop: face → fc.
-		{"face", asset.TransformFaceCrop},
-		// crop: object → oc.
-		{"object", asset.TransformObjectCrop},
-		// crop: face_fix → ffx.
-		{"face-fix", asset.TransformFaceFixCrop},
-		// crop: object_fix → ofx.
-		{"object-fix", asset.TransformObjectFixCrop},
+		// crop: center.
+		{"center", asset.CropCenter, false},
+		// crop: smart.
+		{"smart", asset.CropSmart, false},
+		// crop: face.
+		{"face", asset.CropFace, false},
+		// crop: object.
+		{"object", asset.CropObject, false},
+		// crop: face-fix.
+		{"face-fix", asset.CropFaceFix, false},
+		// crop: object-fix.
+		{"object-fix", asset.CropObjectFix, false},
 		// crop: "" → resize.
-		{"resize", ""},
+		{"resize", "", false},
 	}
 	for _, tc := range cases {
 		p, ok := compiled.Presets.Get(tc.name)
 		if !ok {
 			t.Fatalf("preset %q not found", tc.name)
 		}
-		if got := p.Transform(); got != tc.transform {
-			t.Errorf("%s: Transform() = %q, want %q", tc.name, got, tc.transform)
+		if got := p.Crop(); got != tc.crop {
+			t.Errorf("%s: Crop() = %q, want %q", tc.name, got, tc.crop)
+		}
+		if got := p.Trim(); got != tc.wantTrim {
+			t.Errorf("%s: Trim() = %v, want %v", tc.name, got, tc.wantTrim)
 		}
 	}
 }

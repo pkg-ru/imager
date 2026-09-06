@@ -142,7 +142,7 @@ type LibvipsConfig struct {
 const ModelsDirEnv = "IMAGER_MODELS_DIR"
 
 // DetectionConfig — конфигурация детектора лиц/объектов для операций
-// face-crop ("fc") и object-crop ("oc") на libvips.
+// face-crop ("face") и object-crop ("object") на libvips.
 //
 // Пустой путь модели (FaceModel/ObjectModel) = соответствующий детектор
 // отключён: запрос с такой операцией вернёт понятную ошибку от процессора.

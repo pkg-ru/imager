@@ -22,7 +22,8 @@ import (
 // Поле dpr (если задано) имеет приоритет над @dpr в имени.
 type Preset struct {
 	name         string
-	transform    Transform
+	crop         Crop
+	trim         bool
 	size         Size
 	outputFormat []Format
 	dpr          DPR
@@ -58,14 +59,14 @@ type Preset struct {
 // (lossy-форматы) хранится под ключом "quality". Значения копируются
 // (поверхностное копирование вложенных map), чтобы пресет не разделял
 // состояние с конфигурацией.
-func NewPreset(name string, transform Transform, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool, encOverrides map[string]map[string]any) (*Preset, error) {
+func NewPreset(name string, crop Crop, trim bool, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool, encOverrides map[string]map[string]any) (*Preset, error) {
 	if name == "" {
 		return nil, fmt.Errorf("preset: empty name")
 	}
-	// Пустой transform допустим (означает resize); любые другие значения
+	// Пустой crop допустим (означает resize); любые другие значения
 	// проверяются.
-	if transform != "" && !ValidTransform(transform) {
-		return nil, fmt.Errorf("preset %q: invalid transform %q", name, transform)
+	if crop != "" && !ValidCrop(crop) {
+		return nil, fmt.Errorf("preset %q: invalid crop %q", name, crop)
 	}
 	if size.IsEmpty() {
 		return nil, fmt.Errorf("preset %q: empty size", name)
@@ -101,7 +102,8 @@ func NewPreset(name string, transform Transform, size Size, outputFormat []Forma
 	}
 	return &Preset{
 		name:         name,
-		transform:    transform,
+		crop:         crop,
+		trim:         trim,
 		size:         size,
 		outputFormat: append([]Format(nil), outputFormat...),
 		dpr:          dpr,
@@ -167,8 +169,12 @@ func (p *Preset) WithWatermark(wm *processing.WatermarkSpec) *Preset {
 	return &cp
 }
 
-// Transform возвращает режим трансформации.
-func (p *Preset) Transform() Transform { return p.transform }
+// Crop возвращает режим кропа ("" = resize).
+func (p *Preset) Crop() Crop { return p.crop }
+
+// Trim возвращает флаг независимого фильтра trim (обрезка однотонных
+// полей). Trim применяется СТРОГО до кропа/ресайза.
+func (p *Preset) Trim() bool { return p.trim }
 
 // Size возвращает размер.
 func (p *Preset) Size() Size { return p.size }
@@ -403,7 +409,8 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 		req.path,
 		req.sourceName,
 		req.sourceFormat,
-		p.transform,
+		p.crop,
+		p.trim,
 		p.size,
 		dpr,
 		req.outputFormat,

@@ -48,8 +48,8 @@ policy:
   #     - у пресетов без @N, для которых по задумке допустимы варианты
   #       thumb@2.webp/thumb@3.webp, заводите отдельные пресеты thumb@2/thumb@3;
   #   crop — "" = resize | center = crop | smart = smart-crop | face =
-  #     face-crop | object = object-crop | face_fix = face-fix-crop |
-  #     object_fix = object-fix-crop (по умолчанию "" = resize). Fix-режимы:
+  #     face-crop | object = object-crop | face-fix = face-fix-crop |
+  #     object-fix = object-fix-crop (по умолчанию "" = resize). Fix-режимы:
   #     cover-масштаб до целевого размера без зума в лицо/объект — кроп
   #     только по пропорционально избыточной оси, позиция окна по центру
   #     области детекции (bbox + detection.margin) с clamp к границам;
@@ -148,7 +148,7 @@ policy:
     #   trim: true
     #
     # cover-fix:                # cover-масштаб со сдвигом к лицу (без зума)
-    #   crop: face_fix
+    #   crop: face-fix
     #   width: 600
     #   height: 400
     #   output-formats: [webp]

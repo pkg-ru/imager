@@ -343,7 +343,8 @@ func (p *Policy) applyPreset(req *asset.Request, pr *asset.Preset, segment strin
 	}
 
 	resolved := req.WithResolved(
-		pr.Transform(),
+		pr.Crop(),
+		pr.Trim(),
 		pr.Size(),
 		dpr,
 		pr.Quality(),

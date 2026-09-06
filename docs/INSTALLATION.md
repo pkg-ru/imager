@@ -8,7 +8,7 @@
 | libvips ≥ 8.13 + заголовки (`vips-dev`) | Основной движок обработки, все форматы включая APNG | Рекомендуется |
 | C-компилятор (`gcc`/`build-base`), `pkgconf`, `musl-dev` | cgo-сборка govips | Нужны при сборке с `-tags libvips` |
 | Кодеки: `libheif`, `libde265`, `libjxl`, `librsvg`, `poppler`, `libraw` | HEIF/AVIF, JPEG XL, SVG, PDF, RAW в libvips | Для соответствующих форматов |
-| ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов для `fc`/`oc` | Опциональна; сборка с `-tags onnx` |
+| ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов для `face`/`object`-кропов | Опциональна; сборка с `-tags onnx` |
 
 > Для установки готовых релизов достаточно runtime-зависимостей из разделов
 > ниже (Ubuntu/macOS/Windows/Docker); компиляторный toolchain не нужен.

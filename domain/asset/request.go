@@ -13,25 +13,26 @@ import (
 // Поля приватны и неизменяемы; создаётся только через конструкторы
 // (NewRequest, NewSegmentRequest, NewPresetRequest, Parse).
 //
-// Грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
+// URL-грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
 // где segment — имя пресета ИЛИ custom-имя (размер).
 //
 // Для segment-запроса заполняются SourceName, SourceFormat, SegmentName, DPR
-// (0 = @dpr в URL отсутствует) и OutputFormats. Поля transform/size/quality/
+// (0 = @dpr в URL отсутствует) и OutputFormats. Поля crop/trim/size/quality/
 // frames/duration/loop/watermark/orientation заполняются при разрешении
 // (PresetSet.Resolve / Policy.Resolve) и не влияют на Build(): канонический
 // URL строится из segmentName + dpr + outputFormat.
 //
-// Для канонического запроса (NewRequest, программное создание) заполняются
-// Transform, Size, DPR и OutputFormats, а SegmentName пуст. Build() в этом
-// случае строит URL формы {transform}-{size}@{dpr}.{out} (парсер такую
-// форму не разбирает).
+// Segment-less (канонический) запрос создаётся только программно (NewRequest,
+// Resolve): заполняются Crop, Trim, Size, DPR и OutputFormats, а SegmentName
+// пуст. Build() для него строит пользовательскую форму
+// /{path}/{source_name}-{source_format}/{size}@{dpr}.{out}
 type Request struct {
 	path         string
 	sourceName   SourceName
 	sourceFormat Format
 	segmentName  SegmentName
-	transform    Transform
+	crop         Crop
+	trim         bool
 	size         Size
 	dpr          DPR
 	outputFormat Format
@@ -48,18 +49,19 @@ type Request struct {
 	resolved     bool
 }
 
-// NewRequest создаёт канонический Request (transform/size, без segment).
-// Используется программно (тесты, перечисление); парсер такую форму не
-// разбирает.
-func NewRequest(path string, sourceName SourceName, sourceFormat Format, transform Transform, size Size, dpr DPR, outputFormat Format) (*Request, error) {
+// NewRequest создаёт segment-less (канонический) Request.
+// Используется только программно (тесты, внутреннее
+// построение запроса, Resolve); URL пользовательской грамматики всегда
+// содержит segment.
+func NewRequest(path string, sourceName SourceName, sourceFormat Format, crop Crop, trim bool, size Size, dpr DPR, outputFormat Format) (*Request, error) {
 	if sourceName == "" {
 		return nil, fmt.Errorf("request: empty source name")
 	}
 	if sourceFormat == "" {
 		return nil, fmt.Errorf("request: empty source format")
 	}
-	if transform != "" && !ValidTransform(transform) {
-		return nil, fmt.Errorf("request: invalid transform %q", transform)
+	if crop != "" && !ValidCrop(crop) {
+		return nil, fmt.Errorf("request: invalid crop %q", crop)
 	}
 	if size.IsEmpty() {
 		return nil, fmt.Errorf("request: empty size")
@@ -78,7 +80,8 @@ func NewRequest(path string, sourceName SourceName, sourceFormat Format, transfo
 		path:         canon,
 		sourceName:   sourceName,
 		sourceFormat: sourceFormat,
-		transform:    transform,
+		crop:         crop,
+		trim:         trim,
 		size:         size,
 		dpr:          dpr,
 		outputFormat: outputFormat,
@@ -167,8 +170,12 @@ func (r *Request) SourceName() SourceName { return r.sourceName }
 // указанный в URL.
 func (r *Request) SourceFormat() Format { return r.sourceFormat }
 
-// Transform возвращает режим трансформации (пуст для неразрешённого segment).
-func (r *Request) Transform() Transform { return r.transform }
+// Crop возвращает режим кропа ("" = resize; пуст для неразрешённого segment).
+func (r *Request) Crop() Crop { return r.crop }
+
+// Trim возвращает флаг независимого фильтра trim (обрезка однотонных полей).
+// Trim применяется СТРОГО до кропа/ресайза.
+func (r *Request) Trim() bool { return r.trim }
 
 // Size возвращает размер (пуст для неразрешённого segment).
 func (r *Request) Size() Size { return r.size }
@@ -196,14 +203,15 @@ func (r *Request) IsPreset() bool { return r.segmentName != "" }
 // пресета/custom применены).
 func (r *Request) IsResolved() bool { return r.resolved }
 
-// Build собирает канонический URL.
+// Build собирает канонический URL по пользовательской грамматике:
 //
-//	segment:  {path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
-//	канонич.: {path}/{source_name}-{source_format}/{transform}-{size}@{dpr}.{output_format}
+//	segment:      {path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
+//	segment-less: {path}/{source_name}-{source_format}/{size}@{dpr}.{output_format}
 //
 // Для segment-запросов DPR=1 (default) и DPR=0 (не задан) не выводятся;
 // явные 2 и 3 выводятся как @2/@3, если имя сегмента не содержит @dpr
-// (например "banner@2" — суффикс уже в имени).
+// (например "banner@2" — суффикс уже в имени). Для segment-less DPR=1
+// не выводится.
 func (r *Request) Build() (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("build: nil request")
@@ -218,17 +226,15 @@ func (r *Request) Build() (string, error) {
 			core += "@" + strconv.Itoa(r.dpr.Int())
 		}
 	} else {
+		// Segment-less запрос: единственная форма, существовавшая для
+		// пользователей — {size}@{dpr}.{out} (без crop-префикса).
 		if !r.dpr.Valid() {
 			return "", fmt.Errorf("build: dpr must be in [%d,%d], got %d", DefaultDPR, MaxDPR, r.dpr.Int())
 		}
-		if r.transform != "" && !ValidTransform(r.transform) {
-			return "", fmt.Errorf("build: invalid transform %q", r.transform)
+		if r.size.IsEmpty() {
+			return "", fmt.Errorf("build: empty size for segment-less request")
 		}
-		core = r.sourceName.String() + "-" + r.sourceFormat.String() + "/"
-		if r.transform != "" {
-			core += string(r.transform) + "-"
-		}
-		core += r.size.String()
+		core = r.sourceName.String() + "-" + r.sourceFormat.String() + "/" + r.size.String()
 		if !r.dpr.IsDefault() {
 			core += "@" + strconv.Itoa(r.dpr.Int())
 		}
@@ -293,12 +299,13 @@ func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
 // пресета/custom. segmentName сохраняется: канонический URL строится из
 // него. resolved=true помечает запрос разрешённым (Authorize не резолвит
 // повторно).
-func (r *Request) WithResolved(transform Transform, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec, encOverrides map[string]map[string]any) *Request {
+func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec, encOverrides map[string]map[string]any) *Request {
 	if r == nil {
 		return nil
 	}
 	cp := *r
-	cp.transform = transform
+	cp.crop = crop
+	cp.trim = trim
 	cp.size = size
 	cp.dpr = dpr
 	cp.quality = quality

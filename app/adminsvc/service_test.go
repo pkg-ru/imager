@@ -194,7 +194,7 @@ func (s *memMetadataStore) get(key string) *filemeta.FileMetadata {
 
 var _ metadata.Store = (*memMetadataStore)(nil)
 
-// mustPreset создаёт пресет для тестов.
+// mustPreset создаёт пресет для тестов (crop=center, trim=false).
 func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Preset {
 	t.Helper()
 	sz, err := asset.ParseSize(size)
@@ -205,7 +205,7 @@ func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Pr
 	if err != nil {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
-	p, err := asset.NewPreset(name, asset.TransformCrop, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil, nil)
+	p, err := asset.NewPreset(name, asset.CropCenter, false, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset(%q): %v", name, err)
 	}

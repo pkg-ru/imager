@@ -104,6 +104,57 @@ func TestCanonicalPathTooLong(t *testing.T) {
 	}
 }
 
+// TestBuildSegmentLessURL проверяет, что segment-less (канонический)
+// запрос строит пользовательскую форму {size}@{dpr}.{out} (без
+// crop-префикса): такая форма разбирается парсером.
+func TestBuildSegmentLessURL(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		size string
+		dpr  int
+		want string
+	}{
+		{"default dpr omitted", "photos", "120x80", 1, "photos/photo-1-jpg/120x80.webp"},
+		{"dpr 2", "photos", "120x80", 2, "photos/photo-1-jpg/120x80@2.webp"},
+		{"dpr 3", "", "x50", 3, "photo-1-jpg/x50@3.webp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := NewRequest(tt.path, mustSourceName(t, "photo-1"), mustFormat(t, "jpg"), CropCenter, false, mustSize(t, tt.size), DPR(tt.dpr), mustFormat(t, "webp"))
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			got, err := req.Build()
+			if err != nil {
+				t.Fatalf("Build() error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Build() = %q, want %q", got, tt.want)
+			}
+			// Форма должна быть обратно совместима с парсером.
+			if _, err := Parse("/" + got); err != nil {
+				t.Errorf("Parse(%q) error: %v (built URL must be parseable)", got, err)
+			}
+		})
+	}
+}
+
+// TestBuildSegmentLessEmptySizeError проверяет, что Build() segment-less
+// запроса без размера возвращает ошибку.
+func TestBuildSegmentLessEmptySizeError(t *testing.T) {
+	req, err := NewRequest("", mustSourceName(t, "photo-1"), mustFormat(t, "jpg"), Crop(""), false, mustSize(t, "x"), DefaultDPR, mustFormat(t, "webp"))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	// Имитируем segment-less запрос с пустым size (Build должен отказать).
+	broken := *req
+	broken.size = Size{}
+	if _, err := broken.Build(); err == nil {
+		t.Fatal("expected error for empty size in segment-less Build()")
+	}
+}
+
 func TestCanonicalizeURLIdempotent(t *testing.T) {
 	// Parse -> Build -> Parse -> Build должен быть идемпотентным.
 	url := "/photos/photo-1-jpg/banner@2.webp"

@@ -140,7 +140,7 @@ func TestAsyncPublishReturnsBeforePublishCompletes(t *testing.T) {
 
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	// Generate возвращается сразу; воркер начинает публикацию и блокируется.
 	// Барьер ДО чтения данных: данныые должны быть доступны из буфера
@@ -182,7 +182,7 @@ func TestAsyncPublishGracefulShutdownDrains(t *testing.T) {
 
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	result, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestAsyncPublishQueueOverflowSyncFallback(t *testing.T) {
 
 	ctx := context.Background()
 	gen := func(name string) (*Result, error) {
-		req := mustReq(t, "", name, "png", asset.TransformCrop, "100x100", 2, "webp")
+		req := mustReq(t, "", name, "png", asset.CropCenter, false, "100x100", 2, "webp")
 		return env.svc.Generate(ctx, req)
 	}
 
@@ -305,7 +305,7 @@ func TestAsyncPublishRepeatedGenerationNoOverwrite(t *testing.T) {
 
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	r1, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -355,7 +355,7 @@ func TestAsyncPublishRetryExhaustionLoggedAndMetric(t *testing.T) {
 
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 
 	result, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -425,7 +425,7 @@ func TestPublishQueueDisabledIsSync(t *testing.T) {
 
 	env.src.Add("photo.png", []byte("SRC"))
 	ctx := context.Background()
-	req := mustReq(t, "", "photo", "png", asset.TransformCrop, "100x100", 2, "webp")
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
 	result, err := env.svc.Generate(ctx, req)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

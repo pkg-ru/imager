@@ -52,19 +52,19 @@ type PathPolicyConfig struct {
 // «dpr не задан» (разрешены URL с @dpr-суффиксом) от «dpr задан» (суффикс
 // в URL запрещён, кроме случая, когда имя пресета содержит тот же @dpr).
 //
-// crop — ТОЛЬКО строковый параметр, дефолт "" (кроп не используется):
+// crop — ТОЛЬКО строковый параметр, дефолт "" (кроп не используется).
+// Значения совпадают с asset.Crop:
 //   - ""          — resize (только изменение размера)
-//   - "center"    — центрированный кроп (transform c)
-//   - "smart"     — умный кроп (sc)
-//   - "face"      — кроп по лицу (fc)
-//   - "object"    — кроп по объекту (oc)
-//   - "face_fix"  — cover-масштаб со сдвигом к лицу, без зума (ffx)
-//   - "object_fix" — cover-масштаб со сдвигом к объекту, без зума (ofx)
+//   - "center"    — центрированный кроп
+//   - "smart"     — умный кроп (smart-crop, attention libvips)
+//   - "face"      — кроп по лицу (ONNX YuNet)
+//   - "object"    — кроп по объекту (ONNX SSD/YOLO)
+//   - "face-fix"  — cover-масштаб со сдвигом к лицу, без зума
+//   - "object-fix" — cover-масштаб со сдвигом к объекту, без зума
 //
 // trim — булев флаг независимого фильтра обрезки однотонных полей (false =
-// не применять). Комбинация crop+trim кодируется в transform код:
-// при trim=true — "t"/"ct"/"sct"/"fct"/"oct", иначе — ""/"c"/"sc"/"fc"/"oc".
-// Фактическое применение — сначала trim, затем кроп.
+// не применять). Кроп и trim — независимые сущности; фактическое применение
+// — сначала trim, затем кроп.
 //
 // Native-параметры форматов задаются ПЛОСКО, на одном уровне с quality:
 // ключ = "{формат}-{параметр}" (kebab-case), где {параметр} — ключ реестра
@@ -284,12 +284,16 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 		}
 	}
 
-	switch crop {
-	case "", "center", "smart", "face", "object", "face_fix", "object_fix":
+	switch asset.Crop(crop) {
+	case "", asset.CropCenter, asset.CropSmart, asset.CropFace,
+		asset.CropObject, asset.CropFaceFix, asset.CropObjectFix:
 	default:
 		*errs = append(*errs, &ValidationError{
-			Path:   base + ".crop",
-			Reason: fmt.Sprintf("invalid value %q, must be one of: center, smart, face, object (empty = no crop)", crop),
+			Path: base + ".crop",
+			Reason: fmt.Sprintf(
+				"invalid value %q, must be one of: center, smart, face, object, face-fix, object-fix (empty = no crop)",
+				crop,
+			),
 		})
 	}
 
@@ -517,7 +521,8 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 	}
 	preset, err := asset.NewPreset(
 		name,
-		transformFromCropTrim(cfg.Crop.Unwrap(), cfg.Trim.Unwrap()),
+		asset.Crop(cfg.Crop.Unwrap()),
+		cfg.Trim.Unwrap(),
 		size,
 		formats,
 		dpr,
@@ -665,7 +670,8 @@ func compileCustom(name string, cfg PresetConfig, resolveWM func(string, string)
 	}
 	preset, err := asset.NewPreset(
 		name,
-		transformFromCropTrim(cfg.Crop.Unwrap(), cfg.Trim.Unwrap()),
+		asset.Crop(cfg.Crop.Unwrap()),
+		cfg.Trim.Unwrap(),
 		size,
 		formats,
 		dpr,
@@ -779,66 +785,6 @@ func loopFromConfig(l dynamic.Nullable[dynamic.Bool]) *bool {
 	}
 	v := l.Value.Unwrap()
 	return &v
-}
-
-// transformFromCropTrim маппит строковый режим crop и булев флаг trim
-// (независимые фильтры) в трансформационный код:
-//
-//	crop="",         trim=false → ""            (resize, без кропа)
-//	crop="center",   trim=false → "c"           (центрированный кроп)
-//	crop="smart",    trim=false → "sc" (smart-crop)
-//	crop="face",     trim=false → "fc" (face-crop)
-//	crop="object",   trim=false → "oc" (object-crop)
-//	crop="face_fix", trim=false → "ffx" (face-fix-crop)
-//	crop="object_fix", trim=false → "ofx" (object-fix-crop)
-//	crop="",         trim=true  → "t" (только trim)
-//	crop="center",   trim=true  → "ct" (c + trim; применяется trim, затем кроп)
-//	crop="smart",    trim=true  → "sct"
-//	crop="face",     trim=true  → "fct"
-//	crop="object",   trim=true  → "oct"
-//	crop="face_fix", trim=true  → "ffxt"
-//	crop="object_fix", trim=true → "ofxt"
-//
-// Trim в коде всегда стоит ПОСЛЕДНИМ; фактическое применение — сначала trim,
-// затем кроп.
-func transformFromCropTrim(crop string, trim bool) asset.Transform {
-	switch crop {
-	case "center":
-		if trim {
-			return asset.TransformCropTrim
-		}
-		return asset.TransformCrop
-	case "smart":
-		if trim {
-			return asset.TransformSmartCropTrim
-		}
-		return asset.TransformSmartCrop
-	case "face":
-		if trim {
-			return asset.TransformFaceCropTrim
-		}
-		return asset.TransformFaceCrop
-	case "object":
-		if trim {
-			return asset.TransformObjectCropTrim
-		}
-		return asset.TransformObjectCrop
-	case "face_fix":
-		if trim {
-			return asset.TransformFaceFixCropTrim
-		}
-		return asset.TransformFaceFixCrop
-	case "object_fix":
-		if trim {
-			return asset.TransformObjectFixCropTrim
-		}
-		return asset.TransformObjectFixCrop
-	default: // "" — кроп не используется
-		if trim {
-			return asset.TransformTrim
-		}
-		return ""
-	}
 }
 
 // mergePresetOrientation мержит ориентационные поля пресета с глобальным

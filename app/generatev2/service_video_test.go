@@ -55,7 +55,7 @@ func TestVideoOriginalServedAsIs(t *testing.T) {
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
-	req := mustReqSize(t, "", "clip", "mp4", asset.Transform(""), asset.NewOriginalSize(), 1, "mp4")
+	req := mustReqSize(t, "", "clip", "mp4", asset.Crop(""), false, asset.NewOriginalSize(), 1, "mp4")
 
 	// isOriginalRequest для mp4→mp4, size=x, без transform = true: fast-path
 	// оригинала достижим и для видео.
@@ -99,7 +99,7 @@ func TestVideoGenerateFirstTime(t *testing.T) {
 
 	ctx := context.Background()
 	// mp4→webp с resize — не original, идёт генерация из кадра.
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestVideoGenerateReusesCachedFrame(t *testing.T) {
 	metaS.data["clip.mp4"] = &filemeta.FileMetadata{VideoFrameKey: string(frameKey)}
 
 	ctx := context.Background()
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestVideoGenerateCacheHit(t *testing.T) {
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	// Первый запрос — генерация (кэш пуст). При генерации из видео метаданные
 	// читаются один раз (videoFrameKeyFromMeta).
@@ -250,7 +250,7 @@ func TestVideoExtractError(t *testing.T) {
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	_, err := env.svc.Generate(ctx, req)
 	if err == nil {
@@ -273,7 +273,7 @@ func TestVideoExtractorNotConfigured(t *testing.T) {
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	_, err := env.svc.Generate(ctx, req)
 	if err == nil {
@@ -341,7 +341,7 @@ func TestVideoOptionsPassedToExtractor(t *testing.T) {
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
 	ctx := context.Background()
-	req := mustReq(t, "", "clip", "mp4", asset.Transform(""), "100x100", 1, "webp")
+	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
 
 	res, err := env.svc.Generate(ctx, req)
 	if err != nil {
