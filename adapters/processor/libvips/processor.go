@@ -216,13 +216,19 @@ type Options struct {
 }
 
 // backendResult — результат обработки движка: байты + размеры выхода и
-// входа (для заполнения processor.Result; 0 = неизвестно).
+// входа (для заполнения processor.Result; 0 = неизвестно) + боксы детекции
+// (для детекторных операций; nil = детекция не выполнялась).
 type backendResult struct {
 	data         []byte
 	width        int
 	height       int
 	sourceWidth  int
 	sourceHeight int
+	detections   []filemeta.PixelBox
+	// detail — детализированные результаты self-detection (faces/objects
+	// с реальной уверенностью и label); заполняется только в режиме
+	// self-detection, при DetectionsReady=true — nil.
+	detail *processor.DetectionsDetail
 }
 
 // backend — реализация обработки изображения (build-tag specific):
@@ -362,6 +368,15 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 	if sourceLimit <= 0 {
 		sourceLimit = DefaultSourceBytes
 	}
+	// Safety rewind before reading: the source may have been consumed by an
+	// earlier pass (e.g. PrepareRGB for app-level detection) and left at EOF.
+	// Sources are rewindable by contract (processor.Input.Source), so a failed
+	// rewind here means the source is unusable for processing — fail loudly
+	// instead of feeding an empty buffer to the load step (unsupported image
+	// format regression).
+	if _, err := in.Source.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("libvips: rewind source: %w", err)
+	}
 	data, err := io.ReadAll(io.LimitReader(in.Source, sourceLimit))
 	if err != nil {
 		return nil, fmt.Errorf("libvips: read source: %w", err)
@@ -410,6 +425,8 @@ func (p *Processor) Process(ctx context.Context, in processor.Input, out io.Writ
 		Height:       br.height,
 		SourceWidth:  br.sourceWidth,
 		SourceHeight: br.sourceHeight,
+		Detections:   br.detections,
+		Detail:       br.detail,
 	}, nil
 }
 
@@ -428,6 +445,11 @@ func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*process
 		sourceLimit = DefaultSourceBytes
 	}
 	data, err := io.ReadAll(io.LimitReader(src, sourceLimit))
+	// Who reads — who rewinds: restore the source position right after reading
+	// so the same reader can be passed to Process afterwards. Sources are
+	// rewindable by contract (processor.Input.Source); a failed rewind must not
+	// fail the preparation itself, Process performs its own defensive rewind.
+	_, _ = src.Seek(0, io.SeekStart)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: read source: %w", err)
 	}

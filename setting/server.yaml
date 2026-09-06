@@ -292,10 +292,16 @@ libvips:
     # (в HTTP — таймаут обработки).
     timeout: "30s"
 
+    # source-bytes — application-level лимит размера ВХОДНЫХ данных (байт).
+    # 0 = дефолт кода 10 MiB (DefaultSourceBytes). Должен быть >=
+    # application.limits.source-bytes, иначе крупный исходник пройдёт
+    # application-лимит, но будет отсечён процессором (HTTP 500).
+    source-bytes: 20971520 # 20 MiB
+
     # output-bytes — application-level лимит размера ВЫХОДНЫХ данных (байт).
     # Реализуется boundedWriter'ом; при превышении запись прекращается
     # (LimitError). Защита от гигантских результатов.
-    output-bytes: 10485760 # 10 MiB
+    output-bytes: 20971520 # 20 MiB
 
     # concurrency — максимальное число ОДНОВРЕМЕННО выполняемых операций
     # обработки libvips (bounded очередь слотов; 0 = код применяет 16).
@@ -432,7 +438,7 @@ encoders:
   # webp — Reduction effort [0..6]: больше = лучше сжатие, медленнее.
   # Дефолт: 4.
   webp:
-    quality: null          # null = из запроса / encoders.default-quality
+    quality: null # null = из запроса / encoders.default-quality
     reduction-effort: 4
     lossless: false
     near-lossless: false
@@ -620,13 +626,13 @@ detection:
 
   # confidence-threshold — порог уверенности детектора в интервале [0,1].
   # Боксы с уверенностью ниже порога отбрасываются (до NMS).
-  # Тип: float. Дефолт: 0.5.
-  confidence-threshold: 0.5
+  # Тип: float. Дефолт: 0.4.
+  confidence-threshold: 0.4
 
   # max-objects — максимальное число объектов, сохраняемых после NMS
   # (первые N самых уверенных).
-  # Тип: int, должен быть > 0. Дефолт: 5.
-  max-objects: 5
+  # Тип: int, должен быть > 0. Дефолт: 15.
+  max-objects: 15
 
   # margin — отступ к найденной области как доля от её размера (0-1).
   # Применяется равномерно по обеим осям (половина с каждой стороны).
@@ -645,24 +651,24 @@ application:
   limits:
     # source-bytes — максимум размера ИСХОДНОГО файла (байт).
     # Тип: int64. 0 = без лимита.
-    source-bytes: 10485760                # 10 MiB
+    source-bytes: 20971520 # 20 MiB
 
     # output-bytes — максимум размера ВЫХОДНОГО файла (байт).
     # Тип: int64. 0 = без лимита. При превышении — генерация прерывается;
     # результат не сохраняется.
-    output-bytes: 10485760                # 10 MiB
+    output-bytes: 20971520 # 20 MiB
 
     # width — максимум ширины запрошенного изображения (px).
     # Тип: uint32. 0 = без лимита.
-    width: 2000
+    width: 4000
 
     # height — максимум высоты запрошенного изображения (px).
     # Тип: uint32. 0 = без лимита.
-    height: 2000
+    height: 4000
 
     # pixels — максимум пикселей запрошенного изображения (width×height).
     # Тип: int64. 0 = без лимита.
-    pixels: 4000000                       # 4 MP
+    pixels: 18000000
 
     # dpr — максимум значения dpr в запросе (допустимы 1/2/3).
     # Тип: uint32. 0 = без лимита.
@@ -674,7 +680,7 @@ application:
 
     # duration — максимум длительности анимации (мс).
     # Тип: uint32. 0 = без лимита.
-    duration: 60000                       # 60 000 мс = 60 c
+    duration: 60000 # 60 000 мс = 60 c
 
     # concurrency — максимум одновременных операций обработки от одного
     # клиента. Тип: uint32. 0 = без лимита.

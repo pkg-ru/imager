@@ -90,6 +90,8 @@ type fakeDetector struct {
 
 func (f *fakeDetector) Available() bool { return true }
 
+func (f *fakeDetector) Describe() detection.DetectorInfo { return detection.DetectorInfo{} }
+
 func (f *fakeDetector) DetectFaces(_ context.Context, _ []byte, width, height int) ([]detection.Box, error) {
 	f.calls++
 	f.lastW, f.lastH = width, height

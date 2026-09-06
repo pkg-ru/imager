@@ -245,3 +245,146 @@ func TestSentinelErrors(t *testing.T) {
 		}
 	}
 }
+
+const testHash = "a3f2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f80"
+
+// TestValidateSourceFingerprint — инварианты SourceFingerprint в Validate.
+func TestValidateSourceFingerprint(t *testing.T) {
+	valid := func() *FileMetadata {
+		return &FileMetadata{
+			SchemaVersion: CurrentSchemaVersion,
+			Source:        &SourceFingerprint{Size: 1024, ModTimeUnix: 1700000000, HashSHA256: testHash},
+		}
+	}
+	if err := valid().Validate(); err != nil {
+		t.Fatalf("valid fingerprint rejected: %v", err)
+	}
+	// Без хеша (опционален) и без mtime — валидно.
+	m := valid()
+	m.Source.HashSHA256 = ""
+	m.Source.ModTimeUnix = 0
+	if err := m.Validate(); err != nil {
+		t.Fatalf("fingerprint without hash/mtime must be valid: %v", err)
+	}
+	// Отрицательный Size.
+	m = valid()
+	m.Source.Size = -1
+	if err := m.Validate(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("negative size: expected ErrCorrupt, got %v", err)
+	}
+	// Отрицательный ModTimeUnix.
+	m = valid()
+	m.Source.ModTimeUnix = -5
+	if err := m.Validate(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("negative mod_time: expected ErrCorrupt, got %v", err)
+	}
+	// Некорректный хеш (не hex / не 64).
+	for _, bad := range []string{"abc", strings.Repeat("z", 64), strings.Repeat("a", 63)} {
+		m = valid()
+		m.Source.HashSHA256 = bad
+		if err := m.Validate(); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("bad hash %q: expected ErrCorrupt, got %v", bad, err)
+		}
+	}
+}
+
+// TestSourceFingerprintMatches — семантика сравнения отпечатков.
+func TestSourceFingerprintMatches(t *testing.T) {
+	base := &SourceFingerprint{Size: 100, ModTimeUnix: 1700000000, HashSHA256: testHash}
+
+	// Идентичные — совпадают.
+	if !base.Matches(&SourceFingerprint{Size: 100, ModTimeUnix: 1700000000, HashSHA256: testHash}) {
+		t.Fatal("identical fingerprints must match")
+	}
+	// Разный размер — не совпадают.
+	if base.Matches(&SourceFingerprint{Size: 200, ModTimeUnix: 1700000000, HashSHA256: testHash}) {
+		t.Fatal("different size must not match")
+	}
+	// Разный хеш — не совпадают.
+	if base.Matches(&SourceFingerprint{Size: 100, ModTimeUnix: 1700000000, HashSHA256: "b" + testHash[1:]}) {
+		t.Fatal("different hash must not match")
+	}
+	// Разный mtime (оба ненулевые) — не совпадают.
+	if base.Matches(&SourceFingerprint{Size: 100, ModTimeUnix: 1700000001, HashSHA256: testHash}) {
+		t.Fatal("different mtime must not match")
+	}
+	// Пустой mtime на одной из сторон игнорируется (источник без mtime).
+	if !base.Matches(&SourceFingerprint{Size: 100, HashSHA256: testHash}) {
+		t.Fatal("zero mtime on one side must be ignored")
+	}
+	// Пустой хеш на одной из сторон игнорируется (хеш опционален).
+	if !base.Matches(&SourceFingerprint{Size: 100, ModTimeUnix: 1700000000}) {
+		t.Fatal("empty hash on one side must be ignored")
+	}
+	// nil-приёмник/аргумент — не совпадают.
+	var nilFp *SourceFingerprint
+	if nilFp.Matches(base) || base.Matches(nil) {
+		t.Fatal("nil fingerprint must never match")
+	}
+}
+
+// TestJSONDetectionAndSourceFields — сериализация detection/source и
+// backward-compat: старый sidecar без этих полей читается (nil), новый
+// round-trip сохраняет данные.
+func TestJSONDetectionAndSourceFields(t *testing.T) {
+	src := &FileMetadata{
+		SchemaVersion: CurrentSchemaVersion,
+		Faces:         []FaceInfo{{PixelBox: PixelBox{X: 1, Y: 2, Width: 3, Height: 4}, Confidence: 0.9}},
+		Detection:     &DetectionInfo{Detector: "onnx", FaceModel: "face.onnx", ObjectModel: "obj.onnx", ConfidenceThreshold: 0.6},
+		Source:        &SourceFingerprint{Size: 42, ModTimeUnix: 1700000000, HashSHA256: testHash},
+		CreatedAt:     time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:     time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
+	}
+	data, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"detection":{`,
+		`"detector":"onnx"`, `"face_model":"face.onnx"`, `"object_model":"obj.onnx"`, `"confidence_threshold":0.6`,
+		`"source":{`, `"size":42`, `"mod_time_unix":1700000000`, `"hash_sha256":"` + testHash + `"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("JSON missing %s in %s", want, data)
+		}
+	}
+	var back FileMetadata
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back.Detection == nil || back.Detection.Detector != "onnx" || back.Detection.ConfidenceThreshold != 0.6 {
+		t.Fatalf("detection round-trip lost: %+v", back.Detection)
+	}
+	if back.Source == nil || back.Source.Size != 42 || back.Source.HashSHA256 != testHash {
+		t.Fatalf("source round-trip lost: %+v", back.Source)
+	}
+
+	// Backward-compat: v1-структура без detection/source читается как nil.
+	var old FileMetadata
+	if err := json.Unmarshal([]byte(`{"schema_version":1,"created_at":"2026-09-06T12:00:00Z","updated_at":"2026-09-06T12:00:00Z"}`), &old); err != nil {
+		t.Fatalf("Unmarshal legacy: %v", err)
+	}
+	if old.Detection != nil || old.Source != nil {
+		t.Fatalf("legacy sidecar must parse with nil detection/source: %+v %+v", old.Detection, old.Source)
+	}
+	if err := old.Validate(); err != nil {
+		t.Fatalf("legacy sidecar must be valid: %v", err)
+	}
+}
+
+// TestCloneDetectionAndSource — Clone глубокая копирует Detection и Source.
+func TestCloneDetectionAndSource(t *testing.T) {
+	src := &FileMetadata{
+		Detection: &DetectionInfo{Detector: "onnx", FaceModel: "f.onnx"},
+		Source:    &SourceFingerprint{Size: 7, HashSHA256: testHash},
+	}
+	cp := src.Clone()
+	if cp.Detection == src.Detection || cp.Source == src.Source {
+		t.Fatal("Clone must deep-copy Detection/Source pointers")
+	}
+	cp.Detection.FaceModel = "mutated.onnx"
+	cp.Source.Size = 999
+	if src.Detection.FaceModel != "f.onnx" || src.Source.Size != 7 {
+		t.Fatalf("mutation of clone leaked into source: %+v %+v", src.Detection, src.Source)
+	}
+}

@@ -36,6 +36,8 @@ func (fakeDetector) DetectObjects(_ context.Context, _ []byte, _, _ int) ([]file
 
 func (fakeDetector) Available() bool { return true }
 
+func (fakeDetector) Describe() detector.DetectorInfo { return detector.DetectorInfo{Kind: "fake"} }
+
 var _ detector.Detector = (*fakeDetector)(nil)
 
 // captureLogger — логгер, собирающий warning'и (для проверки merge-конфликтов).

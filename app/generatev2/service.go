@@ -716,8 +716,14 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	// при любом сбое возвращается (false, nil) — процессор работает
 	// в режиме self-detection. Метаданные привязаны к ассету-результату,
 	// поэтому ключом служит key (канонический URL ассета).
-	in := processor.Input{Source: src, Plan: plan, SourceKey: srcKey}
-	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, key, plan, src)
+	in := processor.Input{
+		Source:            src,
+		Plan:              plan,
+		SourceKey:         srcKey,
+		MetaKey:           key,
+		SourceFingerprint: detectionFingerprint(meta),
+	}
+	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, key, plan, src, in.SourceFingerprint)
 
 	// Обработка в Processor + параллельная публикация в remote.
 	buf, err := s.processAndPublish(ctx, key, in)
@@ -949,6 +955,21 @@ func cropFromPlan(c asset.Crop, trim bool) (processing.Operation, bool) {
 	}
 }
 
+// isDetectionOperation сообщает, является ли операция детекторной (fc/oc/
+// fct/oct) — только для таких операций процессор может вернуть боксы.
+func isDetectionOperation(plan *processing.ProcessingPlan) bool {
+	if plan == nil {
+		return false
+	}
+	switch plan.Operation {
+	case processing.OpFaceCrop, processing.OpObjectCrop,
+		processing.OpFaceFixCrop, processing.OpObjectFixCrop:
+		return true
+	default:
+		return false
+	}
+}
+
 // isCropOperation сообщает, является ли операция кропом (требует оба
 // измерения целевого размера). Resize — не кроп.
 func isCropOperation(op processing.Operation) bool {
@@ -1063,6 +1084,16 @@ func (s *Service) processAndPublish(ctx context.Context, key object.ObjectKey, i
 	// created_unix: ленивая асинхронная запись unix-времени создания первого
 	// ассета. Выполняется в фоне (не блокирует ответ), best-effort.
 	s.recordAssetCreationTime(ctx, key)
+
+	// Страховка «1 вызов модели на родителя»: если ensureDetections
+	// деградировал и процессор отработал в режиме self-detection, боксы из
+	// Result.Detections сохраняются в sidecar (best-effort). Метаданные
+	// привязаны к ключу sidecar-родителя (in.MetaKey; для видео-ассетов
+	// generateVideoLocked передаёт ключ кадра frameKey).
+	if !in.DetectionsReady && procRes != nil && len(procRes.Detections) > 0 &&
+		isDetectionOperation(in.Plan) {
+		s.recordSelfDetections(ctx, in.MetaKey, in.SourceFingerprint, in.Plan.Operation, procRes.Detections, procRes.Detail)
+	}
 
 	task := publishTask{key: key, buf: buf, reader: reader}
 	if s.asyncPublish(task) {

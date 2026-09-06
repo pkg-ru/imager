@@ -21,6 +21,15 @@ type Input struct {
 	// SourceKey — ключ родительского файла (для диагностики/будущих
 	// расширений).
 	SourceKey object.ObjectKey
+	// SourceFingerprint — отпечаток источника (Size/mtime/SHA-256),
+	// вычисленный на уровне приложения; используется при best-effort записи
+	// self-detection результатов в sidecar (инвалидация кэша). nil = не
+	// вычислялся.
+	SourceFingerprint *filemeta.SourceFingerprint
+	// MetaKey — ключ sidecar-метаданных РОДИТЕЛЯ (для картинок совпадает с
+	// ключом ассета; для видео-ассетов — ключ кадра frameKey). Используется
+	// при best-effort записи self-detection результатов в sidecar.
+	MetaKey object.ObjectKey
 	// DetectionsReady — true, если боксы валидны и процессор ОБЯЗАН не
 	// вызывать ИИ-модель (боксы получены из sidecar-кэша моделей на уровне
 	// приложения).
@@ -30,6 +39,38 @@ type Input struct {
 	// Для trim-вариантов (fct/oct) процессор транслирует их на
 	// trim-offset.
 	Boxes []filemeta.PixelBox
+}
+
+// DetectedFace — лицо, обнаруженное детектором (координаты оригинала +
+// уверенность модели).
+type DetectedFace struct {
+	// Box — бокс в пикселях ОРИГИНАЛА (до trim/кропа).
+	Box filemeta.PixelBox
+	// Confidence — уверенность детектора в интервале [0,1].
+	Confidence float64
+}
+
+// DetectedObject — объект, обнаруженный детектором (координаты оригинала +
+// уверенность + имя класса).
+type DetectedObject struct {
+	// Box — бокс в пикселях ОРИГИНАЛА (до trim/кропа).
+	Box filemeta.PixelBox
+	// Confidence — уверенность детектора в интервале [0,1].
+	Confidence float64
+	// Label — имя класса (например "COCO_person"); может быть пустой.
+	Label string
+}
+
+// DetectionsDetail — детализированные результаты детекции self-detection,
+// разделённые на faces/objects с реальной уверенностью модели. Заполняется
+// ТОЛЬКО при self-detection (внутри процессора); при DetectionsReady=true
+// оставляется nil (app-слой уже владеет боксами).
+type DetectionsDetail struct {
+	// Faces — найденные лица (face-crop/face-fix-crop); nil = не искались.
+	Faces []DetectedFace
+	// Objects — найденные объекты (object-crop/object-fix-crop); nil =
+	// не искались.
+	Objects []DetectedObject
 }
 
 // Result — результат обработки.
@@ -44,6 +85,17 @@ type Result struct {
 	SourceWidth int
 	// SourceHeight — высота входа (px, из заголовка; 0 = неизвестно).
 	SourceHeight int
+	// Detections — боксы детекции (faces/objects), использованные или
+	// найденные процессором в пикселях ОРИГИНАЛА (до trim/кропа). Заполняются
+	// для детекторных операций (fc/oc/fct/oct): при self-detection — боксы,
+	// найденные моделью внутри процессора; при DetectionsReady=true —
+	// переданные app-боксы (дублируют Input.Boxes, для симметрии). Для
+	// прочих операций — nil.
+	Detections []filemeta.PixelBox
+	// Detail — детализированные результаты self-detection (faces/objects
+	// с реальной уверенностью и label). nil = детекция не выполнялась или
+	// выполнялась с готовыми боксами из sidecar-кэша.
+	Detail *DetectionsDetail
 }
 
 // RGBFrame — RGB-пиксели изображения (3 байта на пиксель, порядок R,G,B)

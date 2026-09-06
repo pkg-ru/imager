@@ -12,6 +12,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -72,6 +73,7 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 	// libvips доступен только если скомпилирован с тэком "libvips".
 	lvProc, lvErr := libvips.New(libvips.Options{
 		Limits: libvips.Limits{
+			SourceBytes:   rc.Libvips.Limits.SourceBytes,
 			OutputBytes:   rc.Libvips.Limits.OutputBytes,
 			Timeout:       rc.Libvips.Limits.Timeout,
 			Concurrency:   rc.Libvips.Limits.Concurrency,
@@ -115,6 +117,22 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 type closedProcessor struct {
 	processor.Processor
 	closers []io.Closer
+}
+
+// Compile-time assertion: closedProcessor обязан сохранять опциональный
+// processor.RGBPreparer (иначе app-level детекция ensureDetections всегда
+// деградирует к self-detection — см. generatev2).
+var _ processor.RGBPreparer = (*closedProcessor)(nil)
+
+// PrepareRGB пробрасывает подготовку RGB-кадра на нижележащий процессор,
+// если тот реализует processor.RGBPreparer (иначе — деградация к
+// self-detection на уровне приложения).
+func (c *closedProcessor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*processor.RGBFrame, error) {
+	prep, ok := c.Processor.(processor.RGBPreparer)
+	if !ok {
+		return nil, fmt.Errorf("%T does not implement processor.RGBPreparer", c.Processor)
+	}
+	return prep.PrepareRGB(ctx, src)
 }
 
 func (c *closedProcessor) Close() error {

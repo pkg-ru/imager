@@ -193,7 +193,8 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, err
 	}
 
-	if err := b.applyOperation(ctx, img, plan, detectionsReady, boxes, slot); err != nil {
+	detections, detail, err := b.applyOperation(ctx, img, plan, detectionsReady, boxes, slot)
+	if err != nil {
 		return nil, err
 	}
 
@@ -234,6 +235,8 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		height:       img.Height(),
 		sourceWidth:  srcW,
 		sourceHeight: srcH,
+		detections:   detections,
+		detail:       detail,
 	}, nil
 }
 
@@ -651,22 +654,26 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 // detectionsReady/boxes — готовые боксы из sidecar-кэша (координаты
 // оригинала); при trim они транслируются на trim-offset внутри
 // applyDetectionCrop.
-func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) error {
+// Возвращает боксы детекции (в координатах ОРИГИНАЛА) для детекторных
+// операций (fc/oc/fct/oct); для прочих операций — nil. detail —
+// детализированные результаты self-detection (nil для недетекторных
+// операций и для DetectionsReady=true).
+func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 
 	// Trim-first: независимый фильтр обрезки однотонных полей применяется
 	// до основной операции (кропа/ресайза).
 	if plan.Trim {
 		if err := applyTrim(img, plan.TrimSpec); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 
 	// Size.Original (size=x): размер не меняем (после trim).
 	if plan.Size.Original {
-		return nil
+		return nil, nil, nil
 	}
 
 	// Размеры кадра: для анимации — высота ОДНОГО кадра (page-height),
@@ -693,7 +700,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 			return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
 		})
 		if err != nil {
-			return fmt.Errorf("libvips: resize: %w", err)
+			return nil, nil, fmt.Errorf("libvips: resize: %w", err)
 		}
 	case processing.OpCrop:
 		// Центрированная обрезка до точного размера (с premultiply для
@@ -706,7 +713,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 			return img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeBoth)
 		})
 		if err != nil {
-			return fmt.Errorf("libvips: crop: %w", err)
+			return nil, nil, fmt.Errorf("libvips: crop: %w", err)
 		}
 	case processing.OpSmartCrop:
 		// Умная обрезка: внимание (attention) libvips — центр тяжести
@@ -717,7 +724,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 			return img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeBoth)
 		})
 		if err != nil {
-			return fmt.Errorf("libvips: smart-crop: %w", err)
+			return nil, nil, fmt.Errorf("libvips: smart-crop: %w", err)
 		}
 	case processing.OpFaceCrop:
 		fallthrough
@@ -729,13 +736,11 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера.
-		if err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot); err != nil {
-			return err
-		}
+		return b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot)
 	default:
-		return fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
+		return nil, nil, fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
 	}
-	return nil
+	return nil, nil, nil
 }
 
 // applyTrim выполняет обрезку однотонных/пустых краёв изображения по контенту
@@ -848,9 +853,18 @@ func hexToColor(hex string) *vips.Color {
 // консистентном состоянии (владение не теряется), а slot.Release() в defer
 // Process освобождает всё удерживаемое; ошибка перегрузки detection-семафора
 // пробрасывается вызывающему как есть.
-func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) error {
+// Возвращает итоговые боксы детекции в координатах ОРИГИНАЛА (для
+// self-detection — найденные моделью; для DetectionsReady — переданные
+// app-боксы), чтобы app-слой мог сохранить их в sidecar при деградации
+// ensureDetections.
+// applyDetectionCrop применяет детекторную обрезку (fc/oc/fct/oct) и
+// возвращает боксы в координатах ОРИГИНАЛА + детализированные результаты
+// self-detection (faces/objects с реальной уверенностью и label).
+// detail заполняется ТОЛЬКО в режиме self-detection (модель вызывалась
+// внутри процессора); при DetectionsReady=true — nil.
+func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 
 	// Размеры кадра: для анимации используем высоту одного кадра.
@@ -871,36 +885,36 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		// Self-detection: модель вызывается здесь.
 		det := b.opts.Detector
 		if det == nil || !det.Available() {
-			return fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
+			return nil, nil, fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
 		}
 
 		// Извлечение RGB-пикселей: работаем на копии, чтобы не менять исходник.
 		tmp, err := img.Copy()
 		if err != nil {
-			return fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
+			return nil, nil, fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
 		}
 		defer tmp.Close()
 		if err := tmp.ToColorSpace(vips.InterpretationSRGB); err != nil {
-			return fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
+			return nil, nil, fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
 		}
 		if err := tmp.Cast(vips.BandFormatUchar); err != nil {
-			return fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
+			return nil, nil, fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
 		}
 		// Для анимации берём только первый кадр (высота H).
 		if H < img.Height() {
 			if err := tmp.ExtractArea(0, 0, W, H); err != nil {
-				return fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
+				return nil, nil, fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
 			}
 		}
 		// Приводим к 3 каналам (RGB), если есть альфа.
 		if tmp.Bands() > 3 {
 			if err := tmp.ExtractBand(0, 3); err != nil {
-				return fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
+				return nil, nil, fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
 			}
 		}
 		rgb, err := tmp.ToBytes()
 		if err != nil {
-			return fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
+			return nil, nil, fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
 		}
 
 		// Handoff: захватываем detection-слот и освобождаем
@@ -914,7 +928,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		// (деградация к прежнему поведению, не ошибка).
 		if slot != nil {
 			if err := slot.handoffToDetection(ctx); err != nil {
-				return fmt.Errorf("libvips: %s: detection semaphore: %w", plan.Operation, err)
+				return nil, nil, fmt.Errorf("libvips: %s: detection semaphore: %w", plan.Operation, err)
 			}
 		}
 
@@ -929,7 +943,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 			detBoxes, err2 = det.DetectObjects(ctx, rgb, W, H)
 		}
 		if err2 != nil {
-			return fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err2)
+			return nil, nil, fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err2)
 		}
 	}
 
@@ -938,7 +952,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	// суммарная конкурентность не превышает лимиты ни на мгновение.
 	if slot != nil && !detectionsReady {
 		if err := slot.reacquireVips(ctx); err != nil {
-			return fmt.Errorf("libvips: %s: reacquire vips slot: %w", plan.Operation, err)
+			return nil, nil, fmt.Errorf("libvips: %s: reacquire vips slot: %w", plan.Operation, err)
 		}
 	}
 
@@ -963,7 +977,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		rect = detection.SelectObjectFixCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
 	}
 	if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
-		return fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
+		return nil, nil, fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
 	}
 	// Финальный ресайз после кропа — тоже с premultiply для альфы
 	// (консистентно с applyOperation). SizeBoth (не Force): область кропа
@@ -973,9 +987,43 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeBoth)
 	})
 	if err != nil {
-		return fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
+		return nil, nil, fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
 	}
-	return nil
+	// Итоговые боксы: в координатах ОРИГИНАЛА (до trim). При self-detection
+	// модель уже вернула боксы в координатах текущего кадра; если trim был
+	// применён ДО детекции (applyTrim выше по стеку в applyOperation), кадр
+	// сдвинут — обратная трансляция на trim-offset невозможна здесь, поэтому
+	// в Result возвращаются боксы как есть (координаты кадра, в котором
+	// выполнялась детекция). Без trim кадр == оригинал — точное совпадение.
+	out := make([]filemeta.PixelBox, 0, len(detBoxes))
+	var detail *processor.DetectionsDetail
+	if !detectionsReady {
+		// Self-detection: сохраняем детализированные результаты (реальная
+		// уверенность модели + label для объектов), чтобы app-слой смог
+		// записать их в sidecar без деградации confidence к 1.0.
+		detail = &processor.DetectionsDetail{}
+		switch plan.Operation {
+		case processing.OpFaceCrop, processing.OpFaceFixCrop:
+			for _, b2 := range detBoxes {
+				detail.Faces = append(detail.Faces, processor.DetectedFace{
+					Box:        filemeta.PixelBox{X: b2.X, Y: b2.Y, Width: b2.W, Height: b2.H},
+					Confidence: detection.ClampConfidence(b2.Confidence),
+				})
+			}
+		case processing.OpObjectCrop, processing.OpObjectFixCrop:
+			for _, b2 := range detBoxes {
+				detail.Objects = append(detail.Objects, processor.DetectedObject{
+					Box:        filemeta.PixelBox{X: b2.X, Y: b2.Y, Width: b2.W, Height: b2.H},
+					Confidence: detection.ClampConfidence(b2.Confidence),
+					Label:      b2.Label,
+				})
+			}
+		}
+	}
+	for _, b2 := range detBoxes {
+		out = append(out, filemeta.PixelBox{X: b2.X, Y: b2.Y, Width: b2.W, Height: b2.H})
+	}
+	return out, detail, nil
 }
 
 // translateBoxes транслирует боксы из координат ОРИГИНАЛА в координаты

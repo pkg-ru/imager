@@ -109,6 +109,11 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 	var src io.ReadSeeker
 	var srcSize int64
 	var closeSrc func() error
+	// Отпечаток источника детекции (кадра). Для уже сохранённого x.jpg —
+	// Size+mtime из метаданных; для свежеизвлечённого кадра — SHA-256
+	// байтов кадра (позволяет инвалидировать кэш детекции при повторном
+	// извлечении другого кадра).
+	var srcFingerprint *filemeta.SourceFingerprint
 	if frameKey != "" {
 		// x.jpg уже сохранён — открываем его как источник. Оригинал видео
 		// НЕ открывается.
@@ -123,6 +128,7 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 		} else {
 			src = art
 			srcSize = art.Metadata().Size
+			srcFingerprint = detectionFingerprint(art.Metadata())
 			closeSrc = art.Close
 		}
 	}
@@ -140,6 +146,7 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 		s.persistVideoFrameAsync(canonDir, metaKey, frame.Frame)
 		src = bytes.NewReader(frame.Frame)
 		srcSize = int64(len(frame.Frame))
+		srcFingerprint = detectionFingerprintFromBytes(frame.Frame)
 		closeSrc = func() error { return nil }
 	}
 	defer closeSrc()
@@ -162,8 +169,19 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 	}
 
 	// 4. Детекция (fc/oc) — как для обычных картинок, из кадра.
-	in := processor.Input{Source: src, Plan: plan, SourceKey: srcKey}
-	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, key, plan, src)
+	// КЛЮЧ БЛОКИРОВКИ/SIDECAR — ключ кадра (frameKeyBase), а не ключ ассета:
+	// sidecar-родителя лежит в каталоге канонического ассета видео
+	// (.meta.json рядом с x.jpg). Это выравнивает app-flight "meta:"+frameKey
+	// со store-flight "meta:"+metaKey (MetadataStore.Update) и исключает
+	// гонку Save/Update.
+	in := processor.Input{
+		Source:            src,
+		Plan:              plan,
+		SourceKey:         srcKey,
+		MetaKey:           frameKeyBase,
+		SourceFingerprint: srcFingerprint,
+	}
+	in.DetectionsReady, in.Boxes = s.ensureDetections(ctx, frameKeyBase, plan, src, srcFingerprint)
 
 	// 5. Обработка кадра + публикация результата.
 	return s.processAndPublish(ctx, key, in)

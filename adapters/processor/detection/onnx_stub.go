@@ -27,6 +27,10 @@ func NewDetector(_ Options) Detector {
 // Available всегда false: поддержка ONNX не скомпилирована.
 func (s *stubDetector) Available() bool { return false }
 
+// Describe возвращает конфигурацию (в заглушке — пустую): инференс
+// невозможен, модели не использовались.
+func (s *stubDetector) Describe() DetectorInfo { return DetectorInfo{} }
+
 // DetectFaces возвращает ErrNotCompiled.
 func (s *stubDetector) DetectFaces(_ context.Context, _ []byte, _, _ int) ([]Box, error) {
 	return nil, ErrNotCompiled

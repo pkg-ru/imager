@@ -494,6 +494,11 @@ type EncoderFormatGIFYAML struct {
 
 // LibvipsLimitsYAML — YAML-представление libvips.Limits.
 type LibvipsLimitsYAML struct {
+	// SourceBytes — лимит размера входных данных (байт). 0 = дефолт кода
+	// libvips.DefaultSourceBytes (10 MiB). Должен быть >=
+	// application.limits.source-bytes, иначе крупный исходник пройдёт
+	// application-лимит, но будет отсечён процессором.
+	SourceBytes dynamic.Int64 `yaml:"source-bytes"`
 	// OutputBytes — лимит размера выходных данных (байт).
 	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
 	// Timeout — context deadline на одну операцию (duration).
@@ -1255,6 +1260,7 @@ func (s ServerYAML) build() (ServerConfig, error) {
 func (l LibvipsYAML) build() (LibvipsConfig, error) {
 	cfg := LibvipsConfig{
 		Limits: libvips.Limits{
+			SourceBytes:   l.Limits.SourceBytes.Unwrap(),
 			OutputBytes:   l.Limits.OutputBytes.Unwrap(),
 			Concurrency:   int(l.Limits.Concurrency.Unwrap()),
 			Threads:       int(l.Limits.Threads.Unwrap()),
@@ -1274,6 +1280,7 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		{"limits.max-cache-mem", l.Limits.MaxCacheMem.Unwrap()},
 		{"limits.max-cache-files", l.Limits.MaxCacheFiles.Unwrap()},
 		{"limits.max-cache-size", l.Limits.MaxCacheSize.Unwrap()},
+		{"limits.source-bytes", l.Limits.SourceBytes.Unwrap()},
 		{"limits.output-bytes", l.Limits.OutputBytes.Unwrap()},
 	} {
 		if v.val < 0 {

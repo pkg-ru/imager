@@ -607,3 +607,17 @@ func clampInt(v, lo, hi int) int {
 	}
 	return v
 }
+
+// ClampConfidence ограничивает уверенность детектора интервалом [0,1]:
+// модели (YuNet: score = cls*obj) могут вернуть значение > 1, что
+// отклоняется валидацией sidecar (см. filemeta.Validate). NaN/Inf
+// (порча данных) также приводятся к 0.
+func ClampConfidence(v float64) float64 {
+	if v != v || v < 0 { // math.IsNaN(v)/math.IsInf
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}

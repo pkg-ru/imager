@@ -3,13 +3,16 @@ package generatev2
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
 	"gitverse.ru/pkg-ru/imager/domain/asset"
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/domain/object"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
 	"gitverse.ru/pkg-ru/imager/internal/testutil"
 	"gitverse.ru/pkg-ru/imager/ports/processor"
@@ -54,7 +57,7 @@ func TestEnsureDetectionsCacheHit(t *testing.T) {
 	}
 	s := newMetaService(metaS, det)
 
-	ready, boxes := s.ensureDetections(context.Background(), "src", testMetaPlan(t, processing.OpFaceCrop), nil)
+	ready, boxes := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, nil)
 	if !ready {
 		t.Fatalf("ready = false, want true (sidecar hit)")
 	}
@@ -81,7 +84,7 @@ func TestEnsureDetectionsConcurrentOneCall(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ready, _ := s.ensureDetections(context.Background(), "src", plan, nil)
+			ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), plan, nil, nil)
 			results[i] = ready
 		}(i)
 	}
@@ -106,7 +109,7 @@ func TestEnsureDetectionsEmptyCached(t *testing.T) {
 	s := newMetaService(metaS, det)
 	plan := testMetaPlan(t, processing.OpFaceCrop)
 
-	ready, boxes := s.ensureDetections(context.Background(), "src", plan, nil)
+	ready, boxes := s.ensureDetections(context.Background(), object.ObjectKey("src"), plan, nil, nil)
 	if !ready {
 		t.Fatalf("ready = false, want true (empty result still tracked)")
 	}
@@ -121,7 +124,7 @@ func TestEnsureDetectionsEmptyCached(t *testing.T) {
 	}
 
 	// Второй запрос — из sidecar, модель не вызывается.
-	ready2, _ := s.ensureDetections(context.Background(), "src", plan, nil)
+	ready2, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), plan, nil, nil)
 	if !ready2 {
 		t.Fatalf("second call ready = false, want true")
 	}
@@ -138,7 +141,7 @@ func TestEnsureDetectionsCorruptRecalc(t *testing.T) {
 	det := newFakeDetector()
 	s := newMetaService(metaS, det)
 
-	ready, _ := s.ensureDetections(context.Background(), "src", testMetaPlan(t, processing.OpFaceCrop), nil)
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, nil)
 	if !ready {
 		t.Fatalf("ready = false, want true (corrupt → recalc)")
 	}
@@ -161,7 +164,7 @@ func TestEnsureDetectionsIOError(t *testing.T) {
 	det := newFakeDetector()
 	s := newMetaService(metaS, det)
 
-	ready, _ := s.ensureDetections(context.Background(), "src", testMetaPlan(t, processing.OpFaceCrop), nil)
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, nil)
 	if ready {
 		t.Fatalf("ready = true, want false (IO error → degrade)")
 	}
@@ -170,7 +173,7 @@ func TestEnsureDetectionsIOError(t *testing.T) {
 // TestEnsureDetectionsDisabled: metadata/детектор выключены → (false, nil).
 func TestEnsureDetectionsDisabled(t *testing.T) {
 	s := &Service{deps: Deps{Metadata: nil, Detector: nil}}
-	ready, boxes := s.ensureDetections(context.Background(), "src", testMetaPlan(t, processing.OpFaceCrop), nil)
+	ready, boxes := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, nil)
 	if ready || boxes != nil {
 		t.Fatalf("disabled: ready=%v boxes=%v, want false/nil", ready, boxes)
 	}
@@ -184,7 +187,7 @@ func TestEnsureDetectionsSchemaTooNew(t *testing.T) {
 	det := newFakeDetector()
 	s := newMetaService(metaS, det)
 
-	ready, _ := s.ensureDetections(context.Background(), "src", testMetaPlan(t, processing.OpFaceCrop), nil)
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, nil)
 	if ready {
 		t.Fatalf("ready = true, want false (schema too new → degrade)")
 	}
@@ -425,7 +428,7 @@ func TestEnsureDetectionsObjectCropOnlyObjects(t *testing.T) {
 
 	plan := testMetaPlan(t, processing.OpObjectCrop)
 
-	ready, boxes := s.ensureDetections(context.Background(), "src", plan, nil)
+	ready, boxes := s.ensureDetections(context.Background(), object.ObjectKey("src"), plan, nil, nil)
 	if !ready {
 		t.Fatalf("ready = false, want true")
 	}
@@ -449,5 +452,268 @@ func TestEnsureDetectionsObjectCropOnlyObjects(t *testing.T) {
 	}
 	if len(saved.Faces) != 0 {
 		t.Fatalf("sidecar faces = %+v, want empty", saved.Faces)
+	}
+}
+
+// fpOf — вспомогательный конструктор отпечатка источника.
+func fpOf(size int64) *filemeta.SourceFingerprint {
+	return &filemeta.SourceFingerprint{Size: size, ModTimeUnix: 1700000000}
+}
+
+// TestEnsureDetectionsFingerprintInvalidation — sidecar с fingerprint,
+// не совпавшим с текущим источником, инвалидируется: боксы сбрасываются,
+// модель вызывается заново, в sidecar записывается новый отпечаток.
+func TestEnsureDetectionsFingerprintInvalidation(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	metaS.data["src"] = &filemeta.FileMetadata{
+		SchemaVersion: filemeta.CurrentSchemaVersion,
+		Faces:         []filemeta.FaceInfo{{PixelBox: filemeta.PixelBox{X: 99, Y: 99, Width: 9, Height: 9}, Confidence: 0.5}},
+		Source:        fpOf(111), // не совпадает с текущим (222)
+	}
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	ready, boxes := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, fpOf(222))
+	if !ready {
+		t.Fatalf("ready = false, want true (invalidated → re-detect)")
+	}
+	if len(boxes) != 1 || boxes[0].X != 10 {
+		t.Fatalf("boxes = %+v, want fresh detection (x=10)", boxes)
+	}
+	if got := det.facesCalls.Load(); got != 1 {
+		t.Fatalf("DetectFaces calls = %d, want 1 (re-detect after invalidation)", got)
+	}
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved.Source == nil || saved.Source.Size != 222 {
+		t.Fatalf("sidecar source = %+v, want new fingerprint (size=222)", saved.Source)
+	}
+	if saved.Detection == nil || saved.Detection.Detector != "fake" {
+		t.Fatalf("sidecar detection info = %+v, want DetectorInfo from Describe()", saved.Detection)
+	}
+}
+
+// TestEnsureDetectionsFingerprintMatchKeepsCache — совпадающий отпечаток
+// НЕ инвалидирует кэш: модель не вызывается (надёжный fast path).
+func TestEnsureDetectionsFingerprintMatchKeepsCache(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	metaS.data["src"] = &filemeta.FileMetadata{
+		SchemaVersion: filemeta.CurrentSchemaVersion,
+		Faces:         []filemeta.FaceInfo{{PixelBox: filemeta.PixelBox{X: 1, Y: 2, Width: 30, Height: 30}, Confidence: 0.9}},
+		Source:        fpOf(222),
+		Detection:     &filemeta.DetectionInfo{Detector: "fake"},
+	}
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, fpOf(222))
+	if !ready {
+		t.Fatalf("ready = false, want true (fingerprint match → cache hit)")
+	}
+	if got := det.facesCalls.Load(); got != 0 {
+		t.Fatalf("DetectFaces calls = %d, want 0 (fast path)", got)
+	}
+}
+
+// TestEnsureDetectionsLegacySidecarNoSourceIsValidCache — sidecar без
+// fingerprint (записанные до появления инвалидации) считается валидным
+// кэшем: модель не вызывается.
+func TestEnsureDetectionsLegacySidecarNoSourceIsValidCache(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	metaS.data["src"] = &filemeta.FileMetadata{
+		SchemaVersion: filemeta.CurrentSchemaVersion,
+		Faces:         []filemeta.FaceInfo{{PixelBox: filemeta.PixelBox{X: 1, Y: 2, Width: 30, Height: 30}, Confidence: 0.9}},
+	}
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, fpOf(222))
+	if !ready {
+		t.Fatalf("ready = false, want true (legacy sidecar = valid cache)")
+	}
+	if got := det.facesCalls.Load(); got != 0 {
+		t.Fatalf("DetectFaces calls = %d, want 0 (legacy cache honored)", got)
+	}
+}
+
+// TestEnsureDetectionsSavesDetectionInfo — при детекции в sidecar пишутся
+// DetectionInfo (из Describe) и SourceFingerprint.
+func TestEnsureDetectionsSavesDetectionInfo(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+
+	ready, _ := s.ensureDetections(context.Background(), object.ObjectKey("src"), testMetaPlan(t, processing.OpFaceCrop), nil, fpOf(42))
+	if !ready {
+		t.Fatalf("ready = false, want true")
+	}
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved == nil {
+		t.Fatal("sidecar not saved")
+	}
+	if saved.Detection == nil || saved.Detection.Detector != "fake" ||
+		saved.Detection.FaceModel != "fake-face.onnx" ||
+		saved.Detection.ConfidenceThreshold != 0.5 {
+		t.Fatalf("detection info = %+v, want fake detector description", saved.Detection)
+	}
+	if saved.Source == nil || saved.Source.Size != 42 || saved.Source.ModTimeUnix != 1700000000 {
+		t.Fatalf("source fingerprint = %+v, want size=42 mtime=1700000000", saved.Source)
+	}
+}
+
+// fakeSelfDetectionProcessor — процессор, который НЕ реализует RGBPreparer
+// (деградация ensureDetections) и возвращает Result.Detections (режим
+// self-detection).
+type fakeSelfDetectionProcessor struct {
+	calls atomic.Int64
+}
+
+func (f *fakeSelfDetectionProcessor) Process(_ context.Context, _ processor.Input, _ io.Writer) (*processor.Result, error) {
+	f.calls.Add(1)
+	return &processor.Result{
+		Detections: []filemeta.PixelBox{{X: 7, Y: 8, Width: 30, Height: 30}},
+	}, nil
+}
+
+var _ processor.Processor = (*fakeSelfDetectionProcessor)(nil)
+
+// TestRecordSelfDetectionsPersists — recordSelfDetections сохраняет боксы
+// self-detection в sidecar с DetectionInfo и SourceFingerprint; повторный
+// вызов не перезаписывает существующие данные.
+func TestRecordSelfDetectionsPersists(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+	boxes := []filemeta.PixelBox{{X: 7, Y: 8, Width: 30, Height: 30}}
+	fp := fpOf(42)
+
+	s.recordSelfDetections(context.Background(), object.ObjectKey("src"), fp, processing.OpFaceCrop, boxes, nil)
+
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved == nil {
+		t.Fatal("sidecar not saved")
+	}
+	if len(saved.Faces) != 1 || saved.Faces[0].X != 7 || saved.Faces[0].Confidence != 1.0 {
+		t.Fatalf("faces = %+v, want 1 box (7,8,30,30) confidence 1.0", saved.Faces)
+	}
+	if saved.Objects != nil {
+		t.Fatalf("objects = %+v, want nil (face operation must not write objects)", saved.Objects)
+	}
+	if saved.Detection == nil || saved.Detection.Detector != "fake" {
+		t.Fatalf("detection = %+v, want fake", saved.Detection)
+	}
+	if saved.Source == nil || saved.Source.Size != 42 {
+		t.Fatalf("source = %+v, want size=42", saved.Source)
+	}
+
+	// Повторный вызов: данные уже есть — не перезаписываются (модель не
+	// вызывается повторно в реальном сценарии, потому что fast path сработает).
+	s.recordSelfDetections(context.Background(), object.ObjectKey("src"), fp, processing.OpFaceCrop, boxes, nil)
+	metaS.mu.Lock()
+	saved2 := metaS.data["src"]
+	metaS.mu.Unlock()
+	if len(saved2.Faces) != 1 || saved2.Faces[0].X != 7 {
+		t.Fatalf("second record must not overwrite faces: %+v", saved2.Faces)
+	}
+}
+
+// TestRecordSelfDetectionsNoopGuards — nil store/детектор/боксы → no-op,
+// не паникует.
+func TestRecordSelfDetectionsNoopGuards(t *testing.T) {
+	s := &Service{deps: Deps{Metadata: nil}, log: testutil.NopLogger{}}
+	s.recordSelfDetections(context.Background(), "k", nil, processing.OpFaceCrop, []filemeta.PixelBox{{X: 1, Y: 1, Width: 1, Height: 1}}, nil)
+
+	metaS := newFakeMetadataStore()
+	s2 := newMetaService(metaS, newFakeDetector())
+	s2.recordSelfDetections(context.Background(), object.ObjectKey("src"), nil, processing.OpFaceCrop, nil, nil)
+	metaS.mu.Lock()
+	n := len(metaS.data)
+	metaS.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("empty detections must not create sidecar, got %d entries", n)
+	}
+}
+
+// TestRecordSelfDetectionsObjectCropWritesObjects — object-crop пишет боксы
+// в m.Objects (с label), а не в m.Faces; Faces остаётся nil.
+func TestRecordSelfDetectionsObjectCropWritesObjects(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+	boxes := []filemeta.PixelBox{{X: 1, Y: 2, Width: 40, Height: 50}}
+	detail := &processor.DetectionsDetail{
+		Objects: []processor.DetectedObject{
+			{Box: boxes[0], Confidence: 0.87, Label: "COCO_person"},
+		},
+	}
+	fp := fpOf(42)
+
+	s.recordSelfDetections(context.Background(), object.ObjectKey("src"), fp, processing.OpObjectCrop, boxes, detail)
+
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved == nil {
+		t.Fatal("sidecar not saved")
+	}
+	if saved.Faces != nil {
+		t.Fatalf("faces = %+v, want nil (object operation)", saved.Faces)
+	}
+	if len(saved.Objects) != 1 {
+		t.Fatalf("objects = %+v, want 1 entry", saved.Objects)
+	}
+	o := saved.Objects[0]
+	if o.X != 1 || o.Y != 2 || o.Width != 40 || o.Height != 50 {
+		t.Fatalf("object box = %+v, want (1,2,40,50)", o)
+	}
+	if o.Confidence != 0.87 {
+		t.Fatalf("object confidence = %v, want 0.87 (real model confidence)", o.Confidence)
+	}
+	if o.Label != "COCO_person" {
+		t.Fatalf("object label = %q, want COCO_person", o.Label)
+	}
+}
+
+// TestRecordSelfDetectionsRealConfidence — при Detail с реальной
+// уверенностью модели confidence сохраняется (не деградирует к 1.0) и
+// клампится в [0,1].
+func TestRecordSelfDetectionsRealConfidence(t *testing.T) {
+	metaS := newFakeMetadataStore()
+	det := newFakeDetector()
+	s := newMetaService(metaS, det)
+	boxes := []filemeta.PixelBox{{X: 1, Y: 1, Width: 10, Height: 10}}
+	detail := &processor.DetectionsDetail{
+		Faces: []processor.DetectedFace{
+			{Box: boxes[0], Confidence: 1.4},  // > 1 — клампится
+			{Box: boxes[0], Confidence: -0.2}, // < 0 — клампится
+			{Box: boxes[0], Confidence: 0.55},
+		},
+	}
+	fp := fpOf(42)
+
+	s.recordSelfDetections(context.Background(), object.ObjectKey("src"), fp, processing.OpFaceCrop, boxes, detail)
+
+	metaS.mu.Lock()
+	saved := metaS.data["src"]
+	metaS.mu.Unlock()
+	if saved == nil {
+		t.Fatal("sidecar not saved")
+	}
+	if len(saved.Faces) != 3 {
+		t.Fatalf("faces = %+v, want 3 entries", saved.Faces)
+	}
+	if saved.Faces[0].Confidence != 1.0 {
+		t.Fatalf("faces[0].Confidence = %v, want 1.0 (clamped)", saved.Faces[0].Confidence)
+	}
+	if saved.Faces[1].Confidence != 0.0 {
+		t.Fatalf("faces[1].Confidence = %v, want 0.0 (clamped)", saved.Faces[1].Confidence)
+	}
+	if saved.Faces[2].Confidence != 0.55 {
+		t.Fatalf("faces[2].Confidence = %v, want 0.55", saved.Faces[2].Confidence)
 	}
 }

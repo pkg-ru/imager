@@ -221,6 +221,41 @@ func TestProcessContextCancel(t *testing.T) {
 	close(bk.block)
 }
 
+// TestPrepareRGBRewindsSource — регрессия "первый запрос на новый ассет":
+// PrepareRGB читает источник в пределах лимита и НЕ должен оставлять reader
+// на EOF, иначе последующая Process в том же запросе получает пустой буфер
+// ("libvips: load: unsupported image format"). После вызова позиция reader
+// должна быть восстановлена в 0.
+func TestPrepareRGBRewindsSource(t *testing.T) {
+	bk := &fakeBackend{}
+	restore := overrideBackend(bk)
+	defer restore()
+
+	p, err := New(Options{Limits: Limits{Concurrency: 2}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer p.Close()
+
+	src := strings.NewReader("hello world")
+	// Стартовая позиция не обязана быть 0: источник перематываемый по
+	// контракту, Reader может быть уже частично прочитан.
+	if _, err := src.Seek(3, io.SeekStart); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+
+	if _, err := p.PrepareRGB(context.Background(), src); err != nil {
+		t.Fatalf("PrepareRGB: %v", err)
+	}
+	pos, err := src.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatalf("Seek current: %v", err)
+	}
+	if pos != 0 {
+		t.Fatalf("source position after PrepareRGB = %d, want 0", pos)
+	}
+}
+
 // --- Close идемпотентен ---
 
 func TestCloseIdempotent(t *testing.T) {

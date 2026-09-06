@@ -91,6 +91,16 @@ func (d *OnnxDetector) Available() bool {
 	return d.opts.FaceModel != "" || d.opts.ObjectModel != ""
 }
 
+// Describe возвращает конфигурацию детектора для sidecar-метаданных.
+func (d *OnnxDetector) Describe() DetectorInfo {
+	return DetectorInfo{
+		Kind:                "onnx",
+		FaceModel:           d.opts.FaceModel,
+		ObjectModel:         d.opts.ObjectModel,
+		ConfidenceThreshold: d.opts.ConfidenceThreshold,
+	}
+}
+
 // DetectFaces обнаруживает лица. Модель YuNet загружается лениво при первом
 // вызове и кэшируется на время жизни процесса.
 func (d *OnnxDetector) DetectFaces(ctx context.Context, rgb []byte, width, height int) ([]Box, error) {

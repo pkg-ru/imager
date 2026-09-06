@@ -12,7 +12,8 @@
 //	    0..255 БЕЗ нормализации (нормализация (v-127.5)/128 + mean=127.5
 //	    ОБНУЛЯЕТ obj-выходы — модель перестаёт что-либо детектировать);
 //	  score = cls*obj (RAW, без sigmoid: sigmoid(cls)~0.7 почти на всём
-//	    входе и "съедает" дискриминацию obj);
+//	    входе и "съедает" дискриминацию obj); score клампится в [0,1]
+//	    (см. ClampConfidence) — модель может вернуть значение > 1;
 //	  декодирование (как в OpenCV face_detect.cpp):
 //	    cx = (gridX+0.5+b0)*stride; cy = (gridY+0.5+b1)*stride
 //	    w  = exp(b2)*stride;        h  = exp(b3)*stride
@@ -228,8 +229,14 @@ func (b *yunetBackend) run(_ context.Context, rgb []byte, width, height int) ([]
 		gridW := yunetInSize / stride
 		sf := float32(stride)
 		for a := 0; a < g.px; a++ {
-			score := float64(cls[a]) * float64(obj[a])
-			if score < 0.3 {
+			// score = cls*obj — RAW (без sigmoid, см. шапку файла). Модель
+			// может вернуть значение > 1: клампим в [0,1], чтобы бокс прошёл
+			// валидацию sidecar (filemeta.Validate отклоняет confidence > 1).
+			// Отсев слабых боксов выполняет конфигурируемый порог
+			// ConfidenceThreshold в postprocess (onnx.go), здесь — только
+			// отсев невалидных (NaN/Inf → 0).
+			score := ClampConfidence(float64(cls[a]) * float64(obj[a]))
+			if score <= 0 {
 				continue
 			}
 			bx := box[a*4 : a*4+4]
@@ -392,7 +399,9 @@ func (b *ssdBackend) run(_ context.Context, rgb []byte, width, height int) ([]Bo
 		if !ok {
 			continue
 		}
-		b.Confidence = float64(scores[i])
+		// SSD detection_scores уже в [0,1], но страхуемся от моделей с
+		// выходом > 1 (валидация sidecar требует [0,1]).
+		b.Confidence = ClampConfidence(float64(scores[i]))
 		b.Label = cocoLabel(int(classes[i]))
 		out = append(out, b)
 	}

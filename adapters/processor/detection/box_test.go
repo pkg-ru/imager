@@ -745,3 +745,29 @@ func TestSelectObjectFixCropNoDetectionFallback(t *testing.T) {
 		t.Errorf("object fix fallback = %+v, want {100 0 200 200}", r)
 	}
 }
+
+// TestClampConfidence — уверенность детектора клампится в [0,1]; NaN/Inf
+// приводятся к 0 (иначе validation sidecar отклоняет сохранение).
+func TestClampConfidence(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want float64
+	}{
+		{"normal", 0.73, 0.73},
+		{"zero", 0, 0},
+		{"one", 1, 1},
+		{"above-one", 1.4, 1},
+		{"negative", -0.3, 0},
+		{"nan", math.NaN(), 0},
+		{"pos-inf", math.Inf(1), 1},
+		{"neg-inf", math.Inf(-1), 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ClampConfidence(c.in); got != c.want {
+				t.Errorf("ClampConfidence(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

@@ -73,6 +73,55 @@ type ObjectInfo struct {
 	Label string `json:"label,omitempty"`
 }
 
+// DetectionInfo — описание детектора, которым получены Faces/Objects.
+// Записывается в sidecar вместе с результатами детекции для диагностики
+// (какие модели использовались) и защиты от смешивания результатов разных
+// конфигураций.
+type DetectionInfo struct {
+	// Detector — вид детектора (например "onnx").
+	Detector string `json:"detector,omitempty"`
+	// FaceModel — путь/имя модели лиц (пусто = модель не использовалась).
+	FaceModel string `json:"face_model,omitempty"`
+	// ObjectModel — путь/имя модели объектов (пусто = не использовалась).
+	ObjectModel string `json:"object_model,omitempty"`
+	// ConfidenceThreshold — порог уверенности детектора [0,1].
+	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty"`
+}
+
+// SourceFingerprint — отпечаток исходного файла, по которому выполнялась
+// детекция. Используется для инвалидации кэша: если отпечаток текущего
+// источника не совпадает с сохранённым — Faces/Objects устарели и модель
+// должна быть вызвана заново.
+type SourceFingerprint struct {
+	// Size — размер исходного файла в байтах (>= 0).
+	Size int64 `json:"size"`
+	// ModTimeUnix — unix-время модификации источника (сек). Для источников
+	// без mtime (извлечённый кадр) — 0, инвалидация только по Size/Hash.
+	ModTimeUnix int64 `json:"mod_time_unix,omitempty"`
+	// HashSHA256 — SHA-256 содержимого источника (64 hex-символа) или
+	// пустая строка, если хеш не вычислялся.
+	HashSHA256 string `json:"hash_sha256,omitempty"`
+}
+
+// Matches сверяет отпечаток с other: совпадают все ЗАДАННЫЕ компоненты.
+// Пустой хеш с обеих сторон считается совпадающим (хеш опционален);
+// nil-приёмник всегда не совпадает.
+func (f *SourceFingerprint) Matches(other *SourceFingerprint) bool {
+	if f == nil || other == nil {
+		return false
+	}
+	if f.Size != other.Size {
+		return false
+	}
+	if f.ModTimeUnix != 0 && other.ModTimeUnix != 0 && f.ModTimeUnix != other.ModTimeUnix {
+		return false
+	}
+	if f.HashSHA256 != "" && other.HashSHA256 != "" && f.HashSHA256 != other.HashSHA256 {
+		return false
+	}
+	return true
+}
+
 // AIAssetInfo — крупнейший ИИ-ассет: обе стороны не меньше сторон родителя,
 // пропорции совпадают с родительскими (кандидат на будущее ИИ-увеличение).
 type AIAssetInfo struct {
@@ -101,6 +150,13 @@ type FileMetadata struct {
 	// VideoFrameKey — ключ основного кадра видео (файл x.jpg); пусто = ещё
 	// не зафиксирован.
 	VideoFrameKey string `json:"video_frame_key,omitempty"`
+	// Detection — описание детектора, которым получены Faces/Objects;
+	// nil = детекция выполнялась вне sidecar (или ещё не выполнялась).
+	Detection *DetectionInfo `json:"detection,omitempty"`
+	// Source — отпечаток источника, по которому выполнялась детекция;
+	// nil = отпечаток неизвестен (кэш считается валидным — backward-compat
+	// со sidecar, записанными до появления fingerprint).
+	Source *SourceFingerprint `json:"source,omitempty"`
 	// CreatedUnix — unix-время создания первого ассета (сек). 0 = ещё не
 	// записано. Записывается лениво/асинхронно при первом создании ассета.
 	CreatedUnix int64 `json:"created_unix,omitempty"`
@@ -157,7 +213,36 @@ func (m *FileMetadata) Validate() error {
 			return fmt.Errorf("%w: largest_ai_asset.key is empty", ErrCorrupt)
 		}
 	}
+	if s := m.Source; s != nil {
+		if s.Size < 0 {
+			return fmt.Errorf("%w: source.size must be >= 0 (got %d)", ErrCorrupt, s.Size)
+		}
+		if s.ModTimeUnix < 0 {
+			return fmt.Errorf("%w: source.mod_time_unix must be >= 0 (got %d)", ErrCorrupt, s.ModTimeUnix)
+		}
+		if !isValidHex64(s.HashSHA256) {
+			return fmt.Errorf("%w: source.hash_sha256 must be empty or 64 hex chars (got %q)", ErrCorrupt, s.HashSHA256)
+		}
+	}
 	return nil
+}
+
+// isValidHex64 проверяет, что s — пустая строка либо ровно 64 hex-символа
+// (lower/upper), т.е. hex-кодировка SHA-256.
+func isValidHex64(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // validateBox проверяет инварианты одного бокса.
@@ -179,14 +264,16 @@ func validateBox(b PixelBox, confidence float64) error {
 // и пустой срез («проверено, пусто»), а схема требует оба случая:
 // поле отсутствует ⇔ модели не запускались; "faces":[] ⇔ запускались, лиц нет.
 type fileMetadataWire struct {
-	SchemaVersion  int             `json:"schema_version"`
-	Faces          json.RawMessage `json:"faces,omitempty"`
-	Objects        json.RawMessage `json:"objects,omitempty"`
-	LargestAIAsset *AIAssetInfo    `json:"largest_ai_asset,omitempty"`
-	VideoFrameKey  string          `json:"video_frame_key,omitempty"`
-	CreatedUnix    int64           `json:"created_unix,omitempty"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	SchemaVersion  int                `json:"schema_version"`
+	Faces          json.RawMessage    `json:"faces,omitempty"`
+	Objects        json.RawMessage    `json:"objects,omitempty"`
+	LargestAIAsset *AIAssetInfo       `json:"largest_ai_asset,omitempty"`
+	VideoFrameKey  string             `json:"video_frame_key,omitempty"`
+	Detection      *DetectionInfo     `json:"detection,omitempty"`
+	Source         *SourceFingerprint `json:"source,omitempty"`
+	CreatedUnix    int64              `json:"created_unix,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 // MarshalJSON сериализует метаданные: nil-срезы опускаются, пустые
@@ -199,6 +286,8 @@ func (m *FileMetadata) MarshalJSON() ([]byte, error) {
 		SchemaVersion:  m.SchemaVersion,
 		LargestAIAsset: m.LargestAIAsset,
 		VideoFrameKey:  m.VideoFrameKey,
+		Detection:      m.Detection,
+		Source:         m.Source,
 		CreatedUnix:    m.CreatedUnix,
 		CreatedAt:      m.CreatedAt,
 		UpdatedAt:      m.UpdatedAt,
@@ -293,6 +382,14 @@ func (m *FileMetadata) Clone() *FileMetadata {
 	if m.LargestAIAsset != nil {
 		a := *m.LargestAIAsset
 		out.LargestAIAsset = &a
+	}
+	if m.Detection != nil {
+		d := *m.Detection
+		out.Detection = &d
+	}
+	if m.Source != nil {
+		s := *m.Source
+		out.Source = &s
 	}
 	return &out
 }

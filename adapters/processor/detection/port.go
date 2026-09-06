@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"gitverse.ru/pkg-ru/imager/ports/detector"
 )
 
 // PortDetector is a thin adapter over detection.Detector implementing the
@@ -24,6 +25,24 @@ func NewPortDetector(det Detector) *PortDetector {
 
 // Available delegates to the wrapped detector.
 func (d *PortDetector) Available() bool { return d.det.Available() }
+
+// Describe delegates detector configuration to the wrapped detector,
+// converting to the application-port type (ports/detector.DetectorInfo).
+// Kind обогащается до "onnx": адаптер не меняет вид, но гарантирует
+// непустое значение (единая метка в sidecar-метаданных).
+func (d *PortDetector) Describe() detector.DetectorInfo {
+	info := d.det.Describe()
+	kind := info.Kind
+	if kind == "" {
+		kind = "onnx"
+	}
+	return detector.DetectorInfo{
+		Kind:                kind,
+		FaceModel:           info.FaceModel,
+		ObjectModel:         info.ObjectModel,
+		ConfidenceThreshold: info.ConfidenceThreshold,
+	}
+}
 
 // DetectFaces converts detection.Box to filemeta.FaceInfo.
 func (d *PortDetector) DetectFaces(ctx context.Context, rgb []byte, width, height int) ([]filemeta.FaceInfo, error) {
@@ -67,8 +86,4 @@ func objectsToFilemeta(boxes []Box) []filemeta.ObjectInfo {
 }
 
 // compile-time check: PortDetector implements the application port.
-var _ interface {
-	DetectFaces(ctx context.Context, rgb []byte, width, height int) ([]filemeta.FaceInfo, error)
-	DetectObjects(ctx context.Context, rgb []byte, width, height int) ([]filemeta.ObjectInfo, error)
-	Available() bool
-} = (*PortDetector)(nil)
+var _ detector.Detector = (*PortDetector)(nil)

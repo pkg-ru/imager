@@ -26,6 +26,23 @@ type Detector interface {
 	// Available сообщает, готов ли хотя бы один детектор к работе
 	// (сконфигурированы модели и присутствует сборка с ONNX).
 	Available() bool
+	// Describe возвращает конфигурацию детектора (вид, модели, порог
+	// уверенности) для записи в sidecar-метаданные.
+	Describe() DetectorInfo
+}
+
+// DetectorInfo — описание конфигурации детектора. Зеркало
+// detector.DetectorInfo (ports/detector), чтобы пакет detection не зависел
+// от портов.
+type DetectorInfo struct {
+	// Kind — вид детектора (например "onnx").
+	Kind string
+	// FaceModel — путь/имя модели лиц (пусто = не сконфигурирована).
+	FaceModel string
+	// ObjectModel — путь/имя модели объектов (пусто = не сконфигурирована).
+	ObjectModel string
+	// ConfidenceThreshold — порог уверенности [0,1].
+	ConfidenceThreshold float64
 }
 
 // Options — конфигурация детектора.

@@ -147,6 +147,16 @@ func (d *fakeDetector) DetectObjects(_ context.Context, _ []byte, _, _ int) ([]f
 
 func (d *fakeDetector) Available() bool { return d.available }
 
+// Describe возвращает фиксированную конфигурацию (для записи DetectionInfo).
+func (d *fakeDetector) Describe() detector.DetectorInfo {
+	return detector.DetectorInfo{
+		Kind:                "fake",
+		FaceModel:           "fake-face.onnx",
+		ObjectModel:         "fake-object.onnx",
+		ConfidenceThreshold: 0.5,
+	}
+}
+
 var _ detector.Detector = (*fakeDetector)(nil)
 
 // fakeMetaProcessor — processor.Processor, реализующий RGBPreparer, чтобы
