@@ -165,24 +165,27 @@ func TestSelectCropEmptyImg(t *testing.T) {
 }
 
 func TestSelectFaceCropCentered(t *testing.T) {
-	// Лицо точно по центру кадра → окно центрируется на центре лица.
+	// Лицо точно по центру кадра → окно центрируется на фокус-точке
+	// (центре лица, смещённом вверх на компенсацию лба 15% высоты бокса).
 	// Кадр 300x200, лицо {125,75,50,50} (центр 150,100), target 100x50.
 	// Область лица 50x50 расширяется под аспект 2:1 → окно 100x50
 	// (лицо+margin заполняет кадр после ресайза).
 	boxes := []Box{{X: 125, Y: 75, W: 50, H: 50, Confidence: 0.9}}
 	r := SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
-	// Окно 100x50 в точке (150,100): x=100, y=75.
-	want := Rect{X: 100, Y: 75, W: 100, H: 50}
+	// Сдвиг фокус-точки вверх: round(50*0.15) = 8 → фокус (150,92);
+	// окно 100x50: x=100, y=92-25=67.
+	want := Rect{X: 100, Y: 67, W: 100, H: 50}
 	if !rectEq(r, want) {
 		t.Errorf("centered face crop = %+v, want %+v", r, want)
 	}
 
 	// Лицо шире целевого аспекта: окно масштабируется под лицо —
-	// область лица 200x100 уже имеет аспект 2:1 → окно = область лица.
+	// область лица 200x100 уже имеет аспект 2:1 → окно = область лица,
+	// сдвинутое вверх на round(100*0.15)=15: y = 100-15-50 = 35.
 	big := []Box{{X: 50, Y: 50, W: 200, H: 100, Confidence: 0.9}} // центр 150,100
 	r = SelectFaceCrop(big, 300, 200, 100, 50, 0)
-	if !rectEq(r, Rect{X: 50, Y: 50, W: 200, H: 100}) {
-		t.Errorf("big face crop = %+v, want {50 50 200 100}", r)
+	if !rectEq(r, Rect{X: 50, Y: 35, W: 200, H: 100}) {
+		t.Errorf("big face crop = %+v, want {50 35 200 100}", r)
 	}
 }
 
@@ -195,24 +198,26 @@ func TestSelectFaceCropScalesWindowToFace(t *testing.T) {
 	boxes := []Box{{X: 1400, Y: 900, W: 200, H: 200, Confidence: 0.9}} // центр (1500,1000)
 	r := SelectFaceCrop(boxes, 3000, 2000, 200, 200, 0.2)
 	// margin 0.2: по 20px с каждой стороны → область {1380,880,240,240};
-	// аспект квадратный → окно = область 240x240, центрировано на лице.
-	if !rectEq(r, Rect{X: 1380, Y: 880, W: 240, H: 240}) {
-		t.Errorf("scaled face window = %+v, want {1380 880 240 240}", r)
+	// аспект квадратный → окно = область 240x240; фокус по Y
+	// 964-120 = 844 (компенсация лба round(240*0.15)=36).
+	if !rectEq(r, Rect{X: 1380, Y: 844, W: 240, H: 240}) {
+		t.Errorf("scaled face window = %+v, want {1380 844 240 240}", r)
 	}
 	if r.W <= 200 || r.H <= 200 {
 		t.Errorf("window %dx%d must exceed asset size 200x200 in source px", r.W, r.H)
 	}
-	// Центр области лица остаётся в центре окна.
-	if cx, cy := r.X+r.W/2, r.Y+r.H/2; cx != 1500 || cy != 1000 {
-		t.Errorf("window center = (%d,%d), want (1500,1000)", cx, cy)
+	// Фокус-точка (центр лица, сдвинутый вверх на компенсацию лба
+	// round(240*0.15)=36) остаётся в центре окна.
+	if cx, cy := r.X+r.W/2, r.Y+r.H/2; cx != 1500 || cy != 964 {
+		t.Errorf("window center = (%d,%d), want (1500,964)", cx, cy)
 	}
 
 	// Неквадратный ассет 200x100 (аспект 2:1): область 240x240 расширяется
 	// по ширине до 480x240.
 	r = SelectFaceCrop(boxes, 3000, 2000, 200, 100, 0.2)
-	// x = 1500-240 = 1260, y = 1000-120 = 880.
-	if !rectEq(r, Rect{X: 1260, Y: 880, W: 480, H: 240}) {
-		t.Errorf("aspect-scaled face window = %+v, want {1260 880 480 240}", r)
+	// x = 1500-240 = 1260, y = 964-120 = 844.
+	if !rectEq(r, Rect{X: 1260, Y: 844, W: 480, H: 240}) {
+		t.Errorf("aspect-scaled face window = %+v, want {1260 844 480 240}", r)
 	}
 }
 
@@ -221,8 +226,8 @@ func TestSelectFaceCropClampLeftEdge(t *testing.T) {
 	// лицо остаётся смещённым влево, но кадр не выходит за границы.
 	boxes := []Box{{X: 0, Y: 75, W: 50, H: 50, Confidence: 0.9}} // центр (25,100)
 	r := SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
-	// Без clamp было бы x=-25 → clamp до 0.
-	want := Rect{X: 0, Y: 75, W: 100, H: 50}
+	// Без clamp было бы x=-25 → clamp до 0. По Y: фокус (25,92), y=67.
+	want := Rect{X: 0, Y: 67, W: 100, H: 50}
 	if !rectEq(r, want) {
 		t.Errorf("left edge face crop = %+v, want %+v", r, want)
 	}
@@ -232,27 +237,29 @@ func TestSelectFaceCropClampRightEdge(t *testing.T) {
 	// Лицо у правого края: окно упирается в правую границу.
 	boxes := []Box{{X: 250, Y: 75, W: 50, H: 50, Confidence: 0.9}} // центр (275,100)
 	r := SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
-	// Без clamp было бы x=225, x+100=325 > 300 → x=200.
-	want := Rect{X: 200, Y: 75, W: 100, H: 50}
+	// Без clamp было бы x=225, x+100=325 > 300 → x=200. По Y: фокус (275,92),
+	// y=67.
+	want := Rect{X: 200, Y: 67, W: 100, H: 50}
 	if !rectEq(r, want) {
 		t.Errorf("right edge face crop = %+v, want %+v", r, want)
 	}
 }
 
 func TestSelectFaceCropClampTopBottomEdges(t *testing.T) {
-	// Вертикальное поведение: лицо у верхнего края — окно прижимается к y=0;
-	// у нижнего — к нижней границе. Вертикаль тоже центрируется + clamp.
+	// Вертикальное поведение: лицо у верхнего края — окно прижимается к y=0
+	// (в т.ч. С компенсацией лба: сдвиг фокус-точки вверх не должен вывести
+	// окно за верхнюю границу); у нижнего — центрирование со сдвигом.
 	top := []Box{{X: 125, Y: 0, W: 50, H: 50, Confidence: 0.9}} // центр (150,25)
 	r := SelectFaceCrop(top, 300, 200, 100, 50, 0)
-	// Без clamp было бы y=0 (25-25=0) — уже на границе.
+	// Фокус (150,25-8=17); без clamp было бы y=17-25=-8 → clamp до 0.
 	if !rectEq(r, Rect{X: 100, Y: 0, W: 100, H: 50}) {
 		t.Errorf("top edge face crop = %+v", r)
 	}
 
 	bottom := []Box{{X: 125, Y: 150, W: 50, H: 50, Confidence: 0.9}} // центр (150,175)
 	r = SelectFaceCrop(bottom, 300, 200, 100, 50, 0)
-	// Без clamp было бы y=150, y+50=200 → в границе.
-	if !rectEq(r, Rect{X: 100, Y: 150, W: 100, H: 50}) {
+	// Фокус (150,175-8=167): y=167-25=142.
+	if !rectEq(r, Rect{X: 100, Y: 142, W: 100, H: 50}) {
 		t.Errorf("bottom edge face crop = %+v", r)
 	}
 }
@@ -276,8 +283,9 @@ func TestSelectFaceCropWindowLargerThanImage(t *testing.T) {
 	// x=0, y=100-90=10.
 	boxes = []Box{{X: 50, Y: 10, W: 200, H: 180, Confidence: 0.9}}
 	r = SelectFaceCrop(boxes, 300, 200, 500, 200, 0)
-	if !rectEq(r, Rect{X: 0, Y: 10, W: 300, H: 180}) {
-		t.Errorf("window wider only = %+v, want {0 10 300 180}", r)
+	// Фокус (150,100-round(180*0.15)=73); без clamp y=73-90=-17 → clamp 0.
+	if !rectEq(r, Rect{X: 0, Y: 0, W: 300, H: 180}) {
+		t.Errorf("window wider only = %+v, want {0 0 300 180}", r)
 	}
 
 	// Желаемое окно выше кадра: высота ужинается, ширина центрируется.
@@ -316,8 +324,9 @@ func TestSelectFaceCropFallbacks(t *testing.T) {
 	// ширина = 50 * (300/200) = 75.
 	boxes = []Box{{X: 125, Y: 75, W: 50, H: 50, Confidence: 0.9}} // центр (150,100)
 	r = SelectFaceCrop(boxes, 300, 200, 0, 50, 0)
-	if !rectEq(r, Rect{X: 113, Y: 75, W: 75, H: 50}) {
-		t.Errorf("auto width window = %+v, want {113 75 75 50}", r)
+	// Фокус (150,92): x=150-37=113, y=92-25=67.
+	if !rectEq(r, Rect{X: 113, Y: 67, W: 75, H: 50}) {
+		t.Errorf("auto width window = %+v, want {113 67 75 50}", r)
 	}
 }
 
@@ -342,10 +351,16 @@ func TestSelectFaceCropMarginSymmetry(t *testing.T) {
 		if r.X < 0 || r.Y < 0 || r.X+r.W > imgW || r.Y+r.H > imgH {
 			t.Fatalf("margin %v: rect %+v outside frame", margin, r)
 		}
-		// Центр лица должен совпадать с центром окна.
+		// Центр окна: X = центр лица, Y = центр лица минус компенсация
+		// лба (15% высоты области лица + margin).
 		fcx, fcy := 449+101/2, 361+77/2
-		if cx, cy := r.X+r.W/2, r.Y+r.H/2; cx != fcx || cy != fcy {
-			t.Errorf("margin %v: window center (%d,%d), want face center (%d,%d)", margin, cx, cy, fcx, fcy)
+		region, ok := unionWithMargin(boxes, imgW, imgH, margin)
+		if !ok {
+			t.Fatalf("margin %v: no region", margin)
+		}
+		wantY := fcy - foreheadShiftUp(region.H)
+		if cx, cy := r.X+r.W/2, r.Y+r.H/2; cx != fcx || cy != wantY {
+			t.Errorf("margin %v: window center (%d,%d), want face center with forehead shift (%d,%d)", margin, cx, cy, fcx, wantY)
 		}
 	}
 }
@@ -495,15 +510,135 @@ func TestSelectFaceFixCropWiderThanTarget(t *testing.T) {
 }
 
 // TestSelectFaceFixCropTallerThanTarget проверяет: оригинал пропорционально
-// ВЫШЕ цели → кроп только по Y, ПОЛНАЯ ширина сохраняется.
+// ВЫШЕ цели → кроп только по Y, ПОЛНАЯ ширина сохраняется; по Y фокус-точка
+// сдвигается вверх на компенсацию лба.
 func TestSelectFaceFixCropTallerThanTarget(t *testing.T) {
 	// Кадр 200x400 (aspect 0.5), цель 100x100 (aspect 1.0): оригинал выше.
 	// scale = 100/200 = 0.5 → окно = 200x200 (полная ширина).
-	// Лицо в центре (центр 100,200) → y = 200-100 = 100.
+	// Лицо в центре (центр 100,200); сдвиг лба round(50*0.15)=8 →
+	// фокус (100,192) → y = 192-100 = 92.
 	boxes := []Box{{X: 75, Y: 175, W: 50, H: 50, Confidence: 0.9}} // центр (100,200)
 	r := SelectFaceFixCrop(boxes, 200, 400, 100, 100, 0)
-	if !rectEq(r, Rect{X: 0, Y: 100, W: 200, H: 200}) {
-		t.Errorf("taller-than-target = %+v, want {0 100 200 200} (full width)", r)
+	if !rectEq(r, Rect{X: 0, Y: 92, W: 200, H: 200}) {
+		t.Errorf("taller-than-target = %+v, want {0 92 200 200} (full width)", r)
+	}
+}
+
+// TestFaceCropForeheadCompensationShiftsUp проверяет компенсацию лба:
+// фокус-точка при face-crop смещается вверх относительно центра бокса
+// лица на 15% высоты области интереса (лоб в боксе детекции — верхняя
+// часть, центрирование по геометрическому центру срезало лоб).
+func TestFaceCropForeheadCompensationShiftsUp(t *testing.T) {
+	// Окно 100x50 в кадре 300x200, лицо 50x50 в центре (150,100).
+	// Без компенсации центр окна = центр лица (150,100) → y = 75.
+	// С компенсацией round(50*0.15)=8: фокус (150,92) → y = 67.
+	boxes := []Box{{X: 125, Y: 75, W: 50, H: 50, Confidence: 0.9}}
+	r := SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
+	if !rectEq(r, Rect{X: 100, Y: 67, W: 100, H: 50}) {
+		t.Fatalf("forehead shift = %+v, want {100 67 100 50}", r)
+	}
+	// Окно ровно на 8px выше, чем центрирование без компенсации.
+	if cy := r.Y + r.H/2; cy != 92 {
+		t.Errorf("window center y = %d, want 92 (face center 100 minus shift 8)", cy)
+	}
+
+	// Сдвиг пропорционален высоте бокса: бокс 100x100 → сдвиг 15.
+	boxes = []Box{{X: 100, Y: 50, W: 100, H: 100, Confidence: 0.9}} // центр (150,100)
+	// Область 100x100, аспект цели 2:1 → окно 200x100; фокус (150,85):
+	// x=50, y=85-50=35.
+	r = SelectFaceCrop(boxes, 300, 200, 200, 100, 0)
+	if !rectEq(r, Rect{X: 50, Y: 35, W: 200, H: 100}) {
+		t.Errorf("proportional shift = %+v, want {50 35 200 100}", r)
+	}
+
+	// face-fix-crop: кроп по Y тоже учитывает компенсацию лба.
+	// Кадр 200x400, цель 100x100 → окно 200x200; лицо центр (100,200),
+	// сдвиг 8 → y = 192-100 = 92.
+	fixBoxes := []Box{{X: 75, Y: 175, W: 50, H: 50, Confidence: 0.9}}
+	fr := SelectFaceFixCrop(fixBoxes, 200, 400, 100, 100, 0)
+	if !rectEq(fr, Rect{X: 0, Y: 92, W: 200, H: 200}) {
+		t.Errorf("face-fix forehead shift = %+v, want {0 92 200 200}", fr)
+	}
+}
+
+// TestFaceCropForeheadCompensationClampTopEdge проверяет, что сдвиг
+// фокус-точки вверх не выводит окно кропа за верхнюю границу кадра:
+// clamp прижимает окно к y=0 (лицо у верхнего края).
+func TestFaceCropForeheadCompensationClampTopEdge(t *testing.T) {
+	// Кадр 300x200, окно 100x50; лицо у верхнего края {125,0,50,50}
+	// (центр (150,25)); сдвиг лба 8 → фокус (150,17); без clamp
+	// y = 17-25 = -8 → clamp до 0. Лицо целиком остаётся в кадре.
+	boxes := []Box{{X: 125, Y: 0, W: 50, H: 50, Confidence: 0.9}}
+	r := SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
+	if !rectEq(r, Rect{X: 100, Y: 0, W: 100, H: 50}) {
+		t.Fatalf("clamp top edge = %+v, want {100 0 100 50}", r)
+	}
+	// Окно внутри границ кадра.
+	if r.Y < 0 || r.Y+r.H > 200 {
+		t.Errorf("window %+v outside vertical frame bounds", r)
+	}
+
+	// Экстремальный случай: почти всё окно выше кадра — clamp удерживает
+	// y=0, отрицательных координат нет.
+	boxes = []Box{{X: 0, Y: 0, W: 300, H: 200, Confidence: 0.9}}
+	r = SelectFaceCrop(boxes, 300, 200, 100, 50, 0)
+	if !rectEq(r, Rect{X: 0, Y: 0, W: 300, H: 200}) {
+		t.Errorf("full-frame face = %+v, want full frame", r)
+	}
+
+	// face-fix у верхнего края: сдвиг вверх clamp'ится к y=0.
+	fixBoxes := []Box{{X: 75, Y: 0, W: 50, H: 50, Confidence: 0.9}} // центр (100,25)
+	fr := SelectFaceFixCrop(fixBoxes, 200, 400, 100, 100, 0)
+	// Фокус (100,25-8=17): y = 17-100 = -83 → clamp 0.
+	if !rectEq(fr, Rect{X: 0, Y: 0, W: 200, H: 200}) {
+		t.Errorf("face-fix clamp top = %+v, want {0 0 200 200}", fr)
+	}
+}
+
+// TestFaceCropForeheadShiftUpHelper проверяет хелпер foreheadShiftUp:
+// сдвиг = round(h * 0.15), для вырожденной высоты — 0.
+func TestFaceCropForeheadShiftUpHelper(t *testing.T) {
+	if got := foreheadShiftUp(0); got != 0 {
+		t.Errorf("h=0: shift = %d, want 0", got)
+	}
+	if got := foreheadShiftUp(-10); got != 0 {
+		t.Errorf("h<0: shift = %d, want 0", got)
+	}
+	if got := foreheadShiftUp(50); got != 8 { // round(7.5) = 8
+		t.Errorf("h=50: shift = %d, want 8", got)
+	}
+	if got := foreheadShiftUp(100); got != 15 {
+		t.Errorf("h=100: shift = %d, want 15", got)
+	}
+	if got := foreheadShiftUp(240); got != 36 {
+		t.Errorf("h=240: shift = %d, want 36", got)
+	}
+}
+
+// TestObjectCropNoForeheadCompensation проверяет, что object-crop и
+// object-fix-crop НЕ смещают фокус-точку (компенсация лба — только для лиц).
+func TestObjectCropNoForeheadCompensation(t *testing.T) {
+	// object-crop: тот же бокс, что в TestSelectFaceCropCentered, но окно
+	// центрируется строго на центре объекта (150,100) → y=75 (не 67).
+	boxes := []Box{{X: 125, Y: 75, W: 50, H: 50, Confidence: 0.9}}
+	r := SelectCrop(boxes, 300, 200, 100, 50, 0)
+	if !rectEq(r, Rect{X: 100, Y: 75, W: 100, H: 50}) {
+		t.Fatalf("object crop shifted: = %+v, want {100 75 100 50}", r)
+	}
+
+	// object-fix: кроп по Y строго по центру объекта. Объект центр
+	// (150,100) в кадре 200x400 → окно 200x200: y = 100-100 = 0.
+	fr := SelectObjectFixCrop(boxes, 200, 400, 100, 100, 0)
+	if !rectEq(fr, Rect{X: 0, Y: 0, W: 200, H: 200}) {
+		t.Errorf("object fix shifted = %+v, want {0 0 200 200}", fr)
+	}
+
+	// Объект в центре высокого кадра (центр (100,200)): окно 200x200
+	// центрируется строго на объекте → y=100, сдвига лба нет.
+	objCenter := []Box{{X: 75, Y: 175, W: 50, H: 50, Confidence: 0.9}}
+	fr = SelectObjectFixCrop(objCenter, 200, 400, 100, 100, 0)
+	if !rectEq(fr, Rect{X: 0, Y: 100, W: 200, H: 200}) {
+		t.Errorf("object fix centered = %+v, want {0 100 200 200}", fr)
 	}
 }
 

@@ -79,7 +79,8 @@ func TestIntegrationLearningModeFS(t *testing.T) {
 		t.Fatalf("result objects = %d, want 0 (learning-mode must not publish)", stats.Objects)
 	}
 
-	// Stop() → drain + финальная запись наблюдений в generate-local.yaml.
+	// Stop() → drain + финальная запись наблюдений в generate-local.yaml
+	// + персистентный сброс learning-mode: false (graceful shutdown).
 	app.Learning.Stop()
 	localFile := filepath.Join(cfgDir, "generate-local.yaml")
 	data, err := os.ReadFile(localFile)
@@ -87,14 +88,65 @@ func TestIntegrationLearningModeFS(t *testing.T) {
 		t.Fatalf("read %s: %v", localFile, err)
 	}
 	doc := string(data)
-	if !strings.Contains(doc, "learning-mode: true") {
-		t.Errorf("generate-local.yaml missing learning-mode: true:\n%s", doc)
+	if !strings.Contains(doc, "learning-mode: false") {
+		t.Errorf("generate-local.yaml missing learning-mode: false (reset on shutdown):\n%s", doc)
+	}
+	if strings.Contains(doc, "learning-mode: true") {
+		t.Errorf("generate-local.yaml still has learning-mode: true after Stop:\n%s", doc)
 	}
 	if !strings.Contains(doc, "/forbidden") {
 		t.Errorf("generate-local.yaml missing observed path /forbidden:\n%s", doc)
 	}
 	if !strings.Contains(doc, "120x60") {
 		t.Errorf("generate-local.yaml missing observed size 120x60:\n%s", doc)
+	}
+}
+
+// TestIntegrationLearningModeResetOnStop — graceful shutdown (Service.Stop)
+// персистентно сбрасывает learning-mode: даже если флаг был включён
+// (learning-mode: true в конфиге и generate-local.yaml), после Stop()
+// в generate-local.yaml записывается learning-mode: false, чтобы после
+// перезапуска сервер не продолжал работу в learning-режиме.
+func TestIntegrationLearningModeResetOnStop(t *testing.T) {
+	cfgDir := t.TempDir()
+	// Пред-существующий generate-local.yaml с learning-mode: true (как при
+	// реальном включении режима).
+	initial := "policy:\n  learning-mode: true\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "generate-local.yaml"), []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	rc, err := ParseRuntimeConfig([]byte(testConfigYAMLLearning))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(learning): %v", err)
+	}
+	app, _, _ := buildFSApp(t, func(o *AppOptions) {
+		o.ConfigDir = cfgDir
+		o.Config = rc.Pipeline
+	})
+	if app.Learning == nil {
+		t.Fatal("app.Learning == nil: expected learning service")
+	}
+	if !app.Learning.Enabled() {
+		t.Fatal("learning-mode should be enabled from config")
+	}
+
+	// Stop() — то, что выполняется при graceful shutdown (learningCloser).
+	app.Learning.Stop()
+	if app.Learning.Enabled() {
+		t.Error("learning-mode must be disabled after Stop")
+	}
+
+	localFile := filepath.Join(cfgDir, "generate-local.yaml")
+	data, err := os.ReadFile(localFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", localFile, err)
+	}
+	doc := string(data)
+	if !strings.Contains(doc, "learning-mode: false") {
+		t.Errorf("generate-local.yaml missing learning-mode: false after shutdown:\n%s", doc)
+	}
+	if strings.Contains(doc, "learning-mode: true") {
+		t.Errorf("generate-local.yaml still has learning-mode: true after shutdown:\n%s", doc)
 	}
 }
 

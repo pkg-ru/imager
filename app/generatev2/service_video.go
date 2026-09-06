@@ -36,6 +36,18 @@ func videoFrameKey(srcKey object.ObjectKey) object.ObjectKey {
 	return object.ObjectKey(string(srcKey) + "/x.jpg")
 }
 
+// canonicalSourceDir строит канонический каталог ассета исходника из запроса:
+// {path}/{source_name}-{source_format}. Каталог сохраняет canonical-форму
+// URL (дефис вместо точки: ivan-mp4), а не физическое имя файла (ivan.mp4):
+// именно он используется как каталог результата и ключ sidecar-метаданных.
+func canonicalSourceDir(req *asset.Request) object.ObjectKey {
+	dir := req.SourceName().String() + "-" + req.SourceFormat().String()
+	if req.Path() == "" {
+		return object.ObjectKey(dir)
+	}
+	return object.ObjectKey(req.Path() + "/" + dir)
+}
+
 // videoOptions собирает настройки извлечения кадра из конфигурации
 // (Deps.DefaultVideo*). Нулевые значения заменяются разумными дефолтами:
 // percent=50, step=1, attempts=3. minContrast=0 означает «проверка
@@ -73,7 +85,20 @@ func (s *Service) videoOptions() videoframe.Options {
 //     правилам и запросу.
 func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey, req *asset.Request) (buffer.Buffer, error) {
 	srcKey := s.sourceKey(req)
-	metaKey := srcKey.String()
+	// Кадр x.jpg и sidecar-метаданные видео привязаны к КАНОНИЧЕСКОМУ
+	// каталогу ассета URL ({path}/{source_name}-{source_format}, например
+	// "test/ivan-mp4"), а не к физическому ключу исходника ("test/ivan.mp4"):
+	// каталог результата сохраняет canonical-форму URL (дефис вместо точки).
+	//
+	// Ключом метаданных служит КЛЮЧ КАДРА (frameKey, "test/ivan-mp4/x.jpg"),
+	// а не каталог: MetadataStore.metaPath вычисляет sidecar как
+	// Dir(assetKey)/.meta.json, поэтому только ключ, указывающий на файл
+	// ВНУТРИ канонического каталога, даёт sidecar в
+	// result/test/ivan-mp4/.meta.json (а не в корне result/ или
+	// родительском каталоге).
+	canonDir := canonicalSourceDir(req)
+	frameKeyBase := videoFrameKey(canonDir)
+	metaKey := frameKeyBase.String()
 
 	// 1. Проверяем метаданные видео на уже сохранённый кадр (x.jpg).
 	frameKey, err := s.videoFrameKeyFromMeta(ctx, metaKey)
@@ -109,8 +134,10 @@ func (s *Service) generateVideoLocked(ctx context.Context, key object.ObjectKey,
 			return nil, err
 		}
 		// Асинхронно (fire-and-forget) сохраняем кадр как x.jpg и пишем
-		// VideoFrameKey в метаданные. Не блокирует ответ.
-		s.persistVideoFrameAsync(srcKey, metaKey, frame.Frame)
+		// VideoFrameKey в метаданные. Не блокирует ответ. Кадр публикуется
+		// под КАНОНИЧЕСКИМ каталогом ассета (см. canonDir выше), чтобы
+		// layout результата соответствовал URL (ivan-mp4, а не ivan.mp4).
+		s.persistVideoFrameAsync(canonDir, metaKey, frame.Frame)
 		src = bytes.NewReader(frame.Frame)
 		srcSize = int64(len(frame.Frame))
 		closeSrc = func() error { return nil }
@@ -192,16 +219,20 @@ func (s *Service) extractVideoFrame(ctx context.Context, srcKey object.ObjectKey
 
 // persistVideoFrameAsync асинхронно (fire-and-forget) сохраняет извлечённый
 // кадр как ассет x.jpg и записывает VideoFrameKey в метаданные видео.
+// canonDir — КАНОНИЧЕСКИЙ каталог ассета исходника (например
+// "test/ivan-mp4"): кадр публикуется как "<canonDir>/x.jpg", метаданные
+// пишутся под ключом metaKey (= "<canonDir>/x.jpg"), чтобы sidecar
+// (.meta.json) оказался внутри каталога результата.
 // best-effort: ошибки логируются и не влияют на генерацию. Используется
 // context.Background, чтобы запись завершилась даже после отмены запроса.
-func (s *Service) persistVideoFrameAsync(srcKey object.ObjectKey, metaKey string, frame []byte) {
+func (s *Service) persistVideoFrameAsync(canonDir object.ObjectKey, metaKey string, frame []byte) {
 	go func() {
 		bctx := context.Background()
-		frameKey := videoFrameKey(srcKey)
+		frameKey := videoFrameKey(canonDir)
 
 		// Сохраняем кадр как ассет x.jpg.
 		if err := s.deps.Results.Publish(bctx, frameKey, bytes.NewReader(frame), object.PublishOptions{}); err != nil {
-			s.log.Warnf("generatev2: persist video frame failed (video=%s): %v", srcKey, err)
+			s.log.Warnf("generatev2: persist video frame failed (dir=%s): %v", canonDir, err)
 			return
 		}
 
@@ -220,7 +251,7 @@ func (s *Service) persistVideoFrameAsync(srcKey object.ObjectKey, metaKey string
 			m.VideoFrameKey = string(frameKey)
 			return true, nil
 		}); err != nil {
-			s.log.Warnf("generatev2: record video frame key failed (video=%s): %v", srcKey, err)
+			s.log.Warnf("generatev2: record video frame key failed (dir=%s): %v", canonDir, err)
 		}
 	}()
 }

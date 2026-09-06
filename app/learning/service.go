@@ -28,9 +28,25 @@ func (s *Service) Observe(req *asset.Request) {
 	s.recorder.Observe(req)
 }
 
-// Stop останавливает Recorder (drain + финальная запись).
+// Stop выключает learning-mode (runtime-флаг) и останавливает Recorder
+// (drain + финальная запись наблюдений). Если режим был включён —
+// дополнительно выполняется персистентный сброс: policy.learning-mode: false
+// записывается в generate-local.yaml, чтобы после перезапуска сервер не
+// продолжал работу в learning-режиме (конфиг при старте читается с диска).
+// Вызывается при graceful shutdown.
 func (s *Service) Stop() {
+	wasEnabled := s.Enabled()
+	if s.controller != nil {
+		s.controller.Disable()
+	}
 	if s.recorder != nil {
+		if wasEnabled {
+			// Персистентный сброс ДО Stop(): Recorder ещё жив, ошибка записи
+			// логируется его логгером. Порядок с финальной записью наблюдений
+			// не важен: SetLearningMode меняет только scalar learning-mode,
+			// UpdatePathPolicies — только секцию path-policies.
+			s.recorder.ResetLearningMode()
+		}
 		s.recorder.Stop()
 	}
 }

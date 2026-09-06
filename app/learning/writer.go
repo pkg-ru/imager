@@ -78,6 +78,96 @@ func UpdatePathPolicies(file string, state map[string]policy.PathPolicyConfig) e
 	return atomicWrite(file, out)
 }
 
+// SetLearningMode устанавливает значение ключа policy.learning-mode в
+// YAML-файле file с сохранением комментариев и структуры документа.
+//
+//   - Если файла нет (или он пуст) — создаётся минимальный документ:
+//     version: "1" / policy: { learning-mode: <enabled> }.
+//   - Если файл есть — парсится в yaml.Node; находится mapping-узел policy
+//     (создаётся при отсутствии), в нём scalar-ключ learning-mode
+//     (создаётся при отсутствии). Существующий key-узел сохраняется вместе
+//     с комментариями, меняется только value. Остальные ключи не трогаются.
+//
+// Используется для персистентного сброса learning-mode в false при graceful
+// shutdown: после перезапуска сервер не должен продолжать работу в
+// learning-режиме, даже если флаг включался в базовом generate.yaml.
+func SetLearningMode(file string, enabled bool) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("learning: read %s: %w", file, err)
+		}
+		return writeLearningModeDocument(file, enabled)
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("learning: parse %s: %w", file, err)
+	}
+	if doc.Kind == 0 {
+		// Пустой файл — минимальный документ.
+		return writeLearningModeDocument(file, enabled)
+	}
+
+	root := documentRoot(&doc)
+	policyNode := findOrCreateMappingValue(root, "policy", false)
+	if policyNode == nil {
+		return fmt.Errorf("learning: %s: policy is not a mapping", file)
+	}
+	if err := setBoolValue(policyNode, "learning-mode", enabled); err != nil {
+		return fmt.Errorf("learning: %s: %w", file, err)
+	}
+
+	out, err := encodeNode(&doc)
+	if err != nil {
+		return fmt.Errorf("learning: encode %s: %w", file, err)
+	}
+	return atomicWrite(file, out)
+}
+
+// writeLearningModeDocument создаёт файл с минимальным документом
+// version: "1" / policy: { learning-mode: <enabled> }.
+func writeLearningModeDocument(file string, enabled bool) error {
+	doc := &yaml.Node{Kind: yaml.MappingNode}
+	appendScalarKey(doc, "version", "1")
+
+	policyNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	appendBoolKey(policyNode, "learning-mode", enabled)
+	appendNodeKey(doc, "policy", policyNode)
+
+	out, err := encodeNode(doc)
+	if err != nil {
+		return fmt.Errorf("learning: encode %s: %w", file, err)
+	}
+	return atomicWrite(file, out)
+}
+
+// setBoolValue устанавливает scalar bool-ключ в mapping-узле m: существующий
+// value-узел (вместе с key-узлом и его комментариями) сохраняется, меняются
+// только Tag/Value/Style; при отсутствии ключа пара добавляется в конец.
+// Не-scalar значение — ошибка.
+func setBoolValue(m *yaml.Node, key string, value bool) error {
+	if m.Kind != yaml.MappingNode {
+		return fmt.Errorf("%s is not a mapping", key)
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			v := m.Content[i+1]
+			if v.Kind != yaml.ScalarNode {
+				return fmt.Errorf("%s is not a scalar", key)
+			}
+			v.Tag = "!!bool"
+			v.Value = fmt.Sprintf("%v", value)
+			// Сброс style (например, quoted строки "true") — иначе
+			// сериализация оставила бы кавычки и bool не распарсился бы.
+			v.Style = 0
+			return nil
+		}
+	}
+	appendBoolKey(m, key, value)
+	return nil
+}
+
 // writeNewDocument создаёт файл с минимальным документом.
 func writeNewDocument(file string, state map[string]policy.PathPolicyConfig) error {
 	doc := &yaml.Node{Kind: yaml.MappingNode}

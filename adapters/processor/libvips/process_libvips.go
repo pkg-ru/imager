@@ -55,6 +55,23 @@ func init() {
 // Возвращает true в сборках с тэком "libvips".
 func Compiled() bool { return true }
 
+// vipsLoggingSetup подключает фильтруемый хендлер логов govips: передаёт
+// observability.Logger (или nil → дефолтный stderr-хендлер govips) и verbosity
+// в vips.LoggingSettings. Функция-хендлер мостит vips.LogLevel (биты glib)
+// на RouteVipsLog.
+func vipsLoggingSetup(log observability.Logger, verbosity int) {
+	if log == nil {
+		// Хендлер не задан: остаёмся на дефолтном хендлере govips (stderr),
+		// но verbosity всё равно фильтруется по configured уровню.
+		vips.LoggingSettings(nil, vips.LogLevel(verbosity))
+		return
+	}
+	handler := func(messageDomain string, messageLevel vips.LogLevel, message string) {
+		RouteVipsLog(log, messageDomain, int(messageLevel), message)
+	}
+	vips.LoggingSettings(handler, vips.LogLevel(verbosity))
+}
+
 // newLibvipsBackend создаёт движок и выполняет однократный Startup govips с
 // конфигурацией из Limits (ConcurrencyLevel, MaxCacheMem/Files/Size).
 func newLibvipsBackend(opts Options) (backend, error) {
@@ -67,6 +84,13 @@ func newLibvipsBackend(opts Options) (backend, error) {
 	// отказоустойчивый). Повторное создание движка заменяет провайдер.
 	registerVipsStatsProvider(opts.VipsMetricsInterval, b.wmCache)
 	startupOnce.Do(func() {
+		// Фильтрация логов libvips/govips по configured observability.log-level:
+		// устанавливаем хендлер и verbosity ДО vips.Startup (иначе govips
+		// ставит свой дефолт — verbosity info + stderr-хендлер, из-за чего
+		// [govips.info]/[VIPS.info] проходили мимо фильтра). Маппинг:
+		// err/critical→error, warn→warn, message/info→info, debug→debug.
+		verbosity := VipsVerbosityFor(opts.VipsLogLevel)
+		vipsLoggingSetup(opts.VipsLogger, verbosity)
 		// Лимиты кэша: при отключённом operation cache передаются
 		// НУЛЕВЫЕ значения. В govips 0 означает ПОЛНОЕ ОТКЛЮЧЕНИЕ кэша
 		// (vips_cache_set_max_mem(0) / vips_cache_set_max(0) /
@@ -645,12 +669,26 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		return nil
 	}
 
+	// Размеры кадра: для анимации — высота ОДНОГО кадра (page-height),
+	// чтобы пропорция недостающей оси считалась по кадру, а не по высоте
+	// всего вертикального стека страниц.
+	frameW := img.Width()
+	frameH := frameHeight(img)
+
 	w, h := plan.Size.Width, plan.Size.Height
 	switch plan.Operation {
 	case processing.OpResize:
 		// Пропорциональное изменение размера (без обрезки). Для изображений
 		// с альфой — Premultiply → resize → Unpremultiply (без тёмных
 		// ореолов на полупрозрачных краях).
+		//
+		// Размер-грамматика с ОДНОЙ осью даёт план с нулём в другой оси:
+		// vips_thumbnail_image требует ЯВНЫЕ ОБА измерения — width=0 →
+		// ошибка "parameter width not set"; height=0 → GLib critical
+		// "property 'height'" + fallback на дефолт свойства (молча неверный
+		// box-fit). Поэтому недостающая ось вычисляется из пропорций кадра
+		// (см. resolveResizeSize): "x200" → ширина, "200x" → высота.
+		w, h = resolveResizeSize(frameW, frameH, w, h)
 		err := premultiplyResize(img, func() error {
 			return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
 		})

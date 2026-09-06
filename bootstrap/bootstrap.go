@@ -87,8 +87,13 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 		WatermarkCache:      rc.Libvips.WatermarkCache,
 		DetectionSem:        rc.Libvips.DetectionSem,
 		VipsMetricsInterval: rc.Libvips.VipsMetricsInterval,
-		Detector:            det,
-		DetectorMargin:      rc.Detection.Margin,
+		// Фильтрация логов libvips/govips по configured observability.log-level:
+		// без этого govips пишет info-сообщения ([govips.info]/[VIPS.info])
+		// в stderr даже при log-level=warn (см. vipslog.go).
+		VipsLogLevel:   rc.LogLevel,
+		VipsLogger:     logger,
+		Detector:       det,
+		DetectorMargin: rc.Detection.Margin,
 	})
 	if lvErr != nil {
 		return nil, fmt.Errorf("no processor available: libvips: %w", lvErr)

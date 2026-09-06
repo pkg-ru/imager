@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,18 +129,20 @@ func TestVideoGenerateFirstTime(t *testing.T) {
 		t.Fatalf("processor input = %d bytes, want JPEG frame %d bytes", len(got), len(ext.frameData()))
 	}
 
-	// x.jpg асинхронно сохранён в ResultStore по ключу <видео-ключ>/x.jpg.
-	frameKey := videoFrameKey(object.ObjectKey("clip.mp4"))
-	waitForFrameKey(t, env, metaS, frameKey, "clip.mp4")
+	// x.jpg асинхронно сохранён в ResultStore по ключу
+	// <canonical-каталог>/x.jpg (clip-mp4/x.jpg, дефис вместо точки —
+	// canonical-форма URL, а не физическое имя исходника clip.mp4).
+	frameKey := videoFrameKey(object.ObjectKey("clip-mp4"))
+	waitForFrameKey(t, env, metaS, frameKey, string(frameKey))
 	if !env.res.Has(frameKey) {
 		t.Fatalf("x.jpg not published at %q", frameKey)
 	}
 	if got := env.res.Get(frameKey); !bytes.Equal(got, ext.frameData()) {
 		t.Fatalf("x.jpg data mismatch: got %d bytes, want %d", len(got), len(ext.frameData()))
 	}
-	// VideoFrameKey зафиксирован в метаданных видео.
+	// VideoFrameKey зафиксирован в метаданных видео (ключ = ключ кадра).
 	metaS.mu.Lock()
-	m := metaS.data["clip.mp4"]
+	m := metaS.data[string(frameKey)]
 	metaS.mu.Unlock()
 	if m == nil || m.VideoFrameKey != string(frameKey) {
 		t.Fatalf("metadata VideoFrameKey = %q, want %q", m.VideoFrameKey, frameKey)
@@ -155,10 +158,11 @@ func TestVideoGenerateReusesCachedFrame(t *testing.T) {
 	env := videoEnv(t, ext, metaS)
 	env.src.Add("clip.mp4", []byte("VIDEO-BYTES"))
 
-	// Заранее: x.jpg сохранён и VideoFrameKey зафиксирован в метаданных.
-	frameKey := videoFrameKey(object.ObjectKey("clip.mp4"))
+	// Заранее: x.jpg сохранён и VideoFrameKey зафиксирован в метаданных
+	// (ключ метаданных = ключ кадра, канонический каталог clip-mp4).
+	frameKey := videoFrameKey(object.ObjectKey("clip-mp4"))
 	env.res.Add(frameKey, ext.frameData())
-	metaS.data["clip.mp4"] = &filemeta.FileMetadata{VideoFrameKey: string(frameKey)}
+	metaS.data[string(frameKey)] = &filemeta.FileMetadata{VideoFrameKey: string(frameKey)}
 
 	ctx := context.Background()
 	req := mustReq(t, "", "clip", "mp4", asset.Crop(""), false, "100x100", 1, "webp")
@@ -379,18 +383,116 @@ func TestVideoFrameKey(t *testing.T) {
 	}
 }
 
+// TestCanonicalSourceDir — канонический каталог ассета сохраняет дефис
+// URL-пути (ivan-mp4), а не разворачивает его в физическое имя файла
+// (ivan.mp4). С путём и без.
+func TestCanonicalSourceDir(t *testing.T) {
+	sn, _ := asset.NewSourceName("ivan")
+	sf, _ := asset.NewFormat("mp4")
+	of, _ := asset.NewFormat("webp")
+	seg, _ := asset.NewSegmentName("face")
+
+	// С путём: /test/ivan-mp4/... → "test/ivan-mp4".
+	req, err := asset.NewSegmentRequest("test", sn, sf, seg, 0, of)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if got := canonicalSourceDir(req).String(); got != "test/ivan-mp4" {
+		t.Fatalf("canonicalSourceDir = %q, want %q", got, "test/ivan-mp4")
+	}
+
+	// Без пути: ivan-mp4 → "ivan-mp4".
+	req2, err := asset.NewSegmentRequest("", sn, sf, seg, 0, of)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if got := canonicalSourceDir(req2).String(); got != "ivan-mp4" {
+		t.Fatalf("canonicalSourceDir = %q, want %q", got, "ivan-mp4")
+	}
+}
+
+// TestVideoGenerateCanonicalDashLayout — генерация из видео-источника,
+// путь которого содержит canonical-компонент с дефисом вместо точки
+// (/test/ivan-mp4/face.webp → файл test/ivan.mp4 в источнике). Layout
+// результата должен соответствовать canonical-имени URL:
+//
+//	<result>/test/ivan-mp4/x.jpg        — кадр
+//	<result>/test/ivan-mp4/.meta.json   — sidecar метаданных (в каталоге
+//	                                      результата, а не в корне/родителе)
+//
+// Каталог "ivan.mp4" (с точкой) НЕ должен создаваться.
+func TestVideoGenerateCanonicalDashLayout(t *testing.T) {
+	ext := newFakeVideoExtractor()
+	metaS := newFakeMetadataStore()
+	env := videoEnv(t, ext, metaS)
+	env.src.Add("test/ivan.mp4", []byte("VIDEO-BYTES"))
+
+	ctx := context.Background()
+	// Запрос как из URL /test/ivan-mp4/thumb.webp (segment thumb разрешён
+	// политикой env: пресет thumb на пути "/"). Результат — test/ivan-mp4/
+	// thumb.webp, канонический каталог исходника — test/ivan-mp4.
+	sn, _ := asset.NewSourceName("ivan")
+	sf, _ := asset.NewFormat("mp4")
+	seg, _ := asset.NewSegmentName("thumb")
+	of, _ := asset.NewFormat("webp")
+	req, err := asset.NewSegmentRequest("test", sn, sf, seg, 0, of)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	res, err := env.svc.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("Generate canonical dash video asset: %v", err)
+	}
+	defer res.Close()
+
+	// Ключ результата — canonical URL (test/ivan-mp4/thumb.webp).
+	wantKey := object.ObjectKey("test/ivan-mp4/thumb.webp")
+	if res.Key != wantKey {
+		t.Fatalf("Result.Key = %q, want %q", res.Key, wantKey)
+	}
+
+	// Кадр x.jpg опубликован под canonical-каталогом (дефис, не точка).
+	frameKey := object.ObjectKey("test/ivan-mp4/x.jpg")
+	waitForFrameKey(t, env, metaS, frameKey, string(frameKey))
+	if !env.res.Has(frameKey) {
+		t.Fatalf("x.jpg not published at %q", frameKey)
+	}
+
+	// Sidecar-метаданные видео привязаны к ключу кадра: каталог
+	// результата — canonical (test/ivan-mp4), кадр в них зафиксирован.
+	metaS.mu.Lock()
+	m := metaS.data[string(frameKey)]
+	metaS.mu.Unlock()
+	if m == nil || m.VideoFrameKey != string(frameKey) {
+		t.Fatalf("metadata VideoFrameKey = %q, want %q", m.VideoFrameKey, frameKey)
+	}
+
+	// Каталог с точкой (test/ivan.mp4) НЕ должен появиться в результатах.
+	keys, err := env.res.List(ctx, "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, k := range keys {
+		if strings.Contains(k.String(), "ivan.mp4") {
+			t.Errorf("unexpected result key with dotted dir: %q", k)
+		}
+	}
+}
+
 // TestVideoFrameKeyFromMeta — чтение VideoFrameKey из метаданных.
+// Ключ метаданных — ключ кадра (canonical-каталог/имя кадра).
 func TestVideoFrameKeyFromMeta(t *testing.T) {
 	metaS := newFakeMetadataStore()
-	metaS.data["clip.mp4"] = &filemeta.FileMetadata{VideoFrameKey: "clip.mp4/x.jpg"}
+	metaS.data["clip-mp4/x.jpg"] = &filemeta.FileMetadata{VideoFrameKey: "clip-mp4/x.jpg"}
 	s := &Service{deps: Deps{Metadata: metaS}}
 
-	got, err := s.videoFrameKeyFromMeta(context.Background(), "clip.mp4")
+	got, err := s.videoFrameKeyFromMeta(context.Background(), "clip-mp4/x.jpg")
 	if err != nil {
 		t.Fatalf("videoFrameKeyFromMeta: %v", err)
 	}
-	if got != "clip.mp4/x.jpg" {
-		t.Fatalf("frame key = %q, want %q", got, "clip.mp4/x.jpg")
+	if got != "clip-mp4/x.jpg" {
+		t.Fatalf("frame key = %q, want %q", got, "clip-mp4/x.jpg")
 	}
 }
 

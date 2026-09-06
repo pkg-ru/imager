@@ -2,6 +2,8 @@ package ffmpeg
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +79,75 @@ func TestExtractIntegration(t *testing.T) {
 	if res.Timestamp < 0 {
 		t.Fatalf("timestamp = %v, want >= 0", res.Timestamp)
 	}
+}
+
+// TestExtractStdinAfterProbeIntegration воспроизводит баг "Error opening
+// input file pipe:0: Invalid data found": источник читается через stdin,
+// ffprobe прочитал начало потока, и тот же reader должен быть перемотан
+// перед передачей в ffmpeg.
+func TestExtractStdinAfterProbeIntegration(t *testing.T) {
+	requireFFmpeg(t)
+
+	dir := t.TempDir()
+	video := makeTestVideo(t, dir)
+
+	data, err := os.ReadFile(video)
+	if err != nil {
+		t.Fatalf("read video: %v", err)
+	}
+
+	// Источник без pathProvider — идёт в ffmpeg/ffprobe через stdin.
+	// Предварительно "испорчен" чтением начала потока (как это делает
+	// предыдущий вызов probe).
+	src := &consumedReader{data: data, pos: len(data) / 2}
+
+	ex := NewDefault()
+	res, err := ex.Extract(context.Background(), src, videoframe.Options{
+		FramePercent: 50,
+		MinContrast:  0,
+	})
+	if err != nil {
+		t.Fatalf("Extract from partially consumed stdin source: %v", err)
+	}
+	if res == nil || len(res.Frame) == 0 {
+		t.Fatal("Extract returned empty frame")
+	}
+}
+
+// consumedReader — io.ReadSeeker поверх байтового слайса, изначально
+// спозиционированный в середину (имитация потока, частично прочитанного
+// ffprobe до передачи в ffmpeg).
+type consumedReader struct {
+	data []byte
+	pos  int
+}
+
+func (r *consumedReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+func (r *consumedReader) Seek(offset int64, whence int) (int64, error) {
+	var np int64
+	switch whence {
+	case io.SeekStart:
+		np = offset
+	case io.SeekCurrent:
+		np = int64(r.pos) + offset
+	case io.SeekEnd:
+		np = int64(len(r.data)) + offset
+	default:
+		return 0, errors.New("invalid whence")
+	}
+	if np < 0 {
+		return 0, errors.New("negative seek position")
+	}
+	r.pos = int(np)
+	return np, nil
 }
 
 // fileSource — источник, реализующий io.ReadSeeker и pathProvider для тестов.

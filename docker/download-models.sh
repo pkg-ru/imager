@@ -64,7 +64,7 @@ download() { # $1 = file name, $2 = url, $3 = directory
     name="$1"; url="$2"; dir="$3"
     target="$dir/$name"
     if [ -s "$target" ]; then
-        log "model $name: already present, skip"
+        # log "model $name: already present, skip"
         return 0
     fi
     mkdir -p "$dir" 2>/dev/null || true
@@ -95,9 +95,9 @@ if [ "${IMAGER_SKIP_MODELS:-0}" = "1" ]; then
     exit 0
 fi
 
-log "models directory: $MODELS_DIR (IMAGER_MODELS_DIR)"
-log "YuNet: $FACE_URL"
-log "SSD:   $OBJECT_URL"
+# log "models directory: $MODELS_DIR (IMAGER_MODELS_DIR)"
+# log "YuNet: $FACE_URL"
+# log "SSD:   $OBJECT_URL"
 [ -n "$SELFIE_URL" ] && log "selfie: $SELFIE_URL (tests only)"
 
 download "$FACE_MODEL_FILE" "$FACE_URL" "$MODELS_DIR"

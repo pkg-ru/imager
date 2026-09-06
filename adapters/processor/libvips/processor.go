@@ -25,6 +25,7 @@ import (
 	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/observability"
 	"gitverse.ru/pkg-ru/imager/ports/bounded"
 	"gitverse.ru/pkg-ru/imager/ports/processor"
 )
@@ -193,6 +194,14 @@ type Options struct {
 	// VipsMetricsInterval — интервал периодического сбора vips-метрик.
 	// 0 = дефолт observability.DefaultVipsMetricsInterval.
 	VipsMetricsInterval time.Duration
+	// VipsLogLevel — configured observability.log-level (debug|info|warn|error),
+	// применяемый к логам libvips/govips. Пустое значение → warning (fail-safe).
+	// Реализуется через vips.LoggingSettings перед vips.Startup: сообщения
+	// ниже порога (info при warn) не выводятся вовсе.
+	VipsLogLevel string
+	// VipsLogger — структурный логгер, в который маршрутизируются прошедшие
+	// фильтр сообщения libvips/govips. nil = дефолтный хендлер govips (stderr).
+	VipsLogger observability.Logger
 	// Detector — детектор лиц/объектов для операций face-crop/object-crop.
 	// nil = детекция недоступна: запросы с fc/oc вернут понятную ошибку.
 	// Детектор создаётся в composition root (cmd/imager/main.go) из секции

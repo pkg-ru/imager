@@ -98,8 +98,26 @@ func (e *Extractor) Extract(ctx context.Context, source io.ReadSeeker, opts vide
 	return last, nil
 }
 
+// rewindToStart перематывает источник в начало перед передачей во внешний
+// процесс через stdin. Это необходимо, потому что ffprobe читает начало
+// потока (заголовок контейнера), и если после него тот же reader без
+// перемотки передать в ffmpeg, ffmpeg получит данные без заголовка и
+// упадёт с "Invalid data found when processing input" на pipe:0.
+// Для источников-файлов (pathProvider) перемотка не требуется, но и
+// безвредна.
+func rewindToStart(source io.ReadSeeker) error {
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("videoframe: seek source to start: %w", err)
+	}
+	return nil
+}
+
 // probe определяет длительность, fps и размеры видео через ffprobe.
 func (e *Extractor) probe(ctx context.Context, source io.ReadSeeker) (probeInfo, error) {
+	// Гарантируем чтение с начала: вызывающий мог частично прочитать поток.
+	if err := rewindToStart(source); err != nil {
+		return probeInfo{}, err
+	}
 	args := []string{
 		"-v", "error",
 		"-select_streams", "v:0",
@@ -133,11 +151,21 @@ func (e *Extractor) extractFrame(ctx context.Context, source io.ReadSeeker, t fl
 	input := "pipe:0"
 	if p, ok := source.(pathProvider); ok && p.Path() != "" {
 		input = p.Path()
+	} else if err := rewindToStart(source); err != nil {
+		// Корневая причина бага: ffprobe уже прочитал начало потока, и без
+		// перемотки ffmpeg получает данные без заголовка контейнера —
+		// "Error opening input file pipe:0: Invalid data found".
+		return nil, err
 	}
 
+	// -threads 2 ограничивает число декодер/энкодер-потоков ffmpeg: при
+	// извлечении кадра из 4K HEVC 10-bit `-threads auto` порождает ~16
+	// frame-threads с большим DPB, что вместе с cgroup-лимитом памяти
+	// приводит к OOM-kill контейнера.
 	args := []string{
 		"-ss", formatSeconds(t),
 		"-i", input,
+		"-threads", "2",
 		"-frames:v", "1",
 		"-q:v", "2",
 		"-f", "image2pipe",

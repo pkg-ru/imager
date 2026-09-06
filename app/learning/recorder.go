@@ -109,6 +109,22 @@ func (r *Recorder) Observe(req *asset.Request) {
 	}
 }
 
+// ResetLearningMode персистентно сбрасывает learning-mode: записывает
+// policy.learning-mode = false в generate-local.yaml (comment-preserving).
+// Best-effort: ошибка записи логируется, но не прерывает shutdown.
+func (r *Recorder) ResetLearningMode() {
+	r.persistLearningMode(false)
+}
+
+// persistLearningMode записывает policy.learning-mode = enabled в
+// generate-local.yaml.
+func (r *Recorder) persistLearningMode(enabled bool) {
+	file := filepath.Join(r.dir, localFileName)
+	if err := SetLearningMode(file, enabled); err != nil {
+		r.logger.Errorf("learning: write learning-mode=%v to %s: %v", enabled, file, err)
+	}
+}
+
 // Stop останавливает потребителя: drain канала + финальная запись.
 func (r *Recorder) Stop() {
 	r.stopOnce.Do(func() {

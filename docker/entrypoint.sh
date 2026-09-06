@@ -18,7 +18,8 @@ for example in "$CONFIG_DIR"/*-local.yaml.example; do
     [ -e "$example" ] || continue
     target="${example%.example}"
     if [ -e "$target" ]; then
-        echo "[entrypoint] $target already exists, skipping (not overwritten)"
+        # echo "[entrypoint] $target already exists, skipping (not overwritten)"
+		continue
     elif cp "$example" "$target" 2>/dev/null; then
         echo "[entrypoint] created $target from $example"
     else
@@ -45,5 +46,5 @@ else
 fi
 
 # exec: imager becomes PID 1, receives signals directly.
-echo "[entrypoint] starting imager: $*"
+# echo "[entrypoint] starting imager: $*"
 exec "$@"

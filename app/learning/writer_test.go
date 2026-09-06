@@ -274,6 +274,160 @@ func TestUpdatePathPoliciesAtomicNoTmpFiles(t *testing.T) {
 	}
 }
 
+// TestSetLearningModeDisablesExisting — персистентный сброс learning-mode
+// при shutdown: существующий learning-mode: true (в т.ч. с комментариями)
+// заменяется на false, остальные секции и комментарии не трогаются.
+func TestSetLearningModeDisablesExisting(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `# top comment
+policy:
+  # learning-mode head comment
+  learning-mode: true # learning-mode line comment
+  path-policies:
+    /a/b:
+      customs:
+        "120x60":
+          output-formats: [webp]
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("SetLearningMode(false): %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"# top comment",
+		"# learning-mode head comment",
+		"learning-mode: false # learning-mode line comment",
+		"/a/b:",
+		`"120x60":`,
+		"output-formats: [webp]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file content missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "learning-mode: true") {
+		t.Errorf("learning-mode not disabled:\n%s", got)
+	}
+}
+
+// TestSetLearningModeCreatesMissingKey — в файле без ключа learning-mode
+// (например, написанного вручную) ключ создаётся со значением false.
+func TestSetLearningModeCreatesMissingKey(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /a/b:
+      presets: [thumb]
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("SetLearningMode(false): %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "learning-mode: false") {
+		t.Errorf("learning-mode key not created:\n%s", got)
+	}
+	if !strings.Contains(got, "presets: [thumb]") {
+		t.Errorf("existing sections lost:\n%s", got)
+	}
+}
+
+// TestSetLearningModeMissingFile — файла нет: создаётся минимальный
+// документ с learning-mode: false.
+func TestSetLearningModeMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("SetLearningMode(false): %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{`version: "1"`, "policy:", "learning-mode: false"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file content missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestSetLearningModeEnabledAndQuotedValue — включение режима и сброс
+// закавыченного значения ("true" — строка, не bool): style сбрасывается,
+// значение становится валидным bool.
+func TestSetLearningModeEnabledAndQuotedValue(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := "policy:\n  learning-mode: \"true\"\n"
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	// Сброс закавыченного значения.
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("SetLearningMode(false): %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, `"true"`) {
+		t.Errorf("quoted value not normalized:\n%s", got)
+	}
+	if !strings.Contains(got, "learning-mode: false") {
+		t.Errorf("learning-mode not disabled:\n%s", got)
+	}
+	// Включение обратно.
+	if err := SetLearningMode(file, true); err != nil {
+		t.Fatalf("SetLearningMode(true): %v", err)
+	}
+	data, err = os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(data), "learning-mode: true") {
+		t.Errorf("learning-mode not enabled:\n%s", string(data))
+	}
+}
+
+// TestSetLearningModeIdempotent — повторный сброс не меняет файл.
+func TestSetLearningModeIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	first, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read first: %v", err)
+	}
+	if err := SetLearningMode(file, false); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	second, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read second: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("double write not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
 // TestUpdatePathPoliciesExtendsExistingOutputFormats — фикс бага learning-mode:
 // при уже существующем custom новый формат из state должен ДОБАВЛЯТЬСЯ в
 // output-formats (а не игнорироваться), сохраняя существующие значения и

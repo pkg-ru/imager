@@ -158,16 +158,18 @@ func SelectCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin float64) R
 		return centerCrop(imgW, imgH, targetW, targetH)
 	}
 
-	return detectionCropWindow(region, imgW, imgH, targetW, targetH, false)
+	return detectionCropWindow(region, imgW, imgH, targetW, targetH, false, 0)
 }
 
 // detectionCropWindow — общее ядро детекторных кропов (face-crop и
 // object-crop): строит окно кропа из области интереса region (bbox+margin):
-// размер окна = fitAspect(region) под целевой аспект, позиция = центр region,
-// зажатый к границам кадра (centeredClampedRect). fitCrop=true (face-crop)
-// достраивает отсутствующую сторону целевого размера по аспекту кадра;
-// fitCrop=false (object-crop) использует target как есть.
-func detectionCropWindow(region Rect, imgW, imgH, targetW, targetH int, fitCrop bool) Rect {
+// размер окна = fitAspect(region) под целевой аспект, позиция = центр region
+// (сдвинутый вверх на focusShiftUp пикселей), зажатый к границам кадра
+// (centeredClampedRect). fitCrop=true (face-crop) достраивает отсутствующую
+// сторону целевого размера по аспекту кадра; fitCrop=false (object-crop)
+// использует target как есть. focusShiftUp — вертикальная компенсация
+// фокус-точки (для face-кропов — компенсация лба; для object-crop — 0).
+func detectionCropWindow(region Rect, imgW, imgH, targetW, targetH int, fitCrop bool, focusShiftUp int) Rect {
 	if fitCrop {
 		if targetW <= 0 {
 			targetW = int(math.Round(float64(targetH) * float64(imgW) / float64(imgH)))
@@ -194,9 +196,10 @@ func detectionCropWindow(region Rect, imgW, imgH, targetW, targetH int, fitCrop 
 		ch = 1
 	}
 
-	// Центр окна = центр области интереса (+margin), с clamp к границам.
+	// Центр окна = центр области интереса (+margin), с компенсацией лба
+	// (сдвиг фокус-точки вверх) и clamp к границам.
 	cx := region.X + region.W/2
-	cy := region.Y + region.H/2
+	cy := region.Y + region.H/2 - focusShiftUp
 	return centeredClampedRect(cx, cy, cw, ch, imgW, imgH)
 }
 
@@ -218,7 +221,10 @@ func detectionCropWindow(region Rect, imgW, imgH, targetW, targetH int, fitCrop 
 //     под целевой aspect ratio (fitAspect — расширение по недостающей оси),
 //     т.е. окно масштабируется вместе с лицом: после ресайза кропа до
 //     целевого размера ассета лицо занимает стабильную долю кадра;
-//  3. Окно центрируется на центре области лица (cx, cy);
+//  3. Окно центрируется на центре области лица (cx, cy), СДВИНУТОМ вверх
+//     на foreheadShiftUp (компенсация лба: бокс детекции охватывает лицо
+//     от лба до подбородка, и центрирование по геометрическому центру
+//     бокса часто срезает лоб сверху);
 //  4. Clamp к границам кадра (centeredClampedRect): окно у края упирается
 //     в край, окно больше кадра по оси — ужинается до кадра.
 //
@@ -260,7 +266,7 @@ func SelectFaceCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin float6
 		return fitRect(region.X, region.Y, region.W, region.H, imgW, imgH)
 	}
 
-	return detectionCropWindow(region, imgW, imgH, targetW, targetH, true)
+	return detectionCropWindow(region, imgW, imgH, targetW, targetH, true, foreheadShiftUp(region.H))
 }
 
 // SelectFaceFixCrop выбирает cover-окно кропа для face-fix: изображение
@@ -280,14 +286,14 @@ func SelectFaceCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin float6
 // точностью округления), поэтому последующий ThumbnailWithSize SizeBoth не
 // докручивает геометрию.
 func SelectFaceFixCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin float64) Rect {
-	return detectionFixCropWindow(boxes, imgW, imgH, targetW, targetH, margin)
+	return detectionFixCropWindow(boxes, imgW, imgH, targetW, targetH, margin, foreheadShiftUpFromBoxes(boxes, imgW, imgH, margin))
 }
 
 // SelectObjectFixCrop — cover-окно кропа для object-fix; семантика
 // идентична SelectFaceFixCrop, но область интереса строится по боксам
 // объектов (детектор объектов), а не лиц.
 func SelectObjectFixCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin float64) Rect {
-	return detectionFixCropWindow(boxes, imgW, imgH, targetW, targetH, margin)
+	return detectionFixCropWindow(boxes, imgW, imgH, targetW, targetH, margin, 0)
 }
 
 // detectionFixCropWindow — общее ядро fix-кропов (face-fix и object-fix):
@@ -304,14 +310,15 @@ func SelectObjectFixCrop(boxes []Box, imgW, imgH, targetW, targetH int, margin f
 //     imgW × (targetH/scale), горизонталь не режется; кроп только по Y.
 //     При равных аспектах окно вырождается в весь кадр;
 //  4. Позиция по избыточной оси: центр окна = центр области интереса
-//     (bbox + margin, unionWithMargin), затем clamp к границам оригинала
-//     по этой оси (clampInt);
+//     (bbox + margin, unionWithMargin; для face-fix — с компенсацией лба,
+//     сдвиг фокус-точки вверх на foreheadShiftUp), затем clamp к границам
+//     оригинала по этой оси (clampInt);
 //  5. Нет боксов / нет валидной области — fallback: центральное
 //     позиционирование по избыточной оси (эквивалент центрального кропа);
 //  6. Цель задана не полностью (одна из сторон <= 0) — cover не определён,
 //     fallback: центральный кроп с целевым аспектом (centerCrop), цель
 //     0x0 — весь кадр.
-func detectionFixCropWindow(boxes []Box, imgW, imgH, targetW, targetH int, margin float64) Rect {
+func detectionFixCropWindow(boxes []Box, imgW, imgH, targetW, targetH int, margin float64, focusShiftUp int) Rect {
 	if imgW <= 0 || imgH <= 0 {
 		return Rect{} // защита от некорректного кадра
 	}
@@ -360,8 +367,38 @@ func detectionFixCropWindow(boxes []Box, imgW, imgH, targetW, targetH int, margi
 	// по Y; полная ширина сохраняется. Равные аспекты → окно = весь кадр.
 	h := int(math.Round(float64(targetH) / float64(targetW) * float64(imgW)))
 	h = clampInt(h, 1, imgH)
-	y := centerOf(func(r Rect) int { return r.Y + r.H/2 }, imgH/2, h/2, imgH-h)
+	y := centerOf(func(r Rect) int { return r.Y + r.H/2 - focusShiftUp }, imgH/2, h/2, imgH-h)
 	return Rect{X: 0, Y: y, W: imgW, H: h}
+}
+
+// foreheadCompensation — доля высоты бокса лица, на которую фокус-точка
+// смещается ВВЕРХ от геометрического центра бокса при face-кропе
+// (face-crop / face-fix-crop). Детектор (YuNet) выдаёт бокс от линии лба
+// до подбородка; центрирование по геометрическому центру бокса часто
+// срезает лоб сверху — визуально значимая точка лица (глаза) расположена
+// выше центра бокса. Эмпирически компенсация в 15% высоты бокса ставит
+// глаза ближе к центру окна кропа, сохраняя и лоб, и подбородок.
+const foreheadCompensation = 0.15
+
+// foreheadShiftUp вычисляет сдвиг фокус-точки вверх (в пикселях) для
+// области интереса высотой h: 15% высоты области, округлённый вверх
+// (round), не отрицательный.
+func foreheadShiftUp(h int) int {
+	if h <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(h) * foreheadCompensation))
+}
+
+// foreheadShiftUpFromBoxes вычисляет сдвиг фокус-точки вверх для набора
+// боксов: из bounding box + margin (unionWithMargin) берётся высота
+// области интереса. ok=false (нет валидных боксов) → 0.
+func foreheadShiftUpFromBoxes(boxes []Box, imgW, imgH int, margin float64) int {
+	region, ok := unionWithMargin(boxes, imgW, imgH, margin)
+	if !ok {
+		return 0
+	}
+	return foreheadShiftUp(region.H)
 }
 
 // boxFromEdges строит Box из вещественных координат краёв (в пикселях кадра),

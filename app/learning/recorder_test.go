@@ -365,6 +365,102 @@ func TestController(t *testing.T) {
 	}
 }
 
+// TestServiceStopPersistsLearningModeReset — при Stop() включённого сервиса
+// learning-mode персистентно сбрасывается: runtime-флаг false + в
+// generate-local.yaml записывается learning-mode: false (даже если до этого
+// там был true), наблюдения сохраняются. Это имитирует graceful shutdown:
+// после перезапуска сервер стартует с выключенным learning-mode.
+func TestServiceStopPersistsLearningModeReset(t *testing.T) {
+	dir := t.TempDir()
+	// Пред-существующий файл с learning-mode: true (например, из
+	// generate-local.yaml пользователя) + observation.
+	initial := "policy:\n  learning-mode: true\n"
+	if err := os.WriteFile(filepath.Join(dir, localFileName), []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	svc := NewService(NewController(), rec)
+	svc.controller.Enable()
+	if !svc.Enabled() {
+		t.Fatal("service must be enabled before Stop")
+	}
+
+	svc.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	svc.Stop()
+
+	// Runtime-флаг выключен.
+	if svc.Enabled() {
+		t.Error("learning-mode must be disabled after Stop")
+	}
+	// Персистентный сброс: learning-mode: false в generate-local.yaml.
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	got := string(data)
+	if strings.Contains(got, "learning-mode: true") {
+		t.Errorf("learning-mode not persistently reset:\n%s", got)
+	}
+	if !strings.Contains(got, "learning-mode: false") {
+		t.Errorf("learning-mode: false missing:\n%s", got)
+	}
+	// Наблюдение не потеряно.
+	if !strings.Contains(got, "120x60:") {
+		t.Errorf("observation lost after reset:\n%s", got)
+	}
+}
+
+// TestServiceStopDisabledNoResetFile — Stop() выключенного сервиса не
+// создаёт generate-local.yaml (сброс не нужен — режим не включался).
+func TestServiceStopDisabledNoResetFile(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	svc := NewService(NewController(), rec)
+	svc.Stop()
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected no file for disabled service, err = %v", err)
+	}
+}
+
+// TestRecorderResetLearningModePreservesObservations — ResetLearningMode
+// меняет только scalar learning-mode, observations в path-policies
+// сохраняются.
+func TestRecorderResetLearningModePreservesObservations(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	rec.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	rec.Stop()
+
+	// После Stop() наблюдения записаны; ResetLearningMode добавляет
+	// learning-mode: false, не трогая path-policies.
+	rec2, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder 2: %v", err)
+	}
+	rec2.ResetLearningMode()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "120x60:") {
+		t.Errorf("observations lost after ResetLearningMode:\n%s", got)
+	}
+	if !strings.Contains(got, "learning-mode: false") {
+		t.Errorf("learning-mode: false missing:\n%s", got)
+	}
+}
+
 func TestServiceObserveGatedByController(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
