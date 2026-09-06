@@ -2,6 +2,7 @@ package fs
 
 import (
 	"io"
+	"os"
 
 	"gitverse.ru/pkg-ru/imager/domain/object"
 )
@@ -11,6 +12,20 @@ import (
 type fileArtifact struct {
 	file io.ReadSeekCloser
 	meta object.ObjectMetadata
+}
+
+// Path возвращает путь к файлу на диске, если artifact открыт от *os.File
+// (все ветки fs-хранилища, включая secureOpenFile, используют os.NewFile с
+// реальным путём). Иначе возвращает "" — источник без файлового пути.
+// См. adapters/videoframe/ffmpeg (pathProvider): путь позволяет ffmpeg
+// читать файл напрямую вместо stdin-pipe.
+func (a *fileArtifact) Path() string {
+	if f, ok := a.file.(*os.File); ok {
+		if name := f.Name(); name != "" && name != "/dev/stdin" {
+			return name
+		}
+	}
+	return ""
 }
 
 // Read реализует io.Reader.

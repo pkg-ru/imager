@@ -343,6 +343,20 @@ func (b *Buffer) File() *os.File {
 	return b.f
 }
 
+// Path возвращает путь spill-файла, если буфер сброшен на диск. Если буфер
+// живёт в памяти, возвращает "" — потребители (см.
+// adapters/videoframe/ffmpeg, pathProvider) обязаны использовать fallback
+// на stdin-pipe. Путь валиден, пока буфер не освобождён (released), что
+// соответствует контракту использования открытого источника.
+func (b *Buffer) Path() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.f == nil {
+		return ""
+	}
+	return b.f.Name()
+}
+
 // InMemory сообщает, находится ли буфер полностью в памяти.
 func (b *Buffer) InMemory() bool {
 	b.mu.Lock()

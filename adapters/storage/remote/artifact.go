@@ -13,6 +13,11 @@ type bufferArtifact struct {
 	meta object.ObjectMetadata
 }
 
+// Path делегирует буферу: путь spill-файла, если буфер сброшен на диск,
+// иначе "" (in-RAM буфер — fallback на stdin-pipe). См.
+// adapters/videoframe/ffmpeg (pathProvider).
+func (a *bufferArtifact) Path() string { return a.buf.Path() }
+
 // NewBufferArtifact создаёт object.Artifact поверх Buffer с метаданными.
 func NewBufferArtifact(buf *Buffer, meta object.ObjectMetadata) object.Artifact {
 	return &bufferArtifact{buf: buf, meta: meta}
