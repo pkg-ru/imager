@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/pkg-ru/dynamic"
 	"gitverse.ru/pkg-ru/imager/domain/policy"
 	"gopkg.in/yaml.v3"
 )
@@ -199,8 +201,14 @@ func mergePathPolicies(ppNode *yaml.Node, state map[string]policy.PathPolicyConf
 }
 
 // mergePathPolicyValue мержит PathPolicyConfig в существующий (или новый)
-// value-узел пути: presets не трогаются, существующие customs сохраняются
-// как есть, добавляются только новые custom-ключи.
+// value-узел пути: presets не трогаются; customs мержатся по имени —
+// существующий custom сохраняет свои поля, его output-formats РАСШИРЯЕТСЯ
+// форматами из state (существующие значения и их порядок сохраняются,
+// дубликаты не создаются), новые custom-ключи добавляются целиком.
+//
+// Без расширения output-formats существующих customs learning-mode не мог
+// бы зафиксировать второй/третий формат размера: AddObservation пополняет
+// список в памяти, но запись на диск игнорировала уже существующий custom.
 func mergePathPolicyValue(valNode *yaml.Node, pp policy.PathPolicyConfig) error {
 	if valNode.Kind != yaml.MappingNode {
 		return fmt.Errorf("path policy value is not a mapping")
@@ -225,14 +233,78 @@ func mergePathPolicyValue(valNode *yaml.Node, pp policy.PathPolicyConfig) error 
 		return fmt.Errorf("customs is not a mapping")
 	}
 	for _, name := range sortedCustomNames(pp.Customs) {
-		if hasKey(customsNode, name) {
-			continue // существующий custom не трогается
+		valNode := findCustomValueNode(customsNode, name)
+		if valNode != nil {
+			// Существующий custom: расширить output-formats форматами
+			// из state (если узел — mapping; иначе не трогаем).
+			if valNode.Kind == yaml.MappingNode {
+				mergeCustomOutputFormats(valNode, pp.Customs[name].OutputFormats)
+			}
+			continue
 		}
 		keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
 		val := presetConfigNode(pp.Customs[name])
 		customsNode.Content = append(customsNode.Content, keyNode, val)
 	}
 	return nil
+}
+
+// findCustomValueNode возвращает value-узел custom с именем name в mapping
+// customsNode (nil, если пары нет).
+func findCustomValueNode(customsNode *yaml.Node, name string) *yaml.Node {
+	for i := 0; i+1 < len(customsNode.Content); i += 2 {
+		if customsNode.Content[i].Value == name {
+			return customsNode.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// mergeCustomOutputFormats расширяет output-formats существующего custom-узла
+// форматами add: существующие значения и их порядок сохраняются, форматы из
+// add добавляются в конец только если их ещё нет (по lower-case значению).
+// Если ключа output-formats в узле нет и add непуст — ключ создаётся в начале
+// mapping-а (как в presetConfigNode).
+func mergeCustomOutputFormats(customVal *yaml.Node, add dynamic.StringSlice) {
+	if len(add) == 0 {
+		return
+	}
+	// Найти существующий узел output-formats.
+	var seqNode *yaml.Node
+	for i := 0; i+1 < len(customVal.Content); i += 2 {
+		if customVal.Content[i].Value == "output-formats" {
+			seqNode = customVal.Content[i+1]
+			break
+		}
+	}
+	if seqNode == nil {
+		// Ключа нет — создать с добавляемыми форматами.
+		k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "output-formats"}
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, f := range add {
+			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: string(f)})
+		}
+		// Вставить в начало mapping-а (output-formats — единственное поле,
+		// которое learning-mode пишет для customs).
+		customVal.Content = append([]*yaml.Node{k, seq}, customVal.Content...)
+		return
+	}
+	if seqNode.Kind != yaml.SequenceNode {
+		return // не sequence — не трогаем
+	}
+	// Собрать множество существующих форматов (lower-case) и добавить новые.
+	existing := make(map[string]bool, len(seqNode.Content))
+	for _, c := range seqNode.Content {
+		existing[strings.ToLower(c.Value)] = true
+	}
+	for _, f := range add {
+		fs := string(f)
+		if fs == "" || existing[strings.ToLower(fs)] {
+			continue
+		}
+		existing[strings.ToLower(fs)] = true
+		seqNode.Content = append(seqNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: fs})
+	}
 }
 
 // presetConfigNode строит YAML-узел custom-записи. Learning-mode создаёт

@@ -274,6 +274,121 @@ func TestUpdatePathPoliciesAtomicNoTmpFiles(t *testing.T) {
 	}
 }
 
+// TestUpdatePathPoliciesExtendsExistingOutputFormats — фикс бага learning-mode:
+// при уже существующем custom новый формат из state должен ДОБАВЛЯТЬСЯ в
+// output-formats (а не игнорироваться), сохраняя существующие значения и
+// комментарии.
+func TestUpdatePathPoliciesExtendsExistingOutputFormats(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /test:
+      customs:
+        "220x200":
+          output-formats: [gif]
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	// В памяти AddObservation дополнил список форматами jpg и webp.
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"220x200", sizeCustom("gif", "jpg", "webp")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	// Существующие форматы сохраняются, новые добавляются (порядок: сначала
+	// существующие, затем добавленные; YAML-стиль — как в исходном файле).
+	if !strings.Contains(got, "[gif, jpg, webp]") {
+		t.Errorf("expected output-formats [gif, jpg, webp] after merge:\n%s", got)
+	}
+}
+
+// TestUpdatePathPoliciesExtendIdempotent — повторная запись с тем же state
+// не дублирует форматы (идемпотентность).
+func TestUpdatePathPoliciesExtendIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /test:
+      customs:
+        "220x200":
+          output-formats: [gif, webp]
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"220x200", sizeCustom("gif", "jpg", "webp")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	first, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read first: %v", err)
+	}
+	// Повторная запись того же state — файл не меняется.
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	second, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read second: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("merge not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	// Ровно по одному вхождению каждого формата (flow-стиль сохранён).
+	got := string(second)
+	for _, f := range []string{"gif", "jpg", "webp"} {
+		if n := strings.Count(got, f); n != 1 {
+			t.Errorf("format %q occurs %d times, want 1:\n%s", f, n, got)
+		}
+	}
+}
+
+// TestUpdatePathPoliciesExtendsOutputFormatsWhenKeyMissing — если у
+// существующего custom нет ключа output-formats, он создаётся.
+func TestUpdatePathPoliciesExtendsOutputFormatsWhenKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "generate-local.yaml")
+	initial := `policy:
+  path-policies:
+    /test:
+      customs:
+        "220x200":
+          quality: 80
+`
+	if err := os.WriteFile(file, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	state := stateOf([2]any{"/test", policy.PathPolicyConfig{
+		Customs: customs([2]any{"220x200", sizeCustom("avif")}),
+	}})
+	if err := UpdatePathPolicies(file, state); err != nil {
+		t.Fatalf("UpdatePathPolicies: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "output-formats:") || !strings.Contains(got, "avif") {
+		t.Errorf("output-formats key not created:\n%s", got)
+	}
+	if !strings.Contains(got, "quality: 80") {
+		t.Errorf("existing field lost:\n%s", got)
+	}
+}
+
 func TestUpdatePathPoliciesEmptyState(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "generate-local.yaml")

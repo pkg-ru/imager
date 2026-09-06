@@ -53,11 +53,13 @@ type PathPolicyConfig struct {
 // в URL запрещён, кроме случая, когда имя пресета содержит тот же @dpr).
 //
 // crop — ТОЛЬКО строковый параметр, дефолт "" (кроп не используется):
-//   - ""        — resize (только изменение размера)
-//   - "center"  — центрированный кроп (transform c)
-//   - "smart"   — умный кроп (sc)
-//   - "face"    — кроп по лицу (fc)
-//   - "object"  — кроп по объекту (oc)
+//   - ""          — resize (только изменение размера)
+//   - "center"    — центрированный кроп (transform c)
+//   - "smart"     — умный кроп (sc)
+//   - "face"      — кроп по лицу (fc)
+//   - "object"    — кроп по объекту (oc)
+//   - "face_fix"  — cover-масштаб со сдвигом к лицу, без зума (ffx)
+//   - "object_fix" — cover-масштаб со сдвигом к объекту, без зума (ofx)
 //
 // trim — булев флаг независимого фильтра обрезки однотонных полей (false =
 // не применять). Комбинация crop+trim кодируется в transform код:
@@ -283,7 +285,7 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 	}
 
 	switch crop {
-	case "", "center", "smart", "face", "object":
+	case "", "center", "smart", "face", "object", "face_fix", "object_fix":
 	default:
 		*errs = append(*errs, &ValidationError{
 			Path:   base + ".crop",
@@ -782,16 +784,20 @@ func loopFromConfig(l dynamic.Nullable[dynamic.Bool]) *bool {
 // transformFromCropTrim маппит строковый режим crop и булев флаг trim
 // (независимые фильтры) в трансформационный код:
 //
-//	crop="",        trim=false → ""            (resize, без кропа)
-//	crop="center",  trim=false → "c"           (центрированный кроп)
-//	crop="smart",   trim=false → "sc" (smart-crop)
-//	crop="face",    trim=false → "fc" (face-crop)
-//	crop="object",  trim=false → "oc" (object-crop)
-//	crop="",        trim=true  → "t" (только trim)
-//	crop="center",  trim=true  → "ct" (c + trim; применяется trim, затем кроп)
-//	crop="smart",   trim=true  → "sct"
-//	crop="face",    trim=true  → "fct"
-//	crop="object",  trim=true  → "oct"
+//	crop="",         trim=false → ""            (resize, без кропа)
+//	crop="center",   trim=false → "c"           (центрированный кроп)
+//	crop="smart",    trim=false → "sc" (smart-crop)
+//	crop="face",     trim=false → "fc" (face-crop)
+//	crop="object",   trim=false → "oc" (object-crop)
+//	crop="face_fix", trim=false → "ffx" (face-fix-crop)
+//	crop="object_fix", trim=false → "ofx" (object-fix-crop)
+//	crop="",         trim=true  → "t" (только trim)
+//	crop="center",   trim=true  → "ct" (c + trim; применяется trim, затем кроп)
+//	crop="smart",    trim=true  → "sct"
+//	crop="face",     trim=true  → "fct"
+//	crop="object",   trim=true  → "oct"
+//	crop="face_fix", trim=true  → "ffxt"
+//	crop="object_fix", trim=true → "ofxt"
 //
 // Trim в коде всегда стоит ПОСЛЕДНИМ; фактическое применение — сначала trim,
 // затем кроп.
@@ -817,6 +823,16 @@ func transformFromCropTrim(crop string, trim bool) asset.Transform {
 			return asset.TransformObjectCropTrim
 		}
 		return asset.TransformObjectCrop
+	case "face_fix":
+		if trim {
+			return asset.TransformFaceFixCropTrim
+		}
+		return asset.TransformFaceFixCrop
+	case "object_fix":
+		if trim {
+			return asset.TransformObjectFixCropTrim
+		}
+		return asset.TransformObjectFixCrop
 	default: // "" — кроп не используется
 		if trim {
 			return asset.TransformTrim

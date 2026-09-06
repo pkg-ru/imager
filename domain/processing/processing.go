@@ -38,12 +38,21 @@ const (
 	OpFaceCrop Operation = "face-crop"
 	// OpObjectCrop — обрезка по обнаруженным объектам (ONNX SSD/YOLO).
 	OpObjectCrop Operation = "object-crop"
+	// OpFaceFixCrop — cover-масштаб без зума в лицо: изображение
+	// масштабируется до целевого размера (cover) и сдвигается к лицу;
+	// кроп только по пропорционально избыточной оси (ONNX YuNet).
+	OpFaceFixCrop Operation = "face-fix-crop"
+	// OpObjectFixCrop — cover-масштаб без зума в объект: изображение
+	// масштабируется до целевого размера (cover) и сдвигается к объекту;
+	// кроп только по пропорционально избыточной оси (ONNX SSD/YOLO).
+	OpObjectFixCrop Operation = "object-fix-crop"
 )
 
 // ValidOperation проверяет, что op является допустимой операцией.
 func ValidOperation(op Operation) bool {
 	switch op {
-	case OpResize, OpCrop, OpSmartCrop, OpFaceCrop, OpObjectCrop:
+	case OpResize, OpCrop, OpSmartCrop, OpFaceCrop, OpObjectCrop,
+		OpFaceFixCrop, OpObjectFixCrop:
 		return true
 	default:
 		return false

@@ -76,6 +76,56 @@ func TestIntegrationLearningModeUserScenario(t *testing.T) {
 	}
 }
 
+// TestIntegrationLearningModeExtendsOutputFormats — воспроизведение бага
+// пользователя: запросы одного размера с разными форматами (+ @2-запрос)
+// должны пополнять output-formats существующего custom, а не теряться.
+// Custom 220x200 в политике отсутствует → создаётся learning-mode'ом.
+func TestIntegrationLearningModeExtendsOutputFormats(t *testing.T) {
+	cfgDir := t.TempDir()
+	rc, err := ParseRuntimeConfig([]byte(testConfigYAMLLearning))
+	if err != nil {
+		t.Fatalf("ParseRuntimeConfig(learning): %v", err)
+	}
+	app, srcDir, _ := buildFSApp(t, func(o *AppOptions) {
+		o.ConfigDir = cfgDir
+		o.Config = rc.Pipeline
+	})
+	seedSource(t, srcDir, "test/my-png.png", []byte("RAWIMAGE"))
+
+	// Последовательные запросы одного размера с разными форматами,
+	// включая @2-запрос (суффикс отделяется парсером, сегмент — 220x200).
+	urls := []string{
+		"/test/my-png-png/220x200.gif",
+		"/test/my-png-png/220x200.jpg",
+		"/test/my-png-png/220x200.webp",
+		"/test/my-png-png/220x200@2.gif",
+	}
+	for _, u := range urls {
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		rec := httptest.NewRecorder()
+		app.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body=%q)", u, rec.Code, rec.Body.String())
+		}
+	}
+
+	app.Learning.Stop()
+	localFile := filepath.Join(cfgDir, "generate-local.yaml")
+	data, err := os.ReadFile(localFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", localFile, err)
+	}
+	doc := string(data)
+	if !strings.Contains(doc, "220x200:") {
+		t.Errorf("generate-local.yaml missing custom 220x200:\n%s", doc)
+	}
+	for _, f := range []string{"gif", "jpg", "webp"} {
+		if n := strings.Count(doc, "- "+f); n != 1 {
+			t.Errorf("format %q occurs %d times, want 1:\n%s", f, n, doc)
+		}
+	}
+}
+
 // testConfigYAMLLearningUser — базовый конфиг, поверх которого логика
 // LoadConfigDir теста накатывает generate-local.yaml (как в docker-compose).
 const testConfigYAMLLearningUser = `

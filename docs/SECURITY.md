@@ -4,7 +4,7 @@
 
 Всё запрещено по умолчанию; разрешается только явно покрытое правилами. Реализация — `domain/policy`: конфигурация компилируется в неизменяемую политику на старте (fail-fast при невалидных правилах).
 
-Политика применяется к ассет-URL вида `/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}`, где `segment` — имя пресета (`policy.presets`) или custom-имя (размер-грамматика `x`, `x200`, `200x`, `200x200`). Transform-коды в URL отсутствуют: операция (resize/crop/smart-crop/face-crop/object-crop) определяется только полем `crop` пресета/custom.
+Политика применяется к ассет-URL вида `/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}`, где `segment` — имя пресета (`policy.presets`) или custom-имя (размер-грамматика `x`, `x200`, `200x`, `200x200`).
 
 Разрешение запроса:
 

@@ -18,6 +18,8 @@
 # --- Local configuration (secrets) ---
 .env
 .env.*
+/setting/*-local.yaml
+!/setting/*-local.yaml.example
 
 # --- Data directories ---
 /data

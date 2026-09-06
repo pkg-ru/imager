@@ -75,7 +75,8 @@ func shrinkGeometrySafe(plan *processing.ProcessingPlan) bool {
 	switch plan.Operation {
 	case processing.OpResize, processing.OpCrop:
 		return true
-	case processing.OpSmartCrop, processing.OpFaceCrop, processing.OpObjectCrop:
+	case processing.OpSmartCrop, processing.OpFaceCrop, processing.OpObjectCrop,
+		processing.OpFaceFixCrop, processing.OpObjectFixCrop:
 		return false
 	default:
 		return false

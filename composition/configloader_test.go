@@ -368,13 +368,23 @@ policy:
        width: 120
        height: 80
        output-formats: [webp]
+     face-fix:
+       crop: face_fix
+       width: 120
+       height: 80
+       output-formats: [webp]
+     object-fix:
+       crop: object_fix
+       width: 120
+       height: 80
+       output-formats: [webp]
      resize:
        width: 120
        height: 80
        output-formats: [webp]
    path-policies:
      "/":
-       presets: ["center", "smart", "face", "object", "resize"]
+       presets: ["center", "smart", "face", "object", "face-fix", "object-fix", "resize"]
 `))
 	if err != nil {
 		t.Fatalf("ParseRuntimeConfig: %v", err)
@@ -395,6 +405,10 @@ policy:
 		{"face", asset.TransformFaceCrop},
 		// crop: object → oc.
 		{"object", asset.TransformObjectCrop},
+		// crop: face_fix → ffx.
+		{"face-fix", asset.TransformFaceFixCrop},
+		// crop: object_fix → ofx.
+		{"object-fix", asset.TransformObjectFixCrop},
 		// crop: "" → resize.
 		{"resize", ""},
 	}

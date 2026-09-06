@@ -49,7 +49,7 @@ services:
       # модели (docker/download-models.sh) в ./models, поэтому файлы сохраняются
       # на хосте и при следующем запуске не перекачиваются. Хост-каталог ./models
       # должен быть доступен на запись uid 10001 (imager) — например chmod -R a+rwX ./models.
-      - ./setting:/etc/imager/setting:ro
+      - ./setting:/etc/imager/setting:rw
       - ./models:/etc/imager/models:rw
       - ./data/source:/data/source:ro
       - ./data/result:/data/result:rw

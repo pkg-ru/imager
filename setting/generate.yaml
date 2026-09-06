@@ -16,9 +16,6 @@
 # в path-policies. Политика применяется к ассет-URL вида
 #   /{path}/{source_name}-{source_format}/{segment}@{dpr}.{output}
 # где segment — ИМЯ ПРЕСЕТА или custom-имя (размер-грамматика).
-# Transform-коды (c-, t-, ct-, sc-, fc-, oc-) в URL отсутствуют: операция
-# (resize/crop/smart-crop/face-crop/object-crop) определяется ТОЛЬКО полем
-# crop пресета/custom.
 #
 # Структура:
 #   presets — глобальные именованные пресеты (на них ссылаются path-policies);
@@ -51,9 +48,13 @@ policy:
   #     - у пресетов без @N, для которых по задумке допустимы варианты
   #       thumb@2.webp/thumb@3.webp, заводите отдельные пресеты thumb@2/thumb@3;
   #   crop — "" = resize | center = crop | smart = smart-crop | face =
-  #     face-crop | object = object-crop (по умолчанию "" = resize);
+  #     face-crop | object = object-crop | face_fix = face-fix-crop |
+  #     object_fix = object-fix-crop (по умолчанию "" = resize). Fix-режимы:
+  #     cover-масштаб до целевого размера без зума в лицо/объект — кроп
+  #     только по пропорционально избыточной оси, позиция окна по центру
+  #     области детекции (bbox + detection.margin) с clamp к границам;
   #   trim — независимый фильтр обрезки однотонных полей (по умолчанию false);
-  #     сначала trim, затем crop/resize; transform-код в URL не кодируется;
+  #     сначала trim, затем crop/resize;
   #   quality — 0-100 (0 = encoders.default-quality из единой top-level
   #     секции encoders; см. server.yaml);
   #   native-ключи кодирования (ПЛОСКИЕ, имя = "<формат>-<параметр>" из реестра
@@ -145,6 +146,12 @@ policy:
     # product:                  # кроп по объекту + trim
     #   crop: object
     #   trim: true
+    #
+    # cover-fix:                # cover-масштаб со сдвигом к лицу (без зума)
+    #   crop: face_fix
+    #   width: 600
+    #   height: 400
+    #   output-formats: [webp]
     #   width: 500
     #   height: 500
     #   output-formats: [webp]

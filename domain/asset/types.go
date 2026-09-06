@@ -11,9 +11,7 @@
 //	/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
 //
 // segment — имя пресета ИЛИ custom-имя (размер-грамматика: "x", "x200",
-// "200x", "200x200"), опционально с @dpr-суффиксом. Transform-коды в URL
-// отсутствуют: операция (resize/crop/smart-crop/face-crop/object-crop)
-// определяется ТОЛЬКО полем crop в пресете/custom. dpr — множитель
+// "200x", "200x200"), опционально с @dpr-суффиксом. dpr — множитель
 // плотности пикселей: отсутствие суффикса означает 1, явно допустимы только
 // 2 или 3. Имя пресета/custom может содержать фиксированный @dpr-суффикс
 // (например "banner@2" или "200x100@2").
@@ -89,6 +87,14 @@ const (
 	TransformFaceCrop Transform = "fc"
 	// TransformObjectCrop — обрезка по обнаруженным объектам.
 	TransformObjectCrop Transform = "oc"
+	// TransformFaceFixCrop — cover-масштаб до целевого размера со сдвигом
+	// к лицу, без зума в лицо (кроп только по пропорционально избыточной
+	// оси).
+	TransformFaceFixCrop Transform = "ffx"
+	// TransformObjectFixCrop — cover-масштаб до целевого размера со сдвигом
+	// к объекту, без зума в объект (кроп только по пропорционально
+	// избыточной оси).
+	TransformObjectFixCrop Transform = "ofx"
 	// TransformSmartCropTrim — trim + smart-crop (код "sct": применяется
 	// сначала trim, затем smart-crop).
 	TransformSmartCropTrim Transform = "sct"
@@ -96,6 +102,10 @@ const (
 	TransformFaceCropTrim Transform = "fct"
 	// TransformObjectCropTrim — trim + object-crop (код "oct").
 	TransformObjectCropTrim Transform = "oct"
+	// TransformFaceFixCropTrim — trim + face-fix-crop (код "ffxt").
+	TransformFaceFixCropTrim Transform = "ffxt"
+	// TransformObjectFixCropTrim — trim + object-fix-crop (код "ofxt").
+	TransformObjectFixCropTrim Transform = "ofxt"
 )
 
 // ValidTransform проверяет, что transform является допустимым.
@@ -106,7 +116,9 @@ func ValidTransform(t Transform) bool {
 	switch t {
 	case TransformCrop, TransformTrim, TransformCropTrim,
 		TransformSmartCrop, TransformFaceCrop, TransformObjectCrop,
-		TransformSmartCropTrim, TransformFaceCropTrim, TransformObjectCropTrim:
+		TransformFaceFixCrop, TransformObjectFixCrop,
+		TransformSmartCropTrim, TransformFaceCropTrim, TransformObjectCropTrim,
+		TransformFaceFixCropTrim, TransformObjectFixCropTrim:
 		return true
 	}
 	return false

@@ -269,13 +269,16 @@ func (b *yunetBackend) run(_ context.Context, rgb []byte, width, height int) ([]
 			if ox2 <= ox1 || oy2 <= oy1 {
 				continue
 			}
-			out = append(out, Box{
-				X:          int(ox1),
-				Y:          int(oy1),
-				W:          int(ox2 - ox1),
-				H:          int(oy2 - oy1),
-				Confidence: score,
-			})
+			// СИММЕТРИЧНОЕ округление краёв (math.Round, не truncate):
+			// int(x1)/int(x2-x1) смещали центр бокса систематически ВЛЕВО
+			// (floor левого края + усечение ширины), что наследовал
+			// центрированный face-crop — лицо «уезжало» влево на ~1px.
+			b, ok := boxFromEdges(ox1, oy1, ox2, oy2)
+			if !ok {
+				continue
+			}
+			b.Confidence = score
+			out = append(out, b)
 		}
 	}
 	return out, nil
@@ -376,22 +379,22 @@ func (b *ssdBackend) run(_ context.Context, rgb []byte, width, height int) ([]Bo
 	out := make([]Box, 0, n)
 	for i := 0; i < n; i++ {
 		ymin, xmin, ymax, xmax := boxes[i*4], boxes[i*4+1], boxes[i*4+2], boxes[i*4+3]
-		x1 := xmin * float32(width)
-		y1 := ymin * float32(height)
-		x2 := xmax * float32(width)
-		y2 := ymax * float32(height)
+		x1 := float64(xmin) * float64(width)
+		y1 := float64(ymin) * float64(height)
+		x2 := float64(xmax) * float64(width)
+		y2 := float64(ymax) * float64(height)
 		if x2 <= x1 || y2 <= y1 {
 			continue
 		}
-		cls := int(classes[i])
-		out = append(out, Box{
-			X:          int(x1),
-			Y:          int(y1),
-			W:          int(x2 - x1),
-			H:          int(y2 - y1),
-			Confidence: float64(scores[i]),
-			Label:      cocoLabel(cls),
-		})
+		// СИММЕТРИЧНОЕ округление краёв (см. boxFromEdges): прежние
+		// int(x1)/int(x2-x1) смещали центр бокса систематически ВЛЕВО.
+		b, ok := boxFromEdges(x1, y1, x2, y2)
+		if !ok {
+			continue
+		}
+		b.Confidence = float64(scores[i])
+		b.Label = cocoLabel(int(classes[i]))
+		out = append(out, b)
 	}
 	return out, nil
 }

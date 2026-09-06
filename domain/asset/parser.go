@@ -26,8 +26,6 @@ func parseErr(url, reason, segment string) error {
 
 // Parse разбирает asset URL в immutable Request.
 //
-// Грамматика (transform-коды отсутствуют):
-//
 //	/{path}/{source_name}-{source_format}/{segment}@{dpr}.{output_format}
 //
 // segment — имя пресета ИЛИ custom-имя (размер-грамматика "x", "x200",

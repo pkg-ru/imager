@@ -14,8 +14,7 @@ import (
 // (NewRequest, NewSegmentRequest, NewPresetRequest, Parse).
 //
 // Грамматика: /{path}/{source_name}-{source_format}/{segment}@{dpr}.{out},
-// где segment — имя пресета ИЛИ custom-имя (размер). Transform-коды в URL
-// отсутствуют: операция определяется полем crop пресета/custom.
+// где segment — имя пресета ИЛИ custom-имя (размер).
 //
 // Для segment-запроса заполняются SourceName, SourceFormat, SegmentName, DPR
 // (0 = @dpr в URL отсутствует) и OutputFormats. Поля transform/size/quality/

@@ -293,6 +293,8 @@ func TestCompileCropTrimMapping(t *testing.T) {
 			"smart":       {Crop: dynamic.String("smart"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 			"face":        {Crop: dynamic.String("face"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 			"object":      {Crop: dynamic.String("object"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"face-fix":    {Crop: dynamic.String("face_fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
+			"object-fix":  {Crop: dynamic.String("object_fix"), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 			"smart-trim":  {Crop: dynamic.String("smart"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 			"face-trim":   {Crop: dynamic.String("face"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
 			"object-trim": {Crop: dynamic.String("object"), Trim: dynamic.Bool(true), Width: dynamic.Uint32(120), Height: dynamic.Uint32(80), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}},
@@ -313,6 +315,8 @@ func TestCompileCropTrimMapping(t *testing.T) {
 		{"smart", "sc"},
 		{"face", "fc"},
 		{"object", "oc"},
+		{"face-fix", "ffx"},
+		{"object-fix", "ofx"},
 		{"smart-trim", "sct"},
 		{"face-trim", "fct"},
 		{"object-trim", "oct"},
@@ -344,6 +348,10 @@ func TestTransformFromCropTrim(t *testing.T) {
 		{"face", true, "fct"},
 		{"object", false, "oc"},
 		{"object", true, "oct"},
+		{"face_fix", false, "ffx"},
+		{"face_fix", true, "ffxt"},
+		{"object_fix", false, "ofx"},
+		{"object_fix", true, "ofxt"},
 	}
 	for _, tt := range tests {
 		got := string(transformFromCropTrim(tt.crop, tt.trim))

@@ -684,6 +684,10 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	case processing.OpFaceCrop:
 		fallthrough
 	case processing.OpObjectCrop:
+		fallthrough
+	case processing.OpFaceFixCrop:
+		fallthrough
+	case processing.OpObjectFixCrop:
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера.
@@ -877,12 +881,13 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		}
 
 		// Детекция. Trim — независимый фильтр и не влияет на тип детекции:
-		// face-crop всегда ищет лица, object-crop — объекты.
+		// face-crop/face-fix-crop ищут лица, object-crop/object-fix-crop —
+		// объекты.
 		var err2 error
 		switch plan.Operation {
-		case processing.OpFaceCrop:
+		case processing.OpFaceCrop, processing.OpFaceFixCrop:
 			detBoxes, err2 = det.DetectFaces(ctx, rgb, W, H)
-		case processing.OpObjectCrop:
+		case processing.OpObjectCrop, processing.OpObjectFixCrop:
 			detBoxes, err2 = det.DetectObjects(ctx, rgb, W, H)
 		}
 		if err2 != nil {
@@ -899,8 +904,26 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		}
 	}
 
-	// Выбор области кропа и применение.
-	rect := detection.SelectCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	// Выбор области кропа и применение. Для face-crop — окно, масштабируемое
+	// под область лица (bbox + margin, аспект целевого ассета) и
+	// центрированное по лицу (с clamp к границам кадра); для object-crop —
+	// окно, вмещающее всю найденную область. Для fix-режимов (face-fix/
+	// object-fix) — cover-окно БЕЗ зума в область интереса: полная сторона
+	// сохраняется, кроп только по пропорционально избыточной оси, позиция
+	// по центру области интереса (bbox + margin) с clamp к границам.
+	// Масштаб согласован: окно вычисляется в пикселях ОРИГИНАЛА так, что
+	// после ресайза до plan.Size (ниже) окно совпадает с cover-масштабом.
+	var rect detection.Rect
+	switch plan.Operation {
+	case processing.OpFaceCrop:
+		rect = detection.SelectFaceCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	case processing.OpObjectCrop:
+		rect = detection.SelectCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	case processing.OpFaceFixCrop:
+		rect = detection.SelectFaceFixCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	default: // processing.OpObjectFixCrop
+		rect = detection.SelectObjectFixCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
+	}
 	if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
 		return fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
 	}

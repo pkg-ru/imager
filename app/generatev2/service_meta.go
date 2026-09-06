@@ -63,7 +63,8 @@ func (s *Service) ensureDetections(
 	if s.deps.Metadata == nil || s.deps.Detector == nil {
 		return false, nil
 	}
-	if !planNeedsOperation(plan, processing.OpFaceCrop, processing.OpObjectCrop) {
+	if !planNeedsOperation(plan, processing.OpFaceCrop, processing.OpObjectCrop,
+		processing.OpFaceFixCrop, processing.OpObjectFixCrop) {
 		return false, nil
 	}
 	if !s.deps.Detector.Available() {
@@ -125,8 +126,8 @@ func (s *Service) ensureDetectionsLocked(
 		m = filemeta.NewFileMetadata()
 	}
 
-	needFaces := planNeedsOperation(plan, processing.OpFaceCrop)
-	needObjects := planNeedsOperation(plan, processing.OpObjectCrop)
+	needFaces := planNeedsOperation(plan, processing.OpFaceCrop, processing.OpFaceFixCrop)
+	needObjects := planNeedsOperation(plan, processing.OpObjectCrop, processing.OpObjectFixCrop)
 	detectFaces := needFaces && m.Faces == nil
 	detectObjects := needObjects && m.Objects == nil
 

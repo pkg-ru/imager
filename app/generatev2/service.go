@@ -922,7 +922,8 @@ func (s *Service) resolveTrim() *processing.TrimSpec {
 // измерения целевого размера). Resize — не кроп.
 func isCropOperation(op processing.Operation) bool {
 	switch op {
-	case processing.OpCrop, processing.OpSmartCrop, processing.OpFaceCrop, processing.OpObjectCrop:
+	case processing.OpCrop, processing.OpSmartCrop, processing.OpFaceCrop, processing.OpObjectCrop,
+		processing.OpFaceFixCrop, processing.OpObjectFixCrop:
 		return true
 	default:
 		return false
@@ -947,6 +948,14 @@ func transformFromPlan(t asset.Transform) (processing.Operation, bool) {
 		return processing.OpObjectCrop, false
 	case asset.TransformObjectCropTrim:
 		return processing.OpObjectCrop, true
+	case asset.TransformFaceFixCrop:
+		return processing.OpFaceFixCrop, false
+	case asset.TransformFaceFixCropTrim:
+		return processing.OpFaceFixCrop, true
+	case asset.TransformObjectFixCrop:
+		return processing.OpObjectFixCrop, false
+	case asset.TransformObjectFixCropTrim:
+		return processing.OpObjectFixCrop, true
 	case asset.TransformTrim:
 		return processing.OpResize, true
 	default:

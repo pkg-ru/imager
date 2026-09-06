@@ -218,6 +218,77 @@ func TestRecorderWriteErrorRetries(t *testing.T) {
 	}
 }
 
+// TestRecorderExtendsExistingCustomFormats — воспроизведение бага: первый
+// запрос создаёт custom с одним форматом, последующие запросы того же размера
+// с ДРУГИМИ форматами должны ДОПОЛНЯТЬ output-formats (а не теряться).
+func TestRecorderExtendsExistingCustomFormats(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Запрос 1: создаёт custom 220x200 с gif.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "220x200", "gif"))
+	// Запрос 2 и 3: тот же размер, другие форматы.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "220x200", "jpg"))
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "220x200", "webp"))
+	// Идемпотентность: повтор того же формата не дублирует.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "220x200", "gif"))
+	rec.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{"/test:", "220x200:", "gif", "jpg", "webp"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generate-local.yaml missing %q:\n%s", want, got)
+		}
+	}
+	for _, f := range []string{"gif", "jpg", "webp"} {
+		if n := strings.Count(got, "- "+f); n != 1 {
+			t.Errorf("format %q occurs %d times, want 1:\n%s", f, n, got)
+		}
+	}
+}
+
+// TestRecorderObserveDPRSuffixMapsToBaseCustom — запрос с @dpr-суффиксом
+// (например /test/my-png/220x200@2.gif) по дизайну проекта маппится на
+// wildcard-custom "220x200" (custom без dpr покрывает @2/@3): формат gif
+// должен попасть в output-formats записи 220x200.
+func TestRecorderObserveDPRSuffixMapsToBaseCustom(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	// Сначала запрос без @2 — создаёт custom 220x200 с gif.
+	rec.Observe(newTestRequest(t, "test", "my-png", "png", "220x200", "gif"))
+	// Затем запрос с @2 — парсер отделяет @2 в DPR, сегмент остаётся 220x200.
+	req, err := asset.Parse("/test/my-png-png/220x200@2.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	rec.Observe(req)
+	rec.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, localFileName))
+	if err != nil {
+		t.Fatalf("read generate-local.yaml: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "220x200:") {
+		t.Errorf("base custom 220x200 missing:\n%s", got)
+	}
+	if strings.Contains(got, "220x200@2") {
+		t.Errorf("unexpected @2 custom key (design: wildcard custom 220x200):\n%s", got)
+	}
+	if !strings.Contains(got, "webp") {
+		t.Errorf("webp format from @2 request missing:\n%s", got)
+	}
+}
+
 func TestController(t *testing.T) {
 	c := NewController()
 	if c.Enabled() {
