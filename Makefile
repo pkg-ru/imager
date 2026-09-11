@@ -114,9 +114,13 @@ build-prod:
 	cd cmd/imager && go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
 
 # Сборка образа из исходников (локально/CI).
+# --network host: на GitVerse-раннерах dockerd запускается с --bridge=none
+# (контейнер раннера без NET_ADMIN, см. docker/start-dockerd.sh), поэтому
+# bridge-сеть default не существует — сборка идёт через host-сеть. На обычных
+# машинах флаг безвреден (build использует host-сеть для RUN-команд).
 .PHONY: docker-build
 docker-build:
-	docker build -t imager:production .
+	docker build --network host -t imager:production .
 
 # Сборка прод-образа из GitHub releases (default target from-release); см.
 # Dockerfile. Сборка из исходников — docker-build-from-source.
@@ -125,7 +129,7 @@ docker-build:
 # стадию Dockerfile (from-source) и IMAGER_VERSION игнорируется.
 .PHONY: docker-build-release
 docker-build-release:
-	docker build --target from-release --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
+	docker build --network host --target from-release --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
 		-t $(IMAGER_IMAGE):latest \
 		-t $(IMAGER_IMAGE):$(VERSION_TAG) .
 

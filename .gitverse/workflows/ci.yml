@@ -139,14 +139,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ВАЖНО (GitVerse): раннер работает внутри контейнера без NET_ADMIN —
+      # dockerd запускается с --bridge=none (см. docker/start-dockerd.sh),
+      # поэтому все docker-команды используют --network host.
       - name: Start Docker daemon
         run: sh docker/start-dockerd.sh
 
       - name: Build image
-        run: docker build -t imager:ci .
+        run: docker build --network host -t imager:ci .
 
       - name: Container scan (Trivy)
-        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed imager:ci
+        run: docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed imager:ci
 
   # ===========================================================================
   # Docker Hub Release: публикация altrap/imager (Docker Hub, НЕ репозиторий кода).
