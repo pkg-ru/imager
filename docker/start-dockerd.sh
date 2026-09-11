@@ -152,16 +152,18 @@ launch_dockerd() {
 
 # try_launch_dockerd <bin>: start dockerd with progressively more
 # container-friendly flags. In restricted CI containers (runner itself runs
-# inside a container without NET_ADMIN):
+# inside a container without NET_ADMIN and without mount privileges):
 #   - iptables manipulation fails -> --iptables=false --ip6tables=false;
 #   - creating the docker0 bridge fails ("operation not permitted")
 #     -> --bridge=none (containers/builds use --network host);
-#   - overlayfs may not work -> --storage-driver=vfs.
+#   - overlayfs snapshot mounts fail ("operation not permitted", buildkit)
+#     -> --storage-driver=vfs (no mounts; combined with --bridge=none in one
+#     attempt, since the bridge failure and the mount failure have the same
+#     root cause: missing container capabilities).
 # Kills the previous attempt before retrying.
 try_launch_dockerd() {
     _bin="$1"
     for _flags in "" "--iptables=false --ip6tables=false" \
-                  "--iptables=false --ip6tables=false --bridge=none" \
                   "--iptables=false --ip6tables=false --bridge=none --storage-driver=vfs"; do
         echo "[imager] starting dockerd in the background ($_bin $_flags, log: /tmp/dockerd.log)"
         launch_dockerd "$_bin" "$_flags"

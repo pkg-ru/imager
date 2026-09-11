@@ -135,13 +135,19 @@ jobs:
     name: Container build + scan
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    env:
+      # ВАЖНО (GitVerse): раннер работает внутри контейнера без NET_ADMIN и
+      # без mount-привилегий — dockerd запускается с --bridge=none и
+      # --storage-driver=vfs (см. docker/start-dockerd.sh). BuildKit требует
+      # bind-mount overlayfs-снапшотов ("operation not permitted"), поэтому
+      # сборка идёт через legacy builder (DOCKER_BUILDKIT=0), который с vfs
+      # работает без mount-операций. Все docker-команды используют
+      # --network host (bridge-сети не существует).
+      DOCKER_BUILDKIT: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ВАЖНО (GitVerse): раннер работает внутри контейнера без NET_ADMIN —
-      # dockerd запускается с --bridge=none (см. docker/start-dockerd.sh),
-      # поэтому все docker-команды используют --network host.
       - name: Start Docker daemon
         run: sh docker/start-dockerd.sh
 
@@ -189,6 +195,8 @@ jobs:
       # - при workflow_dispatch: github.ref_name — ветка (напр. "master"),
       #   поэтому `||` переключается на inputs.imager_version.
       IMAGER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.imager_version }}
+      # GitVerse-раннер: legacy builder (vfs, без mount-операций), host-сеть.
+      DOCKER_BUILDKIT: "0"
     steps:
       - name: Checkout репозитория
         uses: actions/checkout@v4
