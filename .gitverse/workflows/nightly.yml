@@ -1,0 +1,120 @@
+name: Nightly
+
+# Длительные / security-проверки, которые не нужны на каждом PR:
+#   - go test -race (полный прогон с race detector);
+#   - govulncheck (сканирование уязвимостей зависимостей);
+#   - fuzzing (FuzzParse, FuzzParseSize, FuzzCleanRelContainment).
+#
+# Запускается по расписанию (ночь) и вручную через workflow_dispatch.
+# В обычном PR CI эти проверки НЕ выполняются (см. ci.yml: fast-ci).
+#
+# ЭКОНОМИЯ РЕСУРСОВ: при запуске по расписанию джоба check-changes
+# проверяет, были ли коммиты в репозитории за последние 24 часа. Если
+# изменений не было — остальные джобы (race/security/fuzz) не запускаются.
+# При ручном workflow_dispatch проверки выполняются всегда.
+
+on:
+  schedule:
+    # UTC 02:00 = 05:00 MSK (Europe/Moscow, UTC+3).
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Гейт: были ли изменения за последние 24 часа (только для schedule).
+  # При workflow_dispatch всегда пропускает (has_changes=true).
+  check-changes:
+    name: Check for recent commits
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Нужна полная история для git log --since (schedule).
+          fetch-depth: 0
+
+      - name: Check recent commits
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # schedule: коммиты за последние 24 часа?
+          if git log --since="24 hours ago" --oneline | grep -q .; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Race detector: полный прогон тестов с -race (CGO + libvips + onnx).
+  race:
+    name: "go test -race (libvips,onnx)"
+    runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      CGO_ENABLED: "1"
+      TAGS: "libvips,onnx"
+      # GOMODCACHE предзагружен в образ (go mod download при сборке образа);
+      # исходники монтируются в /src, модули не скачиваются заново.
+      GOMODCACHE: /gomodcache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: go test -race
+        run: go test -race -tags="${TAGS}" ./... -count=1
+
+  # govulncheck: сканирование уязвимостей зависимостей.
+  # Инструмент предустановлен в CI-образе (см. .gitverse/docker/imager-ci/),
+  # поэтому go run ...@latest (скачивание+компиляция в каждом запуске) не нужен.
+  security:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      GOMODCACHE: /gomodcache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: govulncheck
+        run: govulncheck ./...
+
+  # Fuzzing: длительные проверки, не gate для каждого PR.
+  # Длительность увеличена с 10s до 60s на фаззер (в 6 раз больше покрытия
+  # по сравнению с прежним PR-смоуком) — ночной прогон это позволяет.
+  fuzz:
+    name: Fuzz (Parse, ParseSize, CleanRelContainment)
+    runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      GOMODCACHE: /gomodcache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: fuzz (FuzzParse)
+        run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=60s ./domain/asset
+
+      - name: fuzz (FuzzParseSize)
+        run: go test -run=^$ -fuzz=^FuzzParseSize$ -fuzztime=60s ./domain/asset
+
+      - name: fuzz (FuzzCleanRelContainment)
+        run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=60s ./adapters/storage/fs

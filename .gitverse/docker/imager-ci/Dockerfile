@@ -16,6 +16,7 @@
 #   govulncheck (golang.org/x/vuln/cmd/govulncheck) — предустановлен
 #   ONNX-модели YuNet + SSD MobileNet + selfie.jpg — в /etc/imager/models
 #   GOMODCACHE — предзагруженные модули из go.sum (go mod download)
+#   nodejs + git — для GitHub Actions-действий (actions/checkout@v4 и др.)
 #
 # Версия образа — фиксированная (immutable), не latest. Обновление образа —
 # отдельное контролируемое изменение (см. README в этом каталоге).
@@ -55,6 +56,12 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/reposit
 RUN apk add --no-cache vips-dev~=8.17 glib-dev
 RUN apk add --no-cache libheif-dev libde265-dev libjxl-dev librsvg-dev poppler-dev libraw-dev
 RUN apk add --no-cache ffmpeg~=8.0 curl ca-certificates
+# Node.js + git — для GitHub Actions-действий (actions/checkout@v4 и др.):
+# джобы test/quality выполняются ВНУТРИ этого контейнера, а Node.js-действия
+# запускаются через `node` из PATH контейнера (иначе: "exec: node: not found").
+# git нужен actions/checkout для клонирования. Слой ~86MB — безопасен для
+# лимита QRATOR (~256MB).
+RUN apk add --no-cache git nodejs
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
     && apk add --no-cache --upgrade libstdc++ libgcc

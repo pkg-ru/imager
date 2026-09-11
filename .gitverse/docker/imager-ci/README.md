@@ -16,6 +16,7 @@
 | govulncheck | latest | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
 | ONNX-модели | YuNet + SSD MobileNet + selfie.jpg | `/etc/imager/models` (download-models.sh) |
 | GOMODCACHE | из `go.sum` | `go mod download` |
+| nodejs / git | 24.x / latest | Alpine 3.23 (для GitHub Actions-действий) |
 
 ## Версионирование
 

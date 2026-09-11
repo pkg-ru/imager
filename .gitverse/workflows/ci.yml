@@ -4,8 +4,8 @@ on:
   push:
     branches: [master, main]
     # Публикация образа на Docker Hub (docker-release) выполняется ТОЛЬКО
-    # при push нового тега вида vX.Y.Z (например v2.0.0). Джоба docker-release
-    # дополнительно фильтрует по github.event.created (см. ниже).
+    # при push нового тега вида vX.Y.Z (например v2.0.0) или при ручном
+    # workflow_dispatch (см. условие джобы docker-release ниже).
     tags:
       - 'v*'
   pull_request:
@@ -22,22 +22,28 @@ permissions:
   contents: read
 
 jobs:
-  # Тесты: одна Linux-среда с полным набором build tags (libvips + onnx).
-  # Это production-конфигурация (см. Makefile: TAGS ?= libvips onnx) — без
-  # флагов тесты не покрывают реальные пути (CGO + libvips + onnx), поэтому
-  # stub/onnx-комбинации и Windows-джобы убраны: пайплайн быстрее, а покрытие
-  # не теряется (платформозависимые файлы _unix/_windows компилируются в
-  # Linux-джобе через go vet/build всех пакетов).
+  # ===========================================================================
+  # Быстрый CI (Pull Request + push в master/main + release-теги + dispatch).
   #
-  # УСКОРЕНИЕ: джобы test/quality выполняются в предварительно собранном
-  # CI-образе gitverse.ru/pkg-ru/imager-ci (Go 1.27 + libvips + onnxruntime +
-  # gofmt + предзагруженный GOMODCACHE). Toolchain и зависимости
-  # НЕ устанавливаются в каждом запуске (см. .gitverse/docker/imager-ci/).
-  # Тег образа фиксированный (immutable), не latest. Обновление образа —
-  # отдельное контролируемое изменение (см. README в каталоге образа).
-  test:
-    name: "libvips,onnx @ imager-ci"
+  # Единственная джоба для обычного PR: gofmt (fail-fast) + go test с
+  # production build tags (libvips,onnx). Race / govulncheck / fuzz /
+  # docker build / trivy здесь НЕ выполняются — они перенесены в master/main,
+  # release и nightly (см. ниже), т.к. для каждого PR они не нужны.
+  #
+  # gofmt и go test объединены в одну джобу: обе лёгкие, работают в одном
+  # предварительно собранном CI-образе gitverse.ru/pkg-ru/imager-ci:v1
+  # (Go 1.27 + libvips + onnxruntime + gofmt + предзагруженный GOMODCACHE).
+  # Toolchain и зависимости НЕ устанавливаются в каждом запуске.
+  # Тег образа фиксированный (immutable), не latest.
+  #
+  # go vet отдельной джобой не запускается: go test уже выполняет
+  # соответствующие vet-проверки для тестируемых пакетов.
+  # ===========================================================================
+  fast-ci:
+    name: "gofmt + go test (libvips,onnx)"
     runs-on: ubuntu-latest
+    # PR, push в master/main, push тега v* и workflow_dispatch (release).
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     container:
       image: gitverse.ru/pkg-ru/imager-ci:v1
     env:
@@ -51,33 +57,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: go vet
-        run: go vet -tags="${TAGS}" ./...
-
-      - name: go test
-        run: go test -tags="${TAGS}" ./... -count=1
-
-      # go test -race: race detector требует CGO (включён выше).
-      - name: go test -race
-        run: go test -race -tags="${TAGS}" ./... -count=1
-
-      - name: Build cmd/imager
-        run: go build -tags="${TAGS}" -trimpath -ldflags="-s -w" ./cmd/imager
-
-  # Lint, format, govulncheck и fuzz smoke — не зависят от build tags,
-  # поэтому объединены в одну джобу (после успешных тестов).
-  quality:
-    name: Lint, Format, Analysis & Fuzz
-    runs-on: ubuntu-latest
-    needs: test
-    container:
-      image: gitverse.ru/pkg-ru/imager-ci:v1
-    env:
-      GOMODCACHE: /gomodcache
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      # Проверка форматирования: fail-fast, без автоматического форматирования.
       - name: gofmt check
         run: |
           unformatted=$(gofmt -l .)
@@ -87,28 +67,74 @@ jobs:
             exit 1
           fi
 
-      # govulncheck предустановлен в CI-образе (см. .gitverse/docker/imager-ci/),
-      # поэтому go run ...@latest (скачивание+компиляция в каждом запуске) не нужен.
+      - name: go test
+        run: go test -tags="${TAGS}" ./... -count=1
+
+  # ===========================================================================
+  # Race detector: только master/main, release-теги и workflow_dispatch.
+  # Не запускается на обычном PR (дорого, пользы как gate каждого PR мало).
+  # ===========================================================================
+  race:
+    name: "go test -race (libvips,onnx)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      CGO_ENABLED: "1"
+      TAGS: "libvips,onnx"
+      GOMODCACHE: /gomodcache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # go test -race: race detector требует CGO (включён выше).
+      - name: go test -race
+        run: go test -race -tags="${TAGS}" ./... -count=1
+
+  # ===========================================================================
+  # Security + production build: только master/main, release-теги и dispatch.
+  #
+  # govulncheck предустановлен в CI-образе (см. .gitverse/docker/imager-ci/),
+  # поэтому go run ...@latest (скачивание+компиляция в каждом запуске) не нужен.
+  #
+  # go build с production build tags объединён сюда же: проверка быстрая,
+  # отдельный runner/checkout для неё не нужен (меньше startup overhead).
+  # ===========================================================================
+  security:
+    name: "govulncheck + go build"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      CGO_ENABLED: "1"
+      TAGS: "libvips,onnx"
+      GOMODCACHE: /gomodcache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: govulncheck
         run: govulncheck ./...
 
-      - name: fuzz smoke (FuzzParse)
-        run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=10s ./domain/asset
+      - name: go build (production)
+        run: go build -tags="${TAGS}" -trimpath -ldflags="-s -w" ./cmd/imager
 
-      - name: fuzz smoke (FuzzParseSize)
-        run: go test -run=^$ -fuzz=^FuzzParseSize$ -fuzztime=10s ./domain/asset
-
-      - name: fuzz smoke (FuzzCleanRelContainment)
-        run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=10s ./adapters/storage/fs
-
-  # Docker: сборка образа без push + сканирование уязвимостей.
+  # ===========================================================================
+  # Docker: сборка образа без push + сканирование уязвимостей (Trivy).
+  # Только master/main, release-теги и workflow_dispatch (не PR).
+  #
   # ВАЖНО (GitVerse): в отличие от GitHub Actions, на раннерах GitVerse Docker
   # daemon НЕ запущен по умолчанию (нет /var/run/docker.sock) — его нужно
   # поднимать явно перед любыми docker-командами (см. docker/start-dockerd.sh).
+  # ===========================================================================
   docker:
     name: Container build + scan
     runs-on: ubuntu-latest
-    needs: test
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -122,6 +148,7 @@ jobs:
       - name: Container scan (Trivy)
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed imager:ci
 
+  # ===========================================================================
   # Docker Hub Release: публикация altrap/imager (Docker Hub, НЕ репозиторий кода).
   # Триггеры:
   # - push тега v* (например v2.0.0) — автоматически при создании нового тега:
@@ -131,9 +158,13 @@ jobs:
   #   случае версия резолвится в самый свежий тег тем же механизмом, что
   #   docker/lib.sh: resolve_release_version в Makefile).
   #
-  # ВАЖНО: публикация выполняется ТОЛЬКО при создании НОВОГО тега
-  # (github.event.created == true). Повторный push/force-push существующего
-  # тега (например из mirror.yml) джобу не запускает.
+  # ИСПРАВЛЕНО: раньше условие разрешало только push+tag+created, из-за чего
+  # workflow_dispatch фактически не проходил. Теперь оба сценария работают.
+  # Публикация НЕ выполняется при обычном push в ветку (без тега).
+  #
+  # Джоба ждёт все проверки (fast-ci, race, security, docker), поэтому перед
+  # публикацией гарантированно пройдены: тесты, race, govulncheck, go build,
+  # docker build и trivy-скан (HIGH,CRITICAL, --ignore-unfixed).
   #
   # Секрет DOCKERHUB_TOKEN:
   #   создаётся в Docker Hub (Account Settings → Security → New Access Token,
@@ -142,11 +173,13 @@ jobs:
   #
   # Как проверить результат после прогона:
   #   docker pull altrap/imager:latest && docker run --rm altrap/imager:latest imager --version
+  # ===========================================================================
   docker-release:
     name: Docker Hub Release
     runs-on: ubuntu-latest
+    needs: [fast-ci, race, security, docker]
     # Только создание нового тега v* (push) или ручной запуск (workflow_dispatch).
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.created
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.created) || github.event_name == 'workflow_dispatch'
     env:
       # Единая переменная для обоих триггеров. Выражение ниже работает так:
       # - при push тега: github.ref_name не пуст (напр. "v2.0.0");

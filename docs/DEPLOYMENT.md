@@ -227,8 +227,9 @@ Workflow: [`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml).
 Джобы `test` и `quality` выполняются в предварительно собранном образе
 [`gitverse.ru/pkg-ru/imager-ci`](../.gitverse/docker/imager-ci/README.md)
 (Go 1.27 + libvips + ONNX Runtime + ffmpeg + gofmt + govulncheck +
-предзагруженный `GOMODCACHE` + ONNX-модели). Toolchain и зависимости
-**не устанавливаются в каждом запуске** — это основное ускорение пайплайна.
+предзагруженный `GOMODCACHE` + ONNX-модели + nodejs/git для
+GitHub Actions-действий). Toolchain и зависимости **не устанавливаются
+в каждом запуске** — это основное ускорение пайплайна.
 
 Тег образа — фиксированный (immutable), не `latest`:
 `gitverse.ru/pkg-ru/imager-ci:v<N>` (например `v1`). Обновление образа —
