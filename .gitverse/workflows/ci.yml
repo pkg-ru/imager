@@ -126,36 +126,26 @@ jobs:
   # ===========================================================================
   # Docker: сборка образа без push + сканирование уязвимостей (Trivy).
   # Только master/main, release-теги и workflow_dispatch (не PR).
-  #
-  # ВАЖНО (GitVerse): в отличие от GitHub Actions, на раннерах GitVerse Docker
-  # daemon НЕ запущен по умолчанию (нет /var/run/docker.sock) — его нужно
-  # поднимать явно перед любыми docker-командами (см. docker/start-dockerd.sh).
   # ===========================================================================
   docker:
     name: Container build + scan
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    env:
-      # ВАЖНО (GitVerse): раннер работает внутри контейнера без NET_ADMIN и
-      # без mount-привилегий — dockerd запускается с --bridge=none и
-      # --storage-driver=vfs (см. docker/start-dockerd.sh). BuildKit требует
-      # bind-mount overlayfs-снапшотов ("operation not permitted"), поэтому
-      # сборка идёт через legacy builder (DOCKER_BUILDKIT=0), который с vfs
-      # работает без mount-операций. Все docker-команды используют
-      # --network host (bridge-сети не существует).
-      DOCKER_BUILDKIT: "0"
+    # ВАЖНО (GitVerse): раннер работает внутри контейнера БЕЗ привилегий —
+    # нет NET_ADMIN (нельзя создать docker0), нет mount-привилегий (buildkit/
+    # legacy builder падают на mount/unshare). Docker-сборка невозможна.
+    # Поэтому образ собирается kaniko (userspace, chroot вместо namespaces,
+    # без daemon) и сканируется trivy как standalone-бинарник по tar
+    # (см. docker/kaniko-build.sh, docker/trivy-scan.sh).
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start Docker daemon
-        run: sh docker/start-dockerd.sh
-
-      - name: Build image
-        run: docker build --network host -t imager:ci .
+      - name: Build image (kaniko)
+        run: sh docker/kaniko-build.sh . imager:ci
 
       - name: Container scan (Trivy)
-        run: docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed imager:ci
+        run: sh docker/trivy-scan.sh imager:ci.tar
 
   # ===========================================================================
   # Docker Hub Release: публикация altrap/imager (Docker Hub, НЕ репозиторий кода).
@@ -195,36 +185,42 @@ jobs:
       # - при workflow_dispatch: github.ref_name — ветка (напр. "master"),
       #   поэтому `||` переключается на inputs.imager_version.
       IMAGER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.imager_version }}
-      # GitVerse-раннер: legacy builder (vfs, без mount-операций), host-сеть.
-      DOCKER_BUILDKIT: "0"
     steps:
       - name: Checkout репозитория
         uses: actions/checkout@v4
 
-      # ВАЖНО (GitVerse): Docker daemon на раннерах GitVerse не запущен по
-      # умолчанию (нет /var/run/docker.sock) — поднимаем его явно. Скрипт
-      # идемпотентен и имеет fallback-и (systemd → dockerd в фоне).
-      - name: Start Docker daemon
-        run: sh docker/start-dockerd.sh
-
-      # Логин под учёткой altrap (это учётка Docker Hub, НЕ репозиторий кода).
-      # setup-buildx-action НЕ используется: сборка single-arch идёт обычным
-      # `docker build` (make docker-release), а docker-container драйвер buildx
-      # требует работающий daemon и не нужен для этого сценария.
-      - name: Логин в Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: altrap
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # Сборка + публикация: теги altrap/imager:latest и altrap/imager:<VERSION_TAG>.
-      # Makefile не делает ничего интерактивного, VERSION_TAG резолвится
-      # через docker/lib.sh: resolve_release_version (см. Makefile).
-      - name: Собрать и опубликовать образ
+      # ВАЖНО (GitVerse): раннер работает внутри контейнера БЕЗ привилегий —
+      # Docker-сборка невозможна (нет NET_ADMIN/mount/unshare). Образ собирается
+      # kaniko (userspace, без daemon) и пушится напрямую в Docker Hub.
+      # Версия резолвится тем же механизмом, что docker/lib.sh:
+      # resolve_release_version (см. Makefile).
+      - name: Resolve release version
+        id: version
         run: |
-          make docker-release IMAGER_VERSION="${IMAGER_VERSION}"
+          . ./docker/lib.sh
+          resolved=$(resolve_release_version "${IMAGER_VERSION}")
+          echo "resolved=${resolved}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${resolved}"
         env:
           IMAGER_VERSION: ${{ env.IMAGER_VERSION }}
+
+      # Логин в Docker Hub: kaniko пушит напрямую, используя DOCKER_CONFIG
+      # (docker login создаёт ~/.docker/config.json, kaniko его читает).
+      - name: Логин в Docker Hub
+        run: |
+          mkdir -p "$HOME/.docker"
+          printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}' \
+            "$(printf '%s:%s' 'altrap' "$DOCKERHUB_TOKEN" | base64 -w0)" \
+            > "$HOME/.docker/config.json"
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Сборка + публикация: теги altrap/imager:latest и altrap/imager:<VERSION_TAG>.
+      # kaniko собирает из исходников (target from-source) и пушит оба тега.
+      - name: Собрать и опубликовать образ (kaniko)
+        run: |
+          sh docker/kaniko-build.sh . "altrap/imager:latest" --target from-source --push
+          sh docker/kaniko-build.sh . "altrap/imager:${{ steps.version.outputs.resolved }}" --target from-source --push
 
   # --- Расширение на arm64 (на будущее) ---
   # Сейчас single-arch linux/amd64: fetcher-стадия Dockerfile скачивает

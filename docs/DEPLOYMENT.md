@@ -235,14 +235,6 @@ GitHub Actions-действий). Toolchain и зависимости **не у�
 `gitverse.ru/pkg-ru/imager-ci:v<N>` (например `v1`). Обновление образа —
 отдельное контролируемое изменение (см. README в каталоге образа).
 
-### Docker daemon на раннерах GitVerse
-
-В отличие от GitHub Actions, на раннерах GitVerse Docker daemon **не запущен**
-по умолчанию (нет `/var/run/docker.sock`). Джобы `docker` и `docker-release`
-перед любыми docker-командами выполняют `sh docker/start-dockerd.sh` —
-идемпотентный скрипт с fallback-ами (systemd → `dockerd` в фоне, ожидание
-сокета, диагностика при сбое).
-
 ### Публикация на Docker Hub (docker-release)
 
 Джоба `docker-release` публикует `altrap/imager` на Docker Hub **только** при
