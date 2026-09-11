@@ -36,6 +36,11 @@ case "${1:-}" in
         apk add --no-cache $RUNTIME_PACKAGES
         # shellcheck disable=SC2086
         apk add --no-cache --upgrade $EDGE_PACKAGES
+        # Security: обновление OpenSSL из base image (CVE-2026-14456, фикс
+        # 3.5.8-r0). apk add НЕ обновляет уже установленные пакеты, поэтому
+        # libcrypto3/libssl3 из alpine:3.23 остаются устаревшими; --upgrade
+        # форсирует обновление до последней версии в репозиториях.
+        apk add --no-cache --upgrade libcrypto3 libssl3
         ;;
     install-edge)
         # shellcheck disable=SC2086
