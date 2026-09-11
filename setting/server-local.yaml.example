@@ -1,0 +1,61 @@
+server:
+  addr: ":8080"
+
+http:
+  # allowed-origins:
+  #   - "https://cdn.example.com"
+  #   - "https://images.example.net"
+  serve-original:
+    enabled: false
+
+source:
+  storage: fs
+  path: "/data/source"
+
+result:
+  storage: fs
+  path: "/data/result"
+
+detection:
+  face-model: "/etc/imager/models/face_detection_yunet_2023mar.onnx"
+  object-model: "/etc/imager/models/ssd_mobilenet_v1_12.onnx"
+  onnx-runtime-lib: "/usr/lib/libonnxruntime.so.1.29.0"
+
+metadata:
+  enabled: true
+
+observability:
+  log-level: "error"
+  asset-errors:
+    enabled: false
+
+########################################
+# admin — административные эндпоинты (ВЫКЛЮЧЕНЫ по умолчанию).
+#
+# Маршруты (регистрируются только при enabled: true):
+#   POST   /admin/assets/generate   — генерация ассетов
+#   DELETE /admin/assets/delete     — удаление ассетов
+#
+# Авторизация: заголовок "Authorization: Bearer <token>".
+# Неверный/отсутствующий токен → HTTP 403.
+#
+# ВАЖНО: секция закомментирована, чтобы не менять активное поведение
+# (admin выключен). Раскомментируйте и задайте свой token при необходимости.
+# admin:
+#   # enabled — включать ли admin-эндпоинты. Тип: bool. Дефолт: false.
+#   enabled: false
+#
+#   # token — bearer-токен для авторизации. Тип: string. Дефолт: "".
+#   # Обязателен при enabled: true (иначе fail-fast ошибка старта).
+#   token: "REPLACE_WITH_STRONG_SECRET"
+#
+#   # workers — число параллельных фоновых генераций. Тип: int. Дефолт: 2.
+#   workers: 2
+#
+#   # queue-size — ёмкость очереди задач; переполнение → HTTP 503.
+#   # Тип: int. Дефолт: 64.
+#   queue-size: 64
+#
+#   # wait-timeout — таймаут режима wait=true (ожидания завершения всех
+#   # ассетов до ответа). Тип: duration-строка. Дефолт: "300s".
+#   wait-timeout: "300s"

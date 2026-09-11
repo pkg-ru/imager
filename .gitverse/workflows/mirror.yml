@@ -1,0 +1,42 @@
+name: Mirror to GitHub
+
+# Зеркалирование GitVerse (основной репозиторий) в GitHub (зеркало).
+# Все ветки и теги синхронизируются в github.com/pkg-ru/imager по PAT.
+# Публикация Docker Hub (docker-release) выполняется в GitVerse по release /
+# workflow_dispatch из ci.yml, поэтому mirror.yml НЕ отправляет dispatch —
+# только синхронизирует refs.
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+
+jobs:
+  mirror:
+    name: Push refs to GitHub
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Клонируем ВСЕ ветки и теги, чтобы push +refs/heads/* покрыл
+          # каждую ветку, а не только текущую (default checkout берёт одну).
+          fetch-all: true
+
+      # Синхронизируем только ветки и теги (без refs/remotes и прочего мусора):
+      # +refs/remotes/origin/* — force-push всех веток из remote-tracking refs
+      #   (actions/checkout создаёт именно их, а не локальные refs/heads/*;
+      #   иначе --prune пытается удалить default branch в GitHub);
+      # +refs/tags/* — force-push всех тегов,
+      # --prune удаляет в GitHub ветки/теги, которых больше нет в GitVerse.
+      # Force-push тега из ci.yml (docker-release) тоже попадёт сюда —
+      # это безопасно, т.к. Docker Hub публикуется в GitVerse, а не в GitHub.
+      - name: Push branches and tags to GitHub
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git remote add mirror "https://x-access-token:${GH_PAT}@github.com/pkg-ru/imager.git"
+          git push --prune mirror "+refs/remotes/origin/*:refs/heads/*" "+refs/tags/*:refs/tags/*"

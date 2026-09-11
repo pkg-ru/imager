@@ -1,0 +1,27 @@
+# Локальные артефакты сборки
+imager
+imager.exe
+*.exe
+
+# Git и IDE
+.git
+.github
+.gigacode
+.vscode
+.idea
+
+# Логи и временные файлы
+*.log
+*.tmp
+
+# Модели (ONNX и тестовые изображения) не попадают в образ: при старте
+# контейнера entrypoint скачивает их в смонтированный rw-каталог
+# (docker-compose: ./models:/etc/imager/models:rw).
+models
+docker/*.tmp*
+docker/*.log
+#
+# Скрипты docker/*.sh (lib.sh, build-deps.sh, entrypoint.sh,
+# download-models.sh, install-*.sh) НЕ исключаются — они обязательны для
+# сборки образа (Dockerfile/install-imager.sh/build-deps.sh) и входят в
+# build context.

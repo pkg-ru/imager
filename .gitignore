@@ -1,0 +1,56 @@
+# --- Build artifacts ---
+/imager
+/imager.*
+!/imager.go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+!/Dockerfile.test
+*.out
+*.prof
+
+# --- Logs ---
+/*.log
+
+# --- Local configuration (secrets) ---
+.env
+.env.*
+/setting/*-local.yaml
+!/setting/*-local.yaml.example
+
+# --- Data directories ---
+/data
+
+# --- Model files (ONNX и тестовые изображения) ---
+# Бинарные файлы моделей НЕ хранятся в git: при старте контейнера их
+# скачивает entrypoint во смонтированный rw-каталог (см. models/README.md).
+# В репозитории остаются только README и .gitkeep как шаблон структуры.
+# В Docker каталог монтируется из хоста
+# (docker-compose: ./models:/etc/imager/models:rw).
+/models/*
+!/models/.gitignore
+!/models/README.md
+!/models/.gitkeep
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE / editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Go workspace ---
+# go.work is kept in the repository for local development convenience;
+# go.work.sum may be regenerated and is ignored.
+go.work.sum
+
+# --- Misc ---
+libintl-8.def

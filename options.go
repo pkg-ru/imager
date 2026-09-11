@@ -1,0 +1,129 @@
+package imager
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/app/adminsvc"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/composition"
+	"gitverse.ru/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+)
+
+// Options — параметры программной сборки pipeline без YAML (New).
+//
+// Пользователь сам подставляет порты: processor, storage, coordinator,
+// detector, buffer, metadata. Все поля опциональны, но для рабочего pipeline
+// обязательны Processor и (Sources|Results) — иначе Build вернёт ошибку.
+type Options struct {
+	// Config — typed конфигурация конвейера (policy/processing). Обязателен.
+	Config *config.Config
+	// HTTP — конфигурация HTTP-адаптера.
+	HTTP httpapi.Config
+
+	// SourceDir — каталог исходников (используется при FS fallback).
+	SourceDir string
+	// ResultDir — каталог кэша результатов (используется при FS fallback).
+	ResultDir string
+	// SourceStorage — конфигурация удалённого source-хранилища (S3/SFTP/
+	// FTP/FTPS). Пустой Kind = FS fallback на SourceDir.
+	SourceStorage composition.RemoteStorageConfig
+	// ResultStorage — конфигурация удалённого result-хранилища (S3/SFTP/
+	// FTPS). Пустой Kind = FS fallback на ResultDir.
+	ResultStorage composition.RemoteStorageConfig
+
+	// Processor — абстрактный процессор. Обязателен.
+	Processor processor.Processor
+	// Sources — кастомный SourceStore. Если задан, имеет приоритет над
+	// SourceStorage/SourceDir.
+	Sources storage.SourceStore
+	// Results — кастомный ResultStore. Если задан, имеет приоритет над
+	// ResultStorage/ResultDir.
+	Results storage.ResultStore
+
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения.
+	Limits generatev2.Limits
+	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
+	// (0 = без лимита). По умолчанию 500 МБ.
+	BufferMaxBytes int64
+	// SingleflightWaitTimeout — таймаут ожидания завершения владельца keyed
+	// singleflight. 0 = отключено (вечное ожидание до ctx waiter'а).
+	// По умолчанию 60s.
+	SingleflightWaitTimeout time.Duration
+	// DefaultQuality — качество сжатия по умолчанию [1,100] (encoders.
+	// default-quality; 0 = дефолт кода 80).
+	DefaultQuality int
+
+	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset.
+	MetadataEnabled bool
+	// MetadataDir — КОРЕНЬ sidecar-хранилища метаданных (metadata.dir).
+	MetadataDir string
+	// Detector — порт ИИ-детекции на уровне приложения (nil = детекция
+	// остаётся в процессоре).
+	Detector detector.Detector
+	// VideoExtractor — извлекатель кадра из видео (ffmpeg). nil = видео
+	// не поддерживается (запрос ассета из видео вернёт понятную ошибку).
+	VideoExtractor videoframe.Extractor
+}
+
+// App — собранный pipeline (обёртка над httpapi.App).
+type App struct {
+	// Handler — HTTP-обработчик asset URL.
+	Handler http.Handler
+	// Service — use case генерации ассета (для прямого вызова).
+	Service *generatev2.Service
+	// Sources — хранилище исходников.
+	Sources storage.SourceStore
+	// Results — хранилище результатов.
+	Results storage.ResultStore
+	// Pool — общий бюджет памяти процесса для spillable-буферов.
+	Pool *remote.BufferPool
+	// AdminSvc — admin-сервис (nil, если admin выключен).
+	AdminSvc *adminsvc.Service
+	// AdminHandler — HTTP-обработчик /admin/* (nil, если admin выключен).
+	AdminHandler http.Handler
+}
+
+// New собирает pipeline программно (без YAML). Пользователь подставляет
+// порты через Options. Возвращает App с Handler и Service.
+func New(ctx context.Context, opts Options) (*App, error) {
+	app, err := composition.Build(ctx, composition.AppOptions{
+		Config:                  opts.Config,
+		HTTP:                    opts.HTTP,
+		SourceDir:               opts.SourceDir,
+		ResultDir:               opts.ResultDir,
+		SourceStorage:           opts.SourceStorage,
+		ResultStorage:           opts.ResultStorage,
+		Processor:               opts.Processor,
+		Sources:                 opts.Sources,
+		Results:                 opts.Results,
+		Limits:                  opts.Limits,
+		BufferMaxBytes:          opts.BufferMaxBytes,
+		SingleflightWaitTimeout: opts.SingleflightWaitTimeout,
+		DefaultQuality:          opts.DefaultQuality,
+		MetadataEnabled:         opts.MetadataEnabled,
+		MetadataDir:             opts.MetadataDir,
+		Detector:                opts.Detector,
+		VideoExtractor:          opts.VideoExtractor,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &App{
+		Handler:      app.Handler,
+		Service:      app.Service,
+		Sources:      app.Sources,
+		Results:      app.Results,
+		Pool:         app.Pool,
+		AdminSvc:     app.AdminSvc,
+		AdminHandler: app.AdminHandler,
+	}, nil
+}

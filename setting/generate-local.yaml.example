@@ -1,0 +1,19 @@
+policy:
+  # learning-mode — режим обучения: ассеты генерируются/отдаются, но НЕ
+  # сохраняются в result; наблюдаемые пути накапливаются в generate-local.yaml.
+  learning-mode: true
+
+  presets:
+    test:
+      width: 200
+      height: 200
+      output-formats: [webp, avif, jpg, png, gif]
+      quality: 85
+      dpr: 1
+
+  path-policies:
+    /:
+      presets: [test]
+      customs:
+        x:
+          output-formats: [webp, avif, jpg, png, gif]

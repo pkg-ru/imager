@@ -1,0 +1,229 @@
+package httpapi
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+)
+
+// TestHealthHeadNoBody проверяет, что для HEAD health-эндпоинты пишут только
+// заголовки (Content-Length), без тела.
+func TestHealthHeadNoBody(t *testing.T) {
+	requireLocalhostTCP(t)
+	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer func() { _ = rt.Shutdown(context.Background()) }()
+
+	health := NewHealth(rt)
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req := httptest.NewRequest(http.MethodHead, path, nil)
+		rec := httptest.NewRecorder()
+		var h http.Handler
+		if path == "/healthz" {
+			h = health.LivenessHandler()
+		} else {
+			h = health.ReadinessHandler()
+		}
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s HEAD status = %d, want 200", path, rec.Code)
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("%s HEAD body length = %d, want 0", path, rec.Body.Len())
+		}
+		if rec.Header().Get("Content-Length") == "" {
+			t.Errorf("%s HEAD missing Content-Length", path)
+		}
+	}
+}
+
+// panicGenerator — генератор, который паникует в Generate.
+type panicGenerator struct{}
+
+func (panicGenerator) Generate(context.Context, *asset.Request) (*generatev2.Result, error) {
+	panic("boom")
+}
+
+// TestHandlerPanicReturns500 проверяет, что паника в генераторе не роняет
+// процесс, а возвращает 500.
+func TestHandlerPanicReturns500(t *testing.T) {
+	h := newTestHandler(t, panicGenerator{}, baseConfig())
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestHandlerGenerateTimeout проверяет, что превышение GenerateTimeout
+// маппится в 504 (OutcomeCanceled).
+func TestHandlerGenerateTimeout(t *testing.T) {
+	cfg := baseConfig()
+	cfg.GenerateTimeout = 1 // 1ns — мгновенный таймаут
+
+	// Генератор, который блокируется навсегда (до отмены ctx).
+	gen := newFakeGenerator()
+	gen.block = make(chan struct{})
+	h := newTestHandler(t, gen, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504", rec.Code)
+	}
+}
+
+// TestETagCached проверяет, что ETag стабилен и кэшируется (одинаков для
+// повторных запросов).
+func TestETagCached(t *testing.T) {
+	gen := newFakeGenerator()
+	gen.addResult("img-png/thumb.png", []byte("PNGDATA"), 7)
+
+	h := newTestHandler(t, gen, baseConfig())
+
+	req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	etag1 := rec.Header().Get("ETag")
+	if etag1 == "" {
+		t.Fatal("ETag missing")
+	}
+
+	// Повторный запрос — тот же ETag (кэш).
+	req2 := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	etag2 := rec2.Header().Get("ETag")
+	if etag2 != etag1 {
+		t.Errorf("ETag changed across requests: %q vs %q", etag1, etag2)
+	}
+}
+
+// TestMetricsAuthToken проверяет, что /metrics защищён токеном.
+func TestMetricsAuthToken(t *testing.T) {
+	requireLocalhostTCP(t)
+	rt, err := NewRuntime(RuntimeOptions{Handler: http.NotFoundHandler(), Addr: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer func() { _ = rt.Shutdown(context.Background()) }()
+
+	health := NewHealth(rt)
+	mux := NewMuxWithAdmission(newTestHandler(t, newFakeGenerator(), baseConfig()), health, nil,
+		MetricsAuthConfig{Token: "secret"}, 0, nil, nil)
+
+	// Без токена — 403.
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status without token = %d, want 403", rec.Code)
+	}
+
+	// С токеном — 200.
+	req = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("X-Metrics-Token", "secret")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status with token = %d, want 200", rec.Code)
+	}
+}
+
+// TestRuntimeMaxBodyBytes проверяет лимит тела запроса.
+func TestRuntimeMaxBodyBytes(t *testing.T) {
+	requireLocalhostTCP(t)
+	rt, err := NewRuntime(RuntimeOptions{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Читаем тело, чтобы MaxBytesHandler применил лимит. Если чтение
+			// вернуло ошибку (MaxBytesError), возвращаем 413.
+			_, err := io.Copy(io.Discard, r.Body)
+			if err != nil {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}),
+		Addr:         "127.0.0.1:0",
+		MaxBodyBytes: 16,
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	defer func() { _ = rt.Shutdown(context.Background()) }()
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- rt.Serve() }()
+	defer func() { _ = rt.Shutdown(context.Background()) }()
+
+	// Даём серверу применить MaxBytesHandler.
+	time.Sleep(50 * time.Millisecond)
+
+	// Тело больше лимита → 413.
+	// Таймаут обязателен: на Windows http.Client без таймаута может
+	// блокироваться на dial навсегда, если соединение не устанавливается.
+	client := &http.Client{Timeout: 5 * time.Second}
+	body := strings.Repeat("x", 100)
+	req, err := http.NewRequest(http.MethodPost, "http://"+rt.Addr().String()+"/", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.ContentLength = int64(len(body))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
+// TestDefaultWriteTimeoutExceedsGenerateTimeout проверяет: дефолтный
+// WriteTimeout (60s) строго больше DefaultGenerateTimeout (30s) с запасом на
+// передачу тела, и DefaultWriteTimeoutFor считает его как GenerateTimeout + запас.
+func TestDefaultWriteTimeoutExceedsGenerateTimeout(t *testing.T) {
+	if defaultTimeouts.Write <= DefaultGenerateTimeout {
+		t.Errorf("defaultTimeouts.Write = %s, want > DefaultGenerateTimeout (%s)",
+			defaultTimeouts.Write, DefaultGenerateTimeout)
+	}
+	if got := DefaultWriteTimeoutFor(DefaultGenerateTimeout); got != 60*time.Second {
+		t.Errorf("DefaultWriteTimeoutFor(30s) = %s, want 60s", got)
+	}
+	if got := DefaultWriteTimeoutFor(45 * time.Second); got != 75*time.Second {
+		t.Errorf("DefaultWriteTimeoutFor(45s) = %s, want 75s", got)
+	}
+}
+
+// TestWriteTimeoutTooSmall проверяет предикат предупреждения:
+// WriteTimeout <= GenerateTimeout считается опасным (кроме 0 = не задан).
+func TestWriteTimeoutTooSmall(t *testing.T) {
+	if !WriteTimeoutTooSmall(30*time.Second, 30*time.Second) {
+		t.Errorf("WriteTimeoutTooSmall(30s, 30s) = false, want true (равенство опасно)")
+	}
+	if !WriteTimeoutTooSmall(20*time.Second, 30*time.Second) {
+		t.Errorf("WriteTimeoutTooSmall(20s, 30s) = false, want true")
+	}
+	if WriteTimeoutTooSmall(60*time.Second, 30*time.Second) {
+		t.Errorf("WriteTimeoutTooSmall(60s, 30s) = true, want false")
+	}
+	if WriteTimeoutTooSmall(0, 30*time.Second) {
+		t.Errorf("WriteTimeoutTooSmall(0, 30s) = true, want false (0 = дефолт runtime)")
+	}
+}

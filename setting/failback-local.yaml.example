@@ -1,0 +1,8 @@
+http:
+  not-found-cache-control: "no-store"
+
+  not-found:
+    pixel: true
+
+  source-fallback:
+    enabled: false

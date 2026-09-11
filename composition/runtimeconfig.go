@@ -1,0 +1,1516 @@
+package composition
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/pkg-ru/dynamic"
+	"gopkg.in/yaml.v3"
+
+	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/libvips"
+	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"gitverse.ru/pkg-ru/imager/config"
+	"gitverse.ru/pkg-ru/imager/domain/encoding"
+)
+
+// DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
+// по умолчанию (500 МБ).
+const DefaultBufferMaxBytes int64 = 500 * 1024 * 1024
+
+// DefaultSingleflightWaitTimeout — таймаут ожидания завершения владельца
+// keyed singleflight по умолчанию (60s = 2×DefaultGenerateTimeout 30s).
+// Защита от "зависших" владельцев генерации: waiter не ждёт вечно, а
+// получает ErrWaitTimeout (→ 503 + Retry-After). 0 = отключено.
+const DefaultSingleflightWaitTimeout = 60 * time.Second
+
+// RuntimeConfig — единый typed runtime-конфиг всего приложения.
+//
+// Собирается из YAML-файлов (server.yaml + server-local.yaml) через
+// ParseRuntimeConfig. Содержит все настройки приложения: pipeline
+// (policy/processing), HTTP-адаптер, HTTP-сервер, хранилища source/result,
+// libvips processor и observability.
+type RuntimeConfig struct {
+	// Pipeline — typed конфигурация конвейера (policy/processing).
+	Pipeline *config.Config
+	// HTTP — конфигурация HTTP-адаптера.
+	HTTP httpapi.Config
+	// Server — конфигурация HTTP-сервера (адрес и таймауты).
+	Server ServerConfig
+
+	// Admin — конфигурация административных эндпоинтов. По умолчанию
+	// выключены (enabled: false). При включении регистрируются
+	// POST /admin/assets/generate и DELETE /admin/assets/delete.
+	Admin httpapi.AdminConfig
+
+	// SourceDir — каталог исходников (используется при FS source).
+	SourceDir string
+	// ResultDir — каталог результатов (используется при FS result).
+	ResultDir string
+	// Source — конфигурация source-хранилища.
+	Source RemoteStorageConfig
+	// Result — конфигурация result-хранилища.
+	Result RemoteStorageConfig
+
+	// Libvips — конфигурация libvips processor (единственный движок;
+	// in-process через govips). Требует сборки с тэком "libvips".
+	Libvips LibvipsConfig
+	// Encoders — единая секция настроек кодирования (encoders): default-quality
+	// + per-format глобальные параметры. Источник для libvips.EncodersConfig
+	// (build) и для generatev2 Deps.Quality (default-quality).
+	Encoders libvips.EncodersConfig
+	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
+	// Пустые пути к моделям = face-crop/object-crop отключены (запрос с
+	// такими операциями вернёт понятную ошибку).
+	Detection DetectionConfig
+	// MetadataEnabled — включить sidecar-кэш моделей и largest_ai_asset.
+	// Дефолт: true.
+	MetadataEnabled bool
+	// MetadataDir — КОРЕНЬ sidecar-хранилища metаданных (metadata.dir):
+	// явный ЛОКАЛЬНЫЙ путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ
+	// source/result (fs/S3/SFTP/FTP/HTTP). Метаданные ВСЕГДА хранятся
+	// локально по этому пути. Пусто = дефолт `<эффективный локальный
+	// result-каталог>` (без подкаталога .meta).
+	MetadataDir string
+	// Limits — application-level лимиты генерации ассетов (application.limits).
+	// Нулевые поля = без ограничения.
+	Limits generatev2.Limits
+	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
+	// (0 = без лимита). По умолчанию 500 МБ.
+	BufferMaxBytes int64
+	// SingleflightWaitTimeout — таймаут ожидания завершения владельца keyed
+	// singleflight (application.singleflight-wait-timeout). 0 = отключено
+	// (вечное ожидание до ctx waiter'а). По умолчанию 60s.
+	SingleflightWaitTimeout time.Duration
+	// LogLevel — уровень логов (debug/info/warn/error).
+	LogLevel string
+}
+
+// ServerConfig — конфигурация HTTP-сервера.
+//
+// Нулевое значение таймаута означает "использовать умолчание runtime"
+// (см. httpapi.defaultTimeouts).
+type ServerConfig struct {
+	// Addr — адрес прослушивания (TCP), например ":8080".
+	Addr string
+	// ReadHeaderTimeout — таймаут чтения заголовков.
+	ReadHeaderTimeout time.Duration
+	// ReadTimeout — таймаут чтения тела запроса.
+	ReadTimeout time.Duration
+	// WriteTimeout — таймаут записи ответа.
+	WriteTimeout time.Duration
+	// IdleTimeout — таймаут idle-соединений.
+	IdleTimeout time.Duration
+	// ShutdownTimeout — максимальное время ожидания активных запросов.
+	ShutdownTimeout time.Duration
+	// MaxHeaderBytes — максимальный размер заголовков запроса.
+	MaxHeaderBytes int
+	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
+	// Сервис не принимает тела, поэтому по умолчанию жёсткий лимит 4 KiB.
+	MaxBodyBytes int
+	// MetricsAuth — защита /metrics endpoint (токен/IP-фильтр). Пусто =
+	// без авторизации (текущее поведение).
+	MetricsAuth httpapi.MetricsAuthConfig
+}
+
+// LibvipsConfig — конфигурация libvips processor (govips).
+type LibvipsConfig struct {
+	// Limits — resource limits обработчика libvips.
+	Limits libvips.Limits
+	// EncodersConfig — полное per-format представление единой секции
+	// encoders (default-quality + нативные параметры по форматам). Хранит
+	// ГЛОБАЛЬНЫЕ значения; эффективные параметры каждого экспорта
+	// разрешаются per-request через domain/encoding.Resolve.
+	EncodersConfig libvips.EncodersConfig
+	// ShrinkOnLoad — настройки shrink-on-load (предварительное уменьшение
+	// при декодировании JPEG/WebP/GIF/HEIF/AVIF).
+	ShrinkOnLoad libvips.ShrinkOnLoadOpts
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
+	WatermarkCache libvips.WatermarkCacheOpts
+	// DetectionSem — настройки detection-семафора: отдельный лимит
+	// конкурентности ONNX-инференса вне libvips-слотов.
+	DetectionSem libvips.DetectionSemaphoreOpts
+	// Color — политика ICC color management: strip (дефолт,
+	// удалять профиль), transform (конвертация в sRGB перед обработкой),
+	// keep (сохранить embedded-профиль в выход).
+	Color libvips.ColorMode
+	// OperationCache — настройки operation cache libvips.
+	// Включено по умолчанию; false = нулевые лимиты кэша при Startup
+	// (кэш отключён).
+	OperationCache libvips.OperationCacheOpts
+	// VipsMetricsInterval — интервал периодического сбора vips-метрик
+	// (0 = дефолт 15s).
+	VipsMetricsInterval time.Duration
+}
+
+// ModelsDirEnv — env-переменная с каталогом ONNX-моделей (префикс-каталог).
+// Используется как fallback для detection.face-model / detection.object-model:
+// если путь в YAML не задан, он строится как <IMAGER_MODELS_DIR>/<имя_модели>.
+// Явный путь в конфиг-файле имеет приоритет. Задаётся в docker-compose как
+// /etc/imager/models (см. models/README.md).
+const ModelsDirEnv = "IMAGER_MODELS_DIR"
+
+// DetectionConfig — конфигурация детектора лиц/объектов для операций
+// face-crop ("face") и object-crop ("object") на libvips.
+//
+// Пустой путь модели (FaceModel/ObjectModel) = соответствующий детектор
+// отключён: запрос с такой операцией вернёт понятную ошибку от процессора.
+// Секция не имеет флага enabled — «включение» задаётся непустыми путями.
+type DetectionConfig struct {
+	// FaceModel — путь к ONNX-модели YuNet для детекции лиц.
+	// Пусто = face-crop недоступен.
+	FaceModel string
+	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
+	// объектов. Пусто = object-crop недоступен.
+	ObjectModel string
+	// OnnxRuntimeLib — путь к библиотеке libonnxruntime (dlopen). Пусто =
+	// автодетекция по стандартным путям (см. onnx_cgo.go). Задаётся через
+	// конфиг-файл, а не через env ONNXRUNTIME_SHARED_LIBRARY_PATH.
+	OnnxRuntimeLib string
+	// ConfidenceThreshold — порог уверенности в интервале [0,1]. Боксы
+	// с Confidence ниже порога отбрасываются (до NMS). Дефолт: 0.5.
+	ConfidenceThreshold float64
+	// MaxObjects — максимальное число объектов после NMS (первые N самых
+	// уверенных). Должен быть > 0. Дефолт: 5.
+	MaxObjects int
+	// Margin — отступ к найденной области как доля от её размера в
+	// интервале [0,1]. Применяется равномерно по осям (половина с каждой
+	// стороны). 0 = кроп строго по bounding box. Дефолт: 0.1 (10%).
+	Margin float64
+}
+
+// DetectionYAML — YAML-представление DetectionConfig.
+//
+// Пороговые значения — nullable, чтобы отличать «не задано» (Set=false →
+// дефолт) от явного значения (включая 0), которое валидируется.
+type DetectionYAML struct {
+	// FaceModel — путь к ONNX-модели YuNet для детекции лиц.
+	FaceModel dynamic.String `yaml:"face-model"`
+	// ObjectModel — путь к ONNX-модели (SSD/YOLO-подобной) для детекции
+	// объектов.
+	ObjectModel dynamic.String `yaml:"object-model"`
+	// OnnxRuntimeLib — путь к библиотеке libonnxruntime (dlopen). Пусто =
+	// автодетекция по стандартным путям.
+	OnnxRuntimeLib dynamic.String `yaml:"onnx-runtime-lib"`
+	// ConfidenceThreshold — порог уверенности в интервале [0,1] (nil = 0.5).
+	ConfidenceThreshold dynamic.Nullable[dynamic.Float64] `yaml:"confidence-threshold"`
+	// MaxObjects — максимальное число объектов после NMS (первые N самых
+	// уверенных, должет быть > 0; nil = 5).
+	MaxObjects dynamic.Nullable[dynamic.Int64] `yaml:"max-objects"`
+	// Margin — отступ к найденной области как доля от её размера в
+	// интервале [0,1] (nil = 0.1).
+	Margin dynamic.Nullable[dynamic.Float64] `yaml:"margin"`
+}
+
+// RuntimeConfigFile — YAML-представление единого runtime-конфига.
+//
+// Поля Policy/Processing декодируются как yaml.Node и пере-кодируются
+// в typed config.Config (см. ParseRuntimeConfig).
+type RuntimeConfigFile struct {
+	// Version — версия конфигурации.
+	Version dynamic.String `yaml:"version"`
+	// Watermarks — именованные декларации ватермарок (пробрасываются в
+	// config.Config; ссылки из пресетов/path-policies разрешаются при
+	// компиляции). Имя ватермарки = ключ map.
+	Watermarks map[string]config.WatermarkConfig `yaml:"watermarks"`
+	// Server — конфигурация HTTP-сервера.
+	Server ServerYAML `yaml:"server"`
+	// Admin — конфигурация административных эндпоинтов.
+	Admin AdminYAML `yaml:"admin"`
+	// HTTP — конфигурация HTTP-адаптера.
+	HTTP HTTPYAML `yaml:"http"`
+	// Policy — конфигурация политики (пробрасывается в config.Config).
+	Policy yaml.Node `yaml:"policy"`
+	// Processing — конфигурация обработки.
+	Processing yaml.Node `yaml:"processing"`
+	// Source — конфигурация source-хранилища.
+	Source StorageYAML `yaml:"source"`
+	// Result — конфигурация result-хранилища.
+	Result StorageYAML `yaml:"result"`
+	// Libvips — конфигурация libvips processor.
+	Libvips LibvipsYAML `yaml:"libvips"`
+	// Encoders — ЕДИНАЯ top-level секция настроек кодирования (default-quality
+	// + per-format параметры).
+	Encoders EncodersYAML `yaml:"encoders"`
+	// Detection — конфигурация детектора лиц/объектов (face-crop/object-crop).
+	Detection DetectionYAML `yaml:"detection"`
+	// Application — прикладные лимиты.
+	Application ApplicationYAML `yaml:"application"`
+	// Observability — логирование и метрики.
+	Observability ObservabilityYAML `yaml:"observability"`
+	// Metadata — sidecar-кэш моделей и largest_ai_asset.
+	Metadata MetadataYAML `yaml:"metadata"`
+}
+
+// ServerYAML — YAML-представление ServerConfig.
+type ServerYAML struct {
+	// Addr — адрес прослушивания (TCP), например ":8080".
+	Addr dynamic.String `yaml:"addr"`
+	// ReadHeaderTimeout — таймаут чтения заголовков (duration, например "5s").
+	ReadHeaderTimeout dynamic.String `yaml:"read-header-timeout"`
+	// ReadTimeout — таймаут чтения тела запроса.
+	ReadTimeout dynamic.String `yaml:"read-timeout"`
+	// WriteTimeout — таймаут записи ответа.
+	WriteTimeout dynamic.String `yaml:"write-timeout"`
+	// IdleTimeout — таймаут idle-соединений.
+	IdleTimeout dynamic.String `yaml:"idle-timeout"`
+	// ShutdownTimeout — максимальное время ожидания активных запросов.
+	ShutdownTimeout dynamic.String `yaml:"shutdown-timeout"`
+	// MaxHeaderBytes — максимальный размер заголовков запроса.
+	MaxHeaderBytes dynamic.Int64 `yaml:"max-header-bytes"`
+	// MaxBodyBytes — максимальный размер тела запроса (0 = без лимита).
+	MaxBodyBytes dynamic.Int64 `yaml:"max-body-bytes"`
+	// MetricsAuth — защита /metrics endpoint (токен/IP-фильтр).
+	MetricsAuth MetricsAuthYAML `yaml:"metrics-auth"`
+}
+
+// MetricsAuthYAML — YAML-представление httpapi.MetricsAuthConfig.
+type MetricsAuthYAML struct {
+	// Token — bearer-токен для доступа к /metrics (пусто = не требуется).
+	Token dynamic.String `yaml:"token"`
+	// AllowedIPs — список разрешённых IP (CIDR или точные адреса).
+	AllowedIPs dynamic.StringSlice `yaml:"allowed-ips"`
+}
+
+// StorageYAML — YAML-представление конфигурации хранилища (source или
+// result). Секреты задаются отдельными полями и не попадают в URI/логи.
+type StorageYAML struct {
+	// Storage — тип хранилища (fs, s3, sftp, ftp, ftps, http). Пусто = fs.
+	Storage dynamic.String `yaml:"storage"`
+	// Path — локальный каталог для FS-хранилища.
+	Path dynamic.String `yaml:"path"`
+	// BaseURL — базовый адрес исходников для HTTP/HTTPS source.
+	BaseURL dynamic.String `yaml:"base-url"`
+	// Bucket — bucket для S3.
+	Bucket dynamic.String `yaml:"bucket"`
+	// Prefix — префикс ключей для S3.
+	Prefix dynamic.String `yaml:"prefix"`
+	// Endpoint — endpoint S3 (для S3-совместимых хранилищ; пусто = AWS).
+	Endpoint dynamic.String `yaml:"endpoint"`
+	// Region — регион S3.
+	Region dynamic.String `yaml:"region"`
+	// AccessKey — access key S3.
+	AccessKey dynamic.String `yaml:"access-key"`
+	// SecretKey — secret key S3.
+	SecretKey dynamic.String `yaml:"secret-key"`
+	// Addr — адрес "host:port" для SFTP/FTP/FTPS.
+	Addr dynamic.String `yaml:"addr"`
+	// User — пользователь для SFTP/FTP/FTPS.
+	User dynamic.String `yaml:"user"`
+	// Password — пароль для SFTP/FTP/FTPS.
+	Password dynamic.String `yaml:"password"`
+	// PrivateKeyFile — путь к файлу приватного ключа для SFTP.
+	PrivateKeyFile dynamic.String `yaml:"private-key-file"`
+	// Root — корневой каталог для SFTP/FTP/FTPS.
+	Root dynamic.String `yaml:"root"`
+	// TLS — true для FTPS.
+	TLS dynamic.Bool `yaml:"tls"`
+	// TLSVerify — проверять ли TLS-сертификат для FTPS (default: true).
+	TLSVerify dynamic.Nullable[dynamic.Bool] `yaml:"tls-verify"`
+	// HostKeyFingerprint — ожидаемый SHA-256 fingerprint SFTP host key.
+	// Пример: "SHA256:abcdef...". Пусто = фундаментально небезопасно
+	// (см. docs/DEPLOYMENT.md); рекомендуется задавать всегда.
+	HostKeyFingerprint dynamic.String `yaml:"host-key-fingerprint"`
+	// SpoolDir — каталог временных spool.
+	SpoolDir dynamic.String `yaml:"spool-dir"`
+	// SpoolMaxBytes — максимальный размер source spool (0 = без лимита).
+	SpoolMaxBytes dynamic.Int64 `yaml:"spool-max-bytes"`
+	// DialTimeout — таймаут соединения для SFTP/FTP/FTPS, HTTP и S3 (duration).
+	DialTimeout dynamic.String `yaml:"dial-timeout"`
+	// ReadTimeout — таймаут чтения ответа для HTTP-подобных хранилищ
+	// (S3, HTTP; duration).
+	ReadTimeout dynamic.String `yaml:"read-timeout"`
+	// MaxAttempts — максимальное число попыток запроса для HTTP-подобных
+	// хранилищ (S3, HTTP).
+	MaxAttempts dynamic.Int64 `yaml:"max-attempts"`
+	// MaxIdleConns — максимальное число idle-соединений в пуле
+	// (S3, HTTP).
+	MaxIdleConns dynamic.Int64 `yaml:"max-idle-conns"`
+	// MaxConns — максимальное число одновременных соединений в пуле
+	// (SFTP/FTP/FTPS; 0 = 2).
+	MaxConns dynamic.Int64 `yaml:"max-conns"`
+	// MaxIdleConnsPerHost — максимальное число idle-соединений на хост
+	// (S3, HTTP).
+	MaxIdleConnsPerHost dynamic.Int64 `yaml:"max-idle-conns-per-host"`
+	// IdleConnTimeout — таймаут idle-соединений (S3, HTTP; duration).
+	IdleConnTimeout dynamic.String `yaml:"idle-conn-timeout"`
+	// MetadataTTL — TTL кэша метаданных (S3; duration; 0 = кэш отключён).
+	MetadataTTL dynamic.String `yaml:"metadata-ttl"`
+}
+
+// LibvipsYAML — YAML-представление конфигурации libvips.
+type LibvipsYAML struct {
+	// Limits — resource limits обработчика libvips.
+	Limits LibvipsLimitsYAML `yaml:"limits"`
+	// ShrinkOnLoad — настройки shrink-on-load при декодировании.
+	ShrinkOnLoad ShrinkOnLoadYAML `yaml:"shrink-on-load"`
+	// WatermarkCache — настройки in-memory кэша файлов ватермарок.
+	WatermarkCache WatermarkCacheYAML `yaml:"watermark-cache"`
+	// DetectionSem — настройки detection-семафора.
+	DetectionSem DetectionSemYAML `yaml:"detection"`
+	// Color — политика ICC color management: strip/transform/keep.
+	Color ColorYAML `yaml:"color"`
+	// OperationCache — настройки operation cache.
+	OperationCache OperationCacheYAML `yaml:"operation-cache"`
+	// MetricsInterval — интервал сбора vips-метрик (duration; 0 = дефолт 15s).
+	MetricsInterval dynamic.String `yaml:"metrics-interval"`
+}
+
+// ColorYAML — YAML-представление политики color management.
+type ColorYAML struct {
+	// Mode — режим: strip (дефолт), transform, keep.
+	Mode dynamic.String `yaml:"mode"`
+}
+
+// OperationCacheYAML — YAML-представление настроек operation cache.
+type OperationCacheYAML struct {
+	// Enabled — включить operation cache libvips (nil = включено по умолчанию).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+}
+
+// DetectionSemYAML — YAML-представление libvips.DetectionSemaphoreOpts.
+type DetectionSemYAML struct {
+	// Concurrency — максимум одновременных ONNX-инференсов (0 = дефолт
+	// max(1, GOMAXPROCS/2)).
+	Concurrency dynamic.Int64 `yaml:"concurrency"`
+	// MaxWait — бюджет ожидания detection-слота (duration; 0 = дефолт 5s).
+	MaxWait dynamic.String `yaml:"max-wait"`
+}
+
+// WatermarkCacheYAML — YAML-представление libvips.WatermarkCacheOpts.
+type WatermarkCacheYAML struct {
+	// Enabled — включить кэш файлов ватермарок (nil = включено по умолчанию).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+	// MaxFiles — максимум записей (файлов) в кэше (0 = дефолт 32).
+	MaxFiles dynamic.Int64 `yaml:"max-files"`
+	// MaxBytes — суммарный бюджет памяти кэша в байтах (0 = дефолт 64 MiB).
+	MaxBytes dynamic.Int64 `yaml:"max-bytes"`
+	// TTL — время жизни записи (duration; 0 = дефолт 5m).
+	TTL dynamic.String `yaml:"ttl"`
+}
+
+// ShrinkOnLoadYAML — YAML-представление libvips.ShrinkOnLoadOpts.
+type ShrinkOnLoadYAML struct {
+	// Enabled — включить shrink-on-load (nil = включено по умолчанию).
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+}
+
+// EncodersYAML — YAML-представление ЕДИНОЙ top-level секции encoders
+// (per-format параметры кодирования + default-quality).
+//
+// Подразделы используют указатели на значения, чтобы отличать «не задано»
+// (nil) от дефолта. Валидация диапазонов сверяется с реестром
+// domain/encoding (те же min/max); нулевые/nil значения = «не задано»
+// (применяются registry-дефолты / автомаппинг от quality).
+type EncodersYAML struct {
+	// DefaultQuality — качество сжатия по умолчанию [1,100]; 0 = дефолт 80.
+	DefaultQuality dynamic.Int64 `yaml:"default-quality"`
+	// JPEG — параметры JPEG.
+	JPEG EncoderFormatYAML `yaml:"jpeg"`
+	// WebP — параметры WebP.
+	WebP EncoderFormatWebPYAML `yaml:"webp"`
+	// AVIF — параметры AVIF.
+	AVIF EncoderFormatAVIFYAML `yaml:"avif"`
+	// HEIF — параметры HEIF.
+	HEIF EncoderFormatHEIFYAML `yaml:"heif"`
+	// JXL — параметры JPEG XL.
+	JXL EncoderFormatJXLYAML `yaml:"jxl"`
+	// PNG — параметры PNG.
+	PNG EncoderFormatPNGYAML `yaml:"png"`
+	// APNG — параметры APNG.
+	APNG EncoderFormatAPNGYAML `yaml:"apng"`
+	// GIF — параметры GIF.
+	GIF EncoderFormatGIFYAML `yaml:"gif"`
+}
+
+// EncoderFormatYAML — общие параметры формата с прямым quality
+// (lossy: jpeg/heif). Quality nil = «не задано глобально» → из запроса
+// или encoders.default-quality.
+type EncoderFormatYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+
+	// Progressive — прогрессивный (interlaced) JPEG. false = baseline.
+	Progressive *bool `yaml:"progressive"`
+}
+
+// EncoderFormatWebPYAML — параметры WebP.
+type EncoderFormatWebPYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// ReductionEffort — reduction effort [0..6] (больше = лучше сжатие,
+	// медленнее). nil = дефолт 4.
+	ReductionEffort *int `yaml:"reduction-effort"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+	// NearLossless — near-lossless. nil = false.
+	NearLossless *bool `yaml:"near-lossless"`
+}
+
+// EncoderFormatAVIFYAML — параметры AVIF.
+type EncoderFormatAVIFYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// Speed — speed [0..9] (меньше = медленнее, лучше сжатие). 0 ВАЛИДЕН.
+	// nil = дефолт 6.
+	Speed *int `yaml:"speed"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+}
+
+// EncoderFormatHEIFYAML — параметры HEIF (только quality).
+type EncoderFormatHEIFYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+}
+
+// EncoderFormatJXLYAML — параметры JPEG XL.
+type EncoderFormatJXLYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// Effort — effort [3,9] (больше = лучше сжатие, медленнее). nil = 7.
+	// 0 НЕВАЛИДЕН.
+	Effort *int `yaml:"effort"`
+	// Lossless — без потерь. nil = false.
+	Lossless *bool `yaml:"lossless"`
+}
+
+// EncoderFormatPNGYAML — параметры PNG.
+type EncoderFormatPNGYAML struct {
+	// Quality — качество [1,100]; nil = из запроса / default-quality.
+	Quality *int `yaml:"quality"`
+	// CompressionLevel — уровень сжатия [1,9]. nil = 6.
+	CompressionLevel *int `yaml:"compression-level"`
+	// Interlace — чересстрочный (Adam7). nil = false.
+	Interlace *bool `yaml:"interlace"`
+	// Palette — палитровый (quantized) экспорт. nil = false.
+	Palette *bool `yaml:"palette"`
+	// PaletteColors — максимум цветов палитры [2,256]. nil = 256.
+	PaletteColors *int `yaml:"palette-colors"`
+	// PaletteBitDepth — битность палитры [1,8]. nil = 8.
+	PaletteBitDepth *int `yaml:"palette-bit-depth"`
+	// Dither — дизеринг [0,1]; nil = дефолт 1.0.
+	Dither *float64 `yaml:"dither"`
+}
+
+// EncoderFormatAPNGYAML — параметры APNG.
+type EncoderFormatAPNGYAML struct {
+	// CompressionLevel — уровень сжатия [1,9]. nil = 6.
+	CompressionLevel *int `yaml:"compression-level"`
+	// Interlace — чересстрочный. nil = false.
+	Interlace *bool `yaml:"interlace"`
+}
+
+// EncoderFormatGIFYAML — параметры GIF.
+type EncoderFormatGIFYAML struct {
+	// Effort — effort [1,10]. nil = 7 (дефолт libvips).
+	Effort *int `yaml:"effort"`
+	// BitDepth — битность палитры [1,8]. nil = 8.
+	BitDepth *int `yaml:"bit-depth"`
+	// Dither — дизеринг [0,1]; nil = дефолт 1.0.
+	Dither *float64 `yaml:"dither"`
+}
+
+// LibvipsLimitsYAML — YAML-представление libvips.Limits.
+type LibvipsLimitsYAML struct {
+	// SourceBytes — лимит размера входных данных (байт). 0 = дефолт кода
+	// libvips.DefaultSourceBytes (10 MiB). Должен быть >=
+	// application.limits.source-bytes, иначе крупный исходник пройдёт
+	// application-лимит, но будет отсечён процессором.
+	SourceBytes dynamic.Int64 `yaml:"source-bytes"`
+	// OutputBytes — лимит размера выходных данных (байт).
+	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
+	// Timeout — context deadline на одну операцию (duration).
+	Timeout dynamic.String `yaml:"timeout"`
+	// Concurrency — максимальное число одновременно выполняемых операций.
+	Concurrency dynamic.Int64 `yaml:"concurrency"`
+	// Threads — число потоков libvips (vips_concurrency_set).
+	Threads dynamic.Int64 `yaml:"threads"`
+	// MaxCacheMem — максимум памяти кэша libvips (байт).
+	MaxCacheMem dynamic.Int64 `yaml:"max-cache-mem"`
+	// MaxCacheFiles — максимум файлов кэша libvips.
+	MaxCacheFiles dynamic.Int64 `yaml:"max-cache-files"`
+	// MaxCacheSize — максимум операций в кэше libvips.
+	MaxCacheSize dynamic.Int64 `yaml:"max-cache-size"`
+}
+
+// ApplicationYAML — прикладные лимиты.
+type ApplicationYAML struct {
+	// Limits — application-level лимиты генерации ассетов.
+	Limits ApplicationLimitsYAML `yaml:"limits"`
+	// BufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
+	// (0 = без лимита). По умолчанию 500 МБ.
+	BufferMaxBytes dynamic.Int64 `yaml:"buffer-max-bytes"`
+	// SingleflightWaitTimeout — таймаут ожидания завершения владельца keyed
+	// singleflight (duration, например "60s"; 0 = отключено). По умолчанию
+	// "60s" (2×DefaultGenerateTimeout). Отрицательное значение — fail-fast.
+	SingleflightWaitTimeout dynamic.String `yaml:"singleflight-wait-timeout"`
+}
+
+// ApplicationLimitsYAML — YAML-представление application-level лимитов
+// генерации ассетов (application.limits).
+//
+// Нулевое значение поля = без ограничения. Все значения должны быть
+// неотрицательными (fail-fast на старте).
+type ApplicationLimitsYAML struct {
+	// SourceBytes — максимальный размер исходного файла в байтах (0 = без
+	// ограничения).
+	SourceBytes dynamic.Int64 `yaml:"source-bytes"`
+	// OutputBytes — максимальный размер выходного файла в байтах (0 = без
+	// ограничения).
+	OutputBytes dynamic.Int64 `yaml:"output-bytes"`
+	// Pixels — максимальное число пикселей (width*height) (0 = без
+	// ограничения).
+	Pixels dynamic.Int64 `yaml:"pixels"`
+	// Width — максимальная ширина (0 = без ограничения).
+	Width dynamic.Uint32 `yaml:"width"`
+	// Height — максимальная высота (0 = без ограничения).
+	Height dynamic.Uint32 `yaml:"height"`
+	// DPR — максимальный DPR (0 = без ограничения).
+	DPR dynamic.Uint32 `yaml:"dpr"`
+	// Frames — максимальное число кадров (0 = без ограничения).
+	Frames dynamic.Uint32 `yaml:"frames"`
+	// Duration — максимальная длительность в миллисекундах (0 = без
+	// ограничения).
+	Duration dynamic.Uint32 `yaml:"duration"`
+	// Concurrency — максимальное число одновременно выполняемых операций
+	// (0 = без ограничения). Валидируется, но НЕ подключается к HTTP-слою
+	// (admission control остаётся в httpapi).
+	Concurrency dynamic.Uint32 `yaml:"concurrency"`
+}
+
+// ObservabilityYAML — логирование и метрики.
+type ObservabilityYAML struct {
+	// LogLevel — уровень логов: debug, info, warn, error (по умолчанию info).
+	LogLevel dynamic.String `yaml:"log-level"`
+	// AssetErrors — учёт ошибок asset URL (счётчики, top-paths, логи).
+	AssetErrors AssetErrorsYAML `yaml:"asset-errors"`
+}
+
+// AssetErrorsYAML — YAML-представление AssetErrorConfig.
+type AssetErrorsYAML struct {
+	// Enabled — включать ли учёт ошибок asset URL. Дефолт true.
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+	// LogLevel — уровень структурного лога ошибки. Дефолт warn.
+	LogLevel dynamic.String `yaml:"log-level"`
+	// TopPaths — bounded-реестр проблемных путей.
+	TopPaths TopPathsYAML `yaml:"top-paths"`
+}
+
+// TopPathsYAML — YAML-представление TopPathsConfig.
+type TopPathsYAML struct {
+	// Enabled — включать ли учёт top-paths. Дефолт false.
+	Enabled dynamic.Bool `yaml:"enabled"`
+	// MaxEntries — максимальное число отслеживаемых путей (LRU). Дефолт 1024.
+	MaxEntries dynamic.Int64 `yaml:"max-entries"`
+	// ReportTop — число путей в отчёте. Дефолт 20.
+	ReportTop dynamic.Int64 `yaml:"report-top"`
+	// KeyMode — режим ключа: source | hash. Дефолт source.
+	KeyMode dynamic.String `yaml:"key-mode"`
+}
+
+// MetadataYAML — конфигурация sidecar-кэша моделей и largest_ai_asset
+//
+// Дир расположения НАСТРАИВАЕТСЯ отдельным ключом metadata.dir — явный
+// локальный путь файловой системы, НЕЗАВИСИМЫЙ от хранилищ source/result.
+// Пустой dir = дефолт `<эффективный локальный result-каталог>` (без
+// подкаталога .meta).
+type MetadataYAML struct {
+	// Enabled — включить sidecar-кэш моделей и largest_ai_asset.
+	// Тип: bool. Дефолт: true. false = поведение идентично текущему.
+	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+	// Dir — КОРЕНЬ sidecar-хранилища метаданных:
+	// явный ЛОКАЛЬНЫЙ путь файловой системы. Метаданные всегда хранятся
+	// локально по этому пути, независимо от типов source/result.
+	// Тип: string. Дефолт: <эффективный локальный result-каталог>.
+	Dir dynamic.String `yaml:"dir"`
+}
+
+// AdminYAML — YAML-представление AdminConfig.
+//
+// Выключено по умолчанию (enabled: false). При enabled: true ТРЕБУЕТСЯ
+// непустой token (иначе — fail-fast ошибка старта). workers ≥ 1 (дефолт 2),
+// queue-size ≥ 1 (дефолт 64), wait-timeout > 0 (дефолт "300s").
+type AdminYAML struct {
+	// Enabled — включать ли admin-эндпоинты. Дефолт false.
+	Enabled dynamic.Bool `yaml:"enabled"`
+	// Token — bearer-токен (Authorization: Bearer <token>). Обязателен при
+	// enabled: true.
+	Token dynamic.String `yaml:"token"`
+	// Workers — число параллельных фоновых генераций. Дефолт 2.
+	Workers dynamic.Int64 `yaml:"workers"`
+	// QueueSize — ёмкость очереди задач; переполнение → 503. Дефолт 64.
+	QueueSize dynamic.Int64 `yaml:"queue-size"`
+	// WaitTimeout — таймаут режима wait=true (duration). Дефолт "300s".
+	WaitTimeout dynamic.String `yaml:"wait-timeout"`
+}
+
+// HTTPYAML — YAML-представление httpapi.Config.
+type HTTPYAML struct {
+	// AllowedOrigins — CORS allowlist.
+	AllowedOrigins dynamic.StringSlice `yaml:"allowed-origins"`
+	// AllowCredentials — разрешить credentials.
+	AllowCredentials dynamic.Bool `yaml:"allow-credentials"`
+	// CacheControl — Cache-Control для canonical assets.
+	CacheControl dynamic.String `yaml:"cache-control"`
+	// NotFoundCacheControl — Cache-Control для fallback.
+	NotFoundCacheControl dynamic.String `yaml:"not-found-cache-control"`
+	// ReferrerPolicy — Referrer-Policy.
+	ReferrerPolicy dynamic.String `yaml:"referrer-policy"`
+	// CSP — Content-Security-Policy.
+	CSP dynamic.String `yaml:"csp"`
+	// MaxURLLen — максимальная длина URL.
+	MaxURLLen dynamic.Int64 `yaml:"max-url-len"`
+	// GenerateTimeout — таймаут генерации ассета (duration, например "30s").
+	GenerateTimeout dynamic.String `yaml:"generate-timeout"`
+	// NotFound — not-found fallback.
+	NotFound NotFoundYAML `yaml:"not-found"`
+	// SourceFallback — fallback на исходный файл при ошибке ассета.
+	SourceFallback SourceFallbackYAML `yaml:"source-fallback"`
+	// ServeOriginal — отдача исходников по «простым» URL вида /path/name.ext
+	// (отдельная фича, не относящаяся к source-fallback).
+	ServeOriginal ServeOriginalYAML `yaml:"serve-original"`
+	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
+	// HTTP-запросов (0 = без ограничения).
+	MaxConcurrentRequests dynamic.Int64 `yaml:"max-concurrent-requests"`
+	// RetryAfter — значение Retry-After (в секундах) для HTTP 503 при
+	// перегрузке процессора (duration, например "1s"). 0/пусто → дефолт 1s.
+	RetryAfter dynamic.String `yaml:"retry-after"`
+}
+
+// SourceFallbackYAML — YAML-представление SourceFallbackConfig.
+type SourceFallbackYAML struct {
+	// Enabled — включать ли source fallback. Дефолт false.
+	Enabled dynamic.Bool `yaml:"enabled"`
+	// Status — HTTP-статус ответа: 200 или 404 (0 → 404).
+	Status dynamic.Int64 `yaml:"status"`
+	// CacheControl — Cache-Control для fallback-ответа. Дефолт "no-store".
+	CacheControl dynamic.String `yaml:"cache-control"`
+}
+
+// ServeOriginalYAML — YAML-представление ServeOriginalConfig (отдача
+// исходников по «простым» URL вида /path/name.ext).
+type ServeOriginalYAML struct {
+	// Enabled — включать ли отдачу исходников по «простым» URL. Дефолт false.
+	Enabled dynamic.Bool `yaml:"enabled"`
+	// CacheControl — Cache-Control для ответа. Дефолт "no-store".
+	CacheControl dynamic.String `yaml:"cache-control"`
+}
+
+// NotFoundYAML — YAML-представление NotFoundConfig.
+type NotFoundYAML struct {
+	Pixel    dynamic.Bool   `yaml:"pixel"`
+	Image    dynamic.String `yaml:"image"`
+	Page     dynamic.String `yaml:"page"`
+	Redirect dynamic.String `yaml:"redirect"`
+}
+
+// ParseRuntimeConfig десериализует merged YAML-данные в единый typed
+// RuntimeConfig. Применяет strict-декодирование (неизвестные поля
+// отклоняются) и fail-fast валидацию.
+func ParseRuntimeConfig(data []byte) (*RuntimeConfig, error) {
+	var raw RuntimeConfigFile
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("composition: decode yaml: %w", err)
+	}
+
+	// Собираем config.Config из сырых секций.
+	cfg := &config.Config{Version: raw.Version, Watermarks: raw.Watermarks}
+	// Fail-fast: файлы ватермарок должны существовать на старте.
+	for name, w := range raw.Watermarks {
+		if w.Path.Unwrap() == "" {
+			continue // пустой path отклонится в config.Validate
+		}
+		if _, err := os.Stat(w.Path.Unwrap()); err != nil {
+			return nil, fmt.Errorf("composition: watermarks.%s: %w", name, err)
+		}
+	}
+	if !raw.Policy.IsZero() {
+		pol, err := yaml.Marshal(&raw.Policy)
+		if err != nil {
+			return nil, fmt.Errorf("composition: re-encode policy: %w", err)
+		}
+		if err := yaml.Unmarshal(pol, &cfg.Policy); err != nil {
+			return nil, fmt.Errorf("composition: decode policy: %w", err)
+		}
+	}
+	if !raw.Processing.IsZero() {
+		proc, err := yaml.Marshal(&raw.Processing)
+		if err != nil {
+			return nil, fmt.Errorf("composition: re-encode processing: %w", err)
+		}
+		if err := yaml.Unmarshal(proc, &cfg.Processing); err != nil {
+			return nil, fmt.Errorf("composition: decode processing: %w", err)
+		}
+	}
+	cfg.Normalize() // пустая version → SupportedVersion (унифицировано с Validate)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("composition: config: %w", err)
+	}
+
+	// HTTP-адаптер.
+	allowedOrigins := make([]string, 0, len(raw.HTTP.AllowedOrigins))
+	for _, o := range raw.HTTP.AllowedOrigins {
+		allowedOrigins = append(allowedOrigins, o.Unwrap())
+	}
+	httpCfg := httpapi.Config{
+		AllowedOrigins:        allowedOrigins,
+		AllowCredentials:      raw.HTTP.AllowCredentials.Unwrap(),
+		CacheControl:          raw.HTTP.CacheControl.Unwrap(),
+		NotFoundCacheControl:  raw.HTTP.NotFoundCacheControl.Unwrap(),
+		ReferrerPolicy:        raw.HTTP.ReferrerPolicy.Unwrap(),
+		CSP:                   raw.HTTP.CSP.Unwrap(),
+		MaxURLLen:             int(raw.HTTP.MaxURLLen.Unwrap()),
+		MaxConcurrentRequests: int(raw.HTTP.MaxConcurrentRequests.Unwrap()),
+		NotFound: httpapi.NotFoundConfig{
+			Pixel:    raw.HTTP.NotFound.Pixel.Unwrap(),
+			Image:    raw.HTTP.NotFound.Image.Unwrap(),
+			Page:     raw.HTTP.NotFound.Page.Unwrap(),
+			Redirect: raw.HTTP.NotFound.Redirect.Unwrap(),
+		},
+		SourceFallback: httpapi.SourceFallbackConfig{
+			Enabled:      raw.HTTP.SourceFallback.Enabled.Unwrap(),
+			Status:       int(raw.HTTP.SourceFallback.Status.Unwrap()),
+			CacheControl: raw.HTTP.SourceFallback.CacheControl.Unwrap(),
+		},
+		ServeOriginal: httpapi.ServeOriginalConfig{
+			Enabled:      raw.HTTP.ServeOriginal.Enabled.Unwrap(),
+			CacheControl: raw.HTTP.ServeOriginal.CacheControl.Unwrap(),
+		},
+		Admin: httpapi.AdminConfig{
+			Enabled:   raw.Admin.Enabled.Unwrap(),
+			Token:     raw.Admin.Token.Unwrap(),
+			Workers:   int(raw.Admin.Workers.Unwrap()),
+			QueueSize: int(raw.Admin.QueueSize.Unwrap()),
+		},
+	}
+	// Admin wait-timeout (duration).
+	if raw.Admin.WaitTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.Admin.WaitTimeout.Unwrap())
+		if err != nil {
+			return nil, fmt.Errorf("composition: admin.wait-timeout: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("composition: admin.wait-timeout: negative duration %q", raw.Admin.WaitTimeout.Unwrap())
+		}
+		httpCfg.Admin.WaitTimeout = d
+	}
+	// Asset errors observability (fail-fast на неверных значениях).
+	assetErrorsEnabled := true
+	if raw.Observability.AssetErrors.Enabled.Set {
+		assetErrorsEnabled = raw.Observability.AssetErrors.Enabled.Value.Unwrap()
+	}
+	httpCfg.AssetErrors = httpapi.AssetErrorConfig{
+		Enabled:  assetErrorsEnabled,
+		LogLevel: raw.Observability.AssetErrors.LogLevel.Unwrap(),
+		TopPaths: httpapi.TopPathsConfig{
+			Enabled:    raw.Observability.AssetErrors.TopPaths.Enabled.Unwrap(),
+			MaxEntries: int(raw.Observability.AssetErrors.TopPaths.MaxEntries.Unwrap()),
+			ReportTop:  int(raw.Observability.AssetErrors.TopPaths.ReportTop.Unwrap()),
+			KeyMode:    raw.Observability.AssetErrors.TopPaths.KeyMode.Unwrap(),
+		},
+	}
+	if raw.HTTP.GenerateTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.HTTP.GenerateTimeout.Unwrap())
+		if err != nil {
+			return nil, fmt.Errorf("composition: http.generate-timeout: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("composition: http.generate-timeout: negative duration %q", raw.HTTP.GenerateTimeout.Unwrap())
+		}
+		httpCfg.GenerateTimeout = d
+	}
+	// Retry-After для 503 overloaded (duration, дефолт 1s).
+	if raw.HTTP.RetryAfter.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.HTTP.RetryAfter.Unwrap())
+		if err != nil {
+			return nil, fmt.Errorf("composition: http.retry-after: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("composition: http.retry-after: negative duration %q", raw.HTTP.RetryAfter.Unwrap())
+		}
+		httpCfg.RetryAfter = d
+	}
+	httpCfg.Normalize() // применяем умолчания (статус 404, cache-control и т.д.)
+	if err := httpCfg.Validate(); err != nil {
+		return nil, fmt.Errorf("composition: http: %w", err)
+	}
+
+	// Хранилища.
+	source, err := raw.Source.toRemoteStorageConfig()
+	if err != nil {
+		return nil, fmt.Errorf("composition: source: %w", err)
+	}
+	result, err := raw.Result.toRemoteStorageConfig()
+	if err != nil {
+		return nil, fmt.Errorf("composition: result: %w", err)
+	}
+	if err := validateStorageConfig(source, "source"); err != nil {
+		return nil, err
+	}
+	if err := validateStorageConfig(result, "result"); err != nil {
+		return nil, err
+	}
+
+	// FS-каталоги.
+	sourceDir := raw.Source.Path.Unwrap()
+	if sourceDir == "" {
+		sourceDir = "./data/source"
+	}
+	resultDir := raw.Result.Path.Unwrap()
+	if resultDir == "" {
+		resultDir = "./data/result"
+	}
+
+	// HTTP-сервер.
+	server, err := raw.Server.build()
+	if err != nil {
+		return nil, fmt.Errorf("composition: server: %w", err)
+	}
+	if server.MaxBodyBytes < 0 {
+		return nil, fmt.Errorf("composition: server.max-body-bytes: negative value %d", server.MaxBodyBytes)
+	}
+	if server.MaxBodyBytes == 0 {
+		server.MaxBodyBytes = httpapi.DefaultMaxBodyBytes
+	}
+
+	// Libvips.
+	lv, err := raw.Libvips.build()
+	if err != nil {
+		return nil, fmt.Errorf("composition: libvips: %w", err)
+	}
+
+	// Единая секция encoders: сборка в libvips.EncodersConfig (валидация по
+	// реестру domain/encoding). Эффективные параметры каждого экспорта
+	// разрешаются через domain/encoding.Resolve в exportImage:
+	// preset override > encoders yaml > автомаппинг от quality > дефолт.
+	enc, err := buildEncoders(raw.Encoders)
+	if err != nil {
+		return nil, fmt.Errorf("composition: encoders: %w", err)
+	}
+	lv.EncodersConfig = enc
+
+	// Детектор лиц/объектов (face-crop/object-crop).
+	det, err := raw.Detection.build()
+	if err != nil {
+		return nil, fmt.Errorf("composition: detection: %w", err)
+	}
+
+	// Прикладные лимиты.
+	limits, err := buildApplicationLimits(raw.Application.Limits)
+	if err != nil {
+		return nil, err
+	}
+	if raw.Application.BufferMaxBytes.Unwrap() < 0 {
+		return nil, fmt.Errorf("composition: application.buffer-max-bytes: negative value %d", raw.Application.BufferMaxBytes.Unwrap())
+	}
+	bufferMaxBytes := raw.Application.BufferMaxBytes.Unwrap()
+	if bufferMaxBytes == 0 {
+		bufferMaxBytes = DefaultBufferMaxBytes
+	}
+
+	// Таймаут ожидания владельца keyed singleflight (защита от "зависших"
+	// владельцев генерации). 0 = отключено (вечное ожидание до ctx waiter'а);
+	// отрицательное значение — fail-fast ошибка старта.
+	singleflightWaitTimeout := DefaultSingleflightWaitTimeout
+	if raw.Application.SingleflightWaitTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(raw.Application.SingleflightWaitTimeout.Unwrap())
+		if err != nil {
+			return nil, fmt.Errorf("composition: application.singleflight-wait-timeout: %w", err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("composition: application.singleflight-wait-timeout: negative duration %q", raw.Application.SingleflightWaitTimeout.Unwrap())
+		}
+		singleflightWaitTimeout = d
+	}
+
+	logLevel := raw.Observability.LogLevel.Unwrap()
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
+	// Metadata: sidecar-кэш моделей и largest_ai_asset.
+	// Дефолт enabled = true. metadata.dir — ЯВНЫЙ локальный корень
+	// sidecar-хранилища (НЕЗАВИСИМ от хранилищ source/result); пусто =
+	// дефолт `<эффективный локальный result-каталог>` (без подкаталога
+	// .meta) — применяется на уровне DI (app.go).
+	metadataEnabled := true
+	if raw.Metadata.Enabled.Set {
+		metadataEnabled = raw.Metadata.Enabled.Value.Unwrap()
+	}
+	metadataDir := raw.Metadata.Dir.Unwrap()
+
+	return &RuntimeConfig{
+		Pipeline:                cfg,
+		HTTP:                    httpCfg,
+		Server:                  server,
+		Admin:                   httpCfg.Admin,
+		SourceDir:               sourceDir,
+		ResultDir:               resultDir,
+		Source:                  source,
+		Result:                  result,
+		Libvips:                 lv,
+		Encoders:                enc,
+		Detection:               det,
+		MetadataEnabled:         metadataEnabled,
+		MetadataDir:             metadataDir,
+		Limits:                  limits,
+		BufferMaxBytes:          bufferMaxBytes,
+		SingleflightWaitTimeout: singleflightWaitTimeout,
+		LogLevel:                logLevel,
+	}, nil
+}
+
+// buildApplicationLimits валидирует и собирает application-level лимиты из
+// YAML-представления. Все значения должны быть неотрицательными (fail-fast).
+func buildApplicationLimits(raw ApplicationLimitsYAML) (generatev2.Limits, error) {
+	if raw.SourceBytes.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.source-bytes: negative value %d", raw.SourceBytes.Unwrap())
+	}
+	if raw.OutputBytes.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.output-bytes: negative value %d", raw.OutputBytes.Unwrap())
+	}
+	if raw.Pixels.Unwrap() < 0 {
+		return generatev2.Limits{}, fmt.Errorf("composition: application.limits.pixels: negative value %d", raw.Pixels.Unwrap())
+	}
+	return generatev2.Limits{
+		SourceBytes: raw.SourceBytes.Unwrap(),
+		OutputBytes: raw.OutputBytes.Unwrap(),
+		Pixels:      raw.Pixels.Unwrap(),
+		Width:       raw.Width.Unwrap(),
+		Height:      raw.Height.Unwrap(),
+		DPR:         raw.DPR.Unwrap(),
+		Frames:      raw.Frames.Unwrap(),
+		Duration:    raw.Duration.Unwrap(),
+		Concurrency: raw.Concurrency.Unwrap(),
+	}, nil
+}
+
+// buildEncoders собирает libvips.EncodersConfig из YAML-представления секции
+// encoders. Каждый параметр валидируется по реестру domain/encoding:
+// nil/не задано = «не задано» (ок), значение вне диапазона реестра —
+// fail-fast ошибка старта. Неизвестные ключи отсекаются строгим
+// декодированием (KnownFields) на уровне ParseRuntimeConfig.
+func buildEncoders(raw EncodersYAML) (libvips.EncodersConfig, error) {
+	formatSet := map[encoding.Format]bool{
+		encoding.FormatJPEG: true, encoding.FormatWebP: true,
+		encoding.FormatAVIF: true, encoding.FormatHEIF: true,
+		encoding.FormatJXL: true, encoding.FormatPNG: true,
+		encoding.FormatAPNG: true, encoding.FormatGIF: true,
+	}
+
+	dq := int(raw.DefaultQuality.Unwrap())
+	if dq == 0 {
+		dq = 80
+	}
+	if dq < 1 || dq > 100 {
+		return libvips.EncodersConfig{}, fmt.Errorf("default-quality: must be in [1,100], got %d", dq)
+	}
+	cfg := libvips.EncodersConfig{
+		DefaultQuality: dq,
+		Formats:        map[string]libvips.FormatEncodersConfig{},
+	}
+	// JPEG.
+	if err := addEncoderGroup(cfg, encoding.FormatJPEG, libvips.FormatEncodersConfig{
+		Quality:     raw.JPEG.Quality,
+		Progressive: raw.JPEG.Progressive,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// WebP.
+	if err := addEncoderGroup(cfg, encoding.FormatWebP, libvips.FormatEncodersConfig{
+		Quality:         raw.WebP.Quality,
+		ReductionEffort: raw.WebP.ReductionEffort,
+		Lossless:        raw.WebP.Lossless,
+		NearLossless:    raw.WebP.NearLossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// AVIF.
+	if err := addEncoderGroup(cfg, encoding.FormatAVIF, libvips.FormatEncodersConfig{
+		Quality:  raw.AVIF.Quality,
+		Speed:    raw.AVIF.Speed,
+		Lossless: raw.AVIF.Lossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// HEIF.
+	if err := addEncoderGroup(cfg, encoding.FormatHEIF, libvips.FormatEncodersConfig{
+		Quality: raw.HEIF.Quality,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// JXL.
+	if err := addEncoderGroup(cfg, encoding.FormatJXL, libvips.FormatEncodersConfig{
+		Quality:  raw.JXL.Quality,
+		Effort:   raw.JXL.Effort,
+		Lossless: raw.JXL.Lossless,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// PNG.
+	if err := addEncoderGroup(cfg, encoding.FormatPNG, libvips.FormatEncodersConfig{
+		Quality:          raw.PNG.Quality,
+		CompressionLevel: raw.PNG.CompressionLevel,
+		Interlace:        raw.PNG.Interlace,
+		Palette:          raw.PNG.Palette,
+		PaletteColors:    raw.PNG.PaletteColors,
+		PaletteBitDepth:  raw.PNG.PaletteBitDepth,
+		Dither:           raw.PNG.Dither,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// APNG.
+	if err := addEncoderGroup(cfg, encoding.FormatAPNG, libvips.FormatEncodersConfig{
+		CompressionLevel: raw.APNG.CompressionLevel,
+		Interlace:        raw.APNG.Interlace,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	// GIF.
+	if err := addEncoderGroup(cfg, encoding.FormatGIF, libvips.FormatEncodersConfig{
+		Effort:   raw.GIF.Effort,
+		BitDepth: raw.GIF.BitDepth,
+		Dither:   raw.GIF.Dither,
+	}, formatSet); err != nil {
+		return libvips.EncodersConfig{}, err
+	}
+	return cfg, nil
+}
+
+// addEncoderGroup валидирует параметры формата по реестру domain/encoding и
+// кладёт их в cfg.Formats. Неизвестный для реестра параметр — ошибка.
+func addEncoderGroup(cfg libvips.EncodersConfig, format encoding.Format, meta libvips.FormatEncodersConfig, formatSet map[encoding.Format]bool) error {
+	if !formatSet[format] {
+		return fmt.Errorf("encoders: unknown format %q", format)
+	}
+	def, ok := encoding.LookupFormat(format.String())
+	if !ok {
+		return fmt.Errorf("encoders.%s: unknown format in domain/encoding registry", format)
+	}
+	// Итерация по заданным полям: каждый параметр должен принадлежать формату
+	// в domain/encoding, а значение — лежать в диапазоне реестра.
+	for _, p := range []struct {
+		name string
+		get  func() (float64, bool)
+	}{
+		{"quality", func() (float64, bool) { return ptrInt(meta.Quality) }},
+		{"progressive", func() (float64, bool) { return ptrBool(meta.Progressive) }},
+		{"reduction-effort", func() (float64, bool) { return ptrInt(meta.ReductionEffort) }},
+		{"lossless", func() (float64, bool) { return ptrBool(meta.Lossless) }},
+		{"near-lossless", func() (float64, bool) { return ptrBool(meta.NearLossless) }},
+		{"speed", func() (float64, bool) { return ptrInt(meta.Speed) }},
+		{"effort", func() (float64, bool) { return ptrInt(meta.Effort) }},
+		{"compression-level", func() (float64, bool) { return ptrInt(meta.CompressionLevel) }},
+		{"interlace", func() (float64, bool) { return ptrBool(meta.Interlace) }},
+		{"palette", func() (float64, bool) { return ptrBool(meta.Palette) }},
+		{"palette-colors", func() (float64, bool) { return ptrInt(meta.PaletteColors) }},
+		{"palette-bit-depth", func() (float64, bool) { return ptrInt(meta.PaletteBitDepth) }},
+		{"dither", func() (float64, bool) { return ptrFloat(meta.Dither) }},
+		{"bit-depth", func() (float64, bool) { return ptrInt(meta.BitDepth) }},
+	} {
+		v, set := p.get()
+		if !set {
+			continue
+		}
+		pm, ok := def.Param(p.name)
+		if !ok {
+			return fmt.Errorf("encoders.%s.%s: parameter %q is not defined in domain/encoding registry for format %q", format, p.name, p.name, format)
+		}
+		// Для KindBool диапазон реестра не используется (0/0): проверяем
+		// только признак принадлежности параметра формату (см. выше).
+		if pm.Kind != encoding.KindBool && (v < pm.Min || v > pm.Max) {
+			return fmt.Errorf("encoders.%s.%s: must be in [%v,%v], got %v", format, p.name, pm.Min, pm.Max, v)
+		}
+	}
+	cfg.Formats[format.String()] = meta
+	return nil
+}
+
+// ptrInt/ptrBool/ptrFloat — разыменование указателей в (значение, задано).
+func ptrInt(v *int) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	return float64(*v), true
+}
+func ptrBool(v *bool) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	if *v {
+		return 1, true
+	}
+	return 0, true
+}
+func ptrFloat(v *float64) (float64, bool) {
+	if v == nil {
+		return 0, false
+	}
+	return *v, true
+}
+
+// toRemoteStorageConfig конвертирует YAML-конфигурацию в RemoteStorageConfig.
+func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
+	if s.SpoolMaxBytes.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("spool-max-bytes: negative value %d", s.SpoolMaxBytes.Unwrap())
+	}
+	// Секреты S3 могут задаваться через переменные окружения
+	// (IMAGER_S3_ACCESS_KEY / IMAGER_S3_SECRET_KEY), чтобы не хранить их
+	// открытым текстом в конфиге. Значение из YAML имеет приоритет.
+	accessKey := s.AccessKey.Unwrap()
+	if accessKey == "" {
+		accessKey = os.Getenv("IMAGER_S3_ACCESS_KEY")
+	}
+	secretKey := s.SecretKey.Unwrap()
+	if secretKey == "" {
+		secretKey = os.Getenv("IMAGER_S3_SECRET_KEY")
+	}
+	cfg := RemoteStorageConfig{
+		Kind:               StorageKind(s.Storage.Unwrap()),
+		Path:               s.Path.Unwrap(),
+		BaseURL:            s.BaseURL.Unwrap(),
+		Bucket:             s.Bucket.Unwrap(),
+		Prefix:             s.Prefix.Unwrap(),
+		Endpoint:           s.Endpoint.Unwrap(),
+		Region:             s.Region.Unwrap(),
+		AccessKey:          accessKey,
+		SecretKey:          secretKey,
+		Addr:               s.Addr.Unwrap(),
+		User:               s.User.Unwrap(),
+		Password:           s.Password.Unwrap(),
+		Root:               s.Root.Unwrap(),
+		TLS:                s.TLS.Unwrap(),
+		TLSVerify:          true,
+		HostKeyFingerprint: s.HostKeyFingerprint.Unwrap(),
+		SpoolDir:           s.SpoolDir.Unwrap(),
+		SpoolMaxBytes:      s.SpoolMaxBytes.Unwrap(),
+		Conn: remote.ConnOptions{
+			DialTimeout: 30 * time.Second,
+		},
+	}
+	if s.TLSVerify.Set {
+		cfg.TLSVerify = s.TLSVerify.Value.Unwrap()
+	}
+	if s.DialTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.DialTimeout.Unwrap())
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("dial-timeout: negative duration %q", s.DialTimeout.Unwrap())
+		}
+		cfg.Conn.DialTimeout = d
+	}
+	// Общие настройки HTTP-подобных хранилищ (S3, HTTP): таймауты, retry,
+	// пул соединений, кэш метаданных. Для SFTP/FTP/FTPS применяется только
+	// dial-timeout (см. выше).
+	if s.ReadTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.ReadTimeout.Unwrap())
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("read-timeout: negative duration %q", s.ReadTimeout.Unwrap())
+		}
+		cfg.Conn.ReadTimeout = d
+	}
+	if s.IdleConnTimeout.Unwrap() != "" {
+		d, err := time.ParseDuration(s.IdleConnTimeout.Unwrap())
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("idle-conn-timeout: negative duration %q", s.IdleConnTimeout.Unwrap())
+		}
+		cfg.Conn.IdleConnTimeout = d
+	}
+	if s.MetadataTTL.Unwrap() != "" {
+		d, err := time.ParseDuration(s.MetadataTTL.Unwrap())
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: %w", err)
+		}
+		if d < 0 {
+			return RemoteStorageConfig{}, fmt.Errorf("metadata-ttl: negative duration %q", s.MetadataTTL.Unwrap())
+		}
+		cfg.MetadataTTL = d
+	}
+	if s.MaxAttempts.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-attempts: negative value %d", s.MaxAttempts.Unwrap())
+	}
+	cfg.Conn.MaxAttempts = int(s.MaxAttempts.Unwrap())
+	if s.MaxIdleConns.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns: negative value %d", s.MaxIdleConns.Unwrap())
+	}
+	cfg.Conn.MaxIdleConns = int(s.MaxIdleConns.Unwrap())
+	if s.MaxConns.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-conns: negative value %d", s.MaxConns.Unwrap())
+	}
+	cfg.Conn.MaxConns = int(s.MaxConns.Unwrap())
+	if s.MaxIdleConnsPerHost.Unwrap() < 0 {
+		return RemoteStorageConfig{}, fmt.Errorf("max-idle-conns-per-host: negative value %d", s.MaxIdleConnsPerHost.Unwrap())
+	}
+	cfg.Conn.MaxIdleConnsPerHost = int(s.MaxIdleConnsPerHost.Unwrap())
+	if s.PrivateKeyFile.Unwrap() != "" {
+		data, err := os.ReadFile(s.PrivateKeyFile.Unwrap())
+		if err != nil {
+			return RemoteStorageConfig{}, fmt.Errorf("private-key-file: %w", err)
+		}
+		cfg.PrivateKey = data
+	}
+	return cfg, nil
+}
+
+// build конвертирует YAML-конфигурацию сервера в ServerConfig.
+// Пустые таймауты оставляются нулевыми — runtime применит умолчания.
+func (s ServerYAML) build() (ServerConfig, error) {
+	allowedIPs := make([]string, 0, len(s.MetricsAuth.AllowedIPs))
+	for _, ip := range s.MetricsAuth.AllowedIPs {
+		allowedIPs = append(allowedIPs, ip.Unwrap())
+	}
+	cfg := ServerConfig{
+		Addr:           s.Addr.Unwrap(),
+		MaxHeaderBytes: int(s.MaxHeaderBytes.Unwrap()),
+		MetricsAuth: httpapi.MetricsAuthConfig{
+			Token:      s.MetricsAuth.Token.Unwrap(),
+			AllowedIPs: allowedIPs,
+		},
+	}
+	parse := func(name, val string) error {
+		if val == "" {
+			return nil
+		}
+		d, err := time.ParseDuration(val)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		if d < 0 {
+			return fmt.Errorf("%s: negative duration %q", name, val)
+		}
+		switch name {
+		case "read-header-timeout":
+			cfg.ReadHeaderTimeout = d
+		case "read-timeout":
+			cfg.ReadTimeout = d
+		case "write-timeout":
+			cfg.WriteTimeout = d
+		case "idle-timeout":
+			cfg.IdleTimeout = d
+		case "shutdown-timeout":
+			cfg.ShutdownTimeout = d
+		}
+		return nil
+	}
+	for _, p := range []struct{ name, val string }{
+		{"read-header-timeout", s.ReadHeaderTimeout.Unwrap()},
+		{"read-timeout", s.ReadTimeout.Unwrap()},
+		{"write-timeout", s.WriteTimeout.Unwrap()},
+		{"idle-timeout", s.IdleTimeout.Unwrap()},
+		{"shutdown-timeout", s.ShutdownTimeout.Unwrap()},
+	} {
+		if err := parse(p.name, p.val); err != nil {
+			return ServerConfig{}, err
+		}
+	}
+	return cfg, nil
+}
+
+// build конвертирует YAML-конфигурацию libvips в LibvipsConfig.
+func (l LibvipsYAML) build() (LibvipsConfig, error) {
+	cfg := LibvipsConfig{
+		Limits: libvips.Limits{
+			SourceBytes:   l.Limits.SourceBytes.Unwrap(),
+			OutputBytes:   l.Limits.OutputBytes.Unwrap(),
+			Concurrency:   int(l.Limits.Concurrency.Unwrap()),
+			Threads:       int(l.Limits.Threads.Unwrap()),
+			MaxCacheMem:   int(l.Limits.MaxCacheMem.Unwrap()),
+			MaxCacheFiles: int(l.Limits.MaxCacheFiles.Unwrap()),
+			MaxCacheSize:  int(l.Limits.MaxCacheSize.Unwrap()),
+		},
+	}
+	// Fail-fast: отрицательные значения лимитов отключают лимиты в govips
+	// (значение < 0 = default govips) — запрещаем их, чтобы конфигурация
+	// была предсказуемой и безопасной.
+	for _, v := range []struct {
+		name string
+		val  int64
+	}{
+		{"limits.threads", l.Limits.Threads.Unwrap()},
+		{"limits.max-cache-mem", l.Limits.MaxCacheMem.Unwrap()},
+		{"limits.max-cache-files", l.Limits.MaxCacheFiles.Unwrap()},
+		{"limits.max-cache-size", l.Limits.MaxCacheSize.Unwrap()},
+		{"limits.source-bytes", l.Limits.SourceBytes.Unwrap()},
+		{"limits.output-bytes", l.Limits.OutputBytes.Unwrap()},
+	} {
+		if v.val < 0 {
+			return LibvipsConfig{}, fmt.Errorf("%s: negative value %d", v.name, v.val)
+		}
+	}
+	if l.Limits.Timeout.Unwrap() != "" {
+		d, err := time.ParseDuration(l.Limits.Timeout.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("limits.timeout: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("limits.timeout: negative duration %q", l.Limits.Timeout.Unwrap())
+		}
+		cfg.Limits.Timeout = d
+	}
+	// Shrink-on-load: nil (ключ не задан) = включено по умолчанию.
+	if l.ShrinkOnLoad.Enabled.Set {
+		cfg.ShrinkOnLoad = libvips.NewShrinkOnLoadOpts(l.ShrinkOnLoad.Enabled.Value.Unwrap(), true)
+	}
+	// Кэш ватермарок: fail-fast валидация значений на старте.
+	wc := libvips.WatermarkCacheOpts{Enabled: true}
+	if l.WatermarkCache.Enabled.Set {
+		wc.Enabled = l.WatermarkCache.Enabled.Value.Unwrap()
+	}
+	wc.MaxFiles = int(l.WatermarkCache.MaxFiles.Unwrap())
+	wc.MaxBytes = l.WatermarkCache.MaxBytes.Unwrap()
+	if l.WatermarkCache.TTL.Unwrap() != "" {
+		d, err := time.ParseDuration(l.WatermarkCache.TTL.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("watermark-cache.ttl: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("watermark-cache.ttl: negative duration %q", l.WatermarkCache.TTL.Unwrap())
+		}
+		wc.TTL = d
+	}
+	if err := wc.Validate(); err != nil {
+		return LibvipsConfig{}, fmt.Errorf("watermark-cache: %w", err)
+	}
+	cfg.WatermarkCache = wc
+	// Detection-семофор: fail-fast валидация значений на старте.
+	ds := libvips.DetectionSemaphoreOpts{
+		Concurrency: int(l.DetectionSem.Concurrency.Unwrap()),
+	}
+	if l.DetectionSem.MaxWait.Unwrap() != "" {
+		d, err := time.ParseDuration(l.DetectionSem.MaxWait.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("detection.max-wait: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("detection.max-wait: negative duration %q", l.DetectionSem.MaxWait.Unwrap())
+		}
+		ds.MaxWait = d
+	}
+	if err := ds.Validate(); err != nil {
+		return LibvipsConfig{}, fmt.Errorf("detection: %w", err)
+	}
+	cfg.DetectionSem = ds
+	// Цветовой менеджмент: строгая политика mode (strip/transform/
+	// keep). Empty = strip (дефолт); неизвестное значение — fail-fast
+	// ошибка конфигурации.
+	colorMode, err := libvips.ParseColorMode(l.Color.Mode.Unwrap())
+	if err != nil {
+		return LibvipsConfig{}, fmt.Errorf("color: %w", err)
+	}
+	cfg.Color = colorMode
+	// Operation cache: nil (ключ не задан) = включено по умолчанию.
+	if l.OperationCache.Enabled.Set {
+		cfg.OperationCache = libvips.NewOperationCacheOpts(l.OperationCache.Enabled.Value.Unwrap(), true)
+	}
+	// Интервал сбора vips-метрик.
+	if l.MetricsInterval.Unwrap() != "" {
+		d, err := time.ParseDuration(l.MetricsInterval.Unwrap())
+		if err != nil {
+			return LibvipsConfig{}, fmt.Errorf("metrics-interval: %w", err)
+		}
+		if d < 0 {
+			return LibvipsConfig{}, fmt.Errorf("metrics-interval: negative duration %q", l.MetricsInterval.Unwrap())
+		}
+		cfg.VipsMetricsInterval = d
+	}
+	return cfg, nil
+}
+
+// build конвертирует YAML-конфигурацию детектора в DetectionConfig с
+// валидацией (fail-fast). Значения по умолчанию: confidence-threshold = 0.5,
+// max-objects = 5, margin = 0.1. Пустые пути к моделям допустимы (детектор
+// просто отключён).
+func (d DetectionYAML) build() (DetectionConfig, error) {
+	cfg := DetectionConfig{
+		FaceModel:           d.FaceModel.Unwrap(),
+		ObjectModel:         d.ObjectModel.Unwrap(),
+		OnnxRuntimeLib:      d.OnnxRuntimeLib.Unwrap(),
+		ConfidenceThreshold: 0.5,
+		MaxObjects:          5,
+		Margin:              0.1,
+	}
+	// Fallback по env IMAGER_MODELS_DIR: если путь к модели в YAML не задан,
+	// строим его как <IMAGER_MODELS_DIR>/<имя_файла>. Явный YAML-путь имеет
+	// приоритет. Это позволяет задать только каталог (например в compose) и
+	// не хардкодить имена файлов в конфиге.
+	if mdir := os.Getenv(ModelsDirEnv); mdir != "" {
+		if cfg.FaceModel == "" {
+			cfg.FaceModel = filepath.Join(mdir, "face_detection_yunet_2023mar.onnx")
+		}
+		if cfg.ObjectModel == "" {
+			cfg.ObjectModel = filepath.Join(mdir, "ssd_mobilenet_v1_12.onnx")
+		}
+	}
+	// Set = false (ключ не задан) → дефолт. Явное значение (включая 0)
+	// валидируется.
+	if d.ConfidenceThreshold.Set {
+		cfg.ConfidenceThreshold = d.ConfidenceThreshold.Value.Unwrap()
+	}
+	if d.MaxObjects.Set {
+		cfg.MaxObjects = int(d.MaxObjects.Value.Unwrap())
+	}
+	if d.Margin.Set {
+		cfg.Margin = d.Margin.Value.Unwrap()
+	}
+	if cfg.ConfidenceThreshold < 0 || cfg.ConfidenceThreshold > 1 {
+		return DetectionConfig{}, fmt.Errorf("confidence-threshold: must be in [0,1], got %v", cfg.ConfidenceThreshold)
+	}
+	if cfg.MaxObjects <= 0 {
+		return DetectionConfig{}, fmt.Errorf("max-objects: must be > 0, got %d", cfg.MaxObjects)
+	}
+	if cfg.Margin < 0 {
+		return DetectionConfig{}, fmt.Errorf("margin: must be >= 0, got %v", cfg.Margin)
+	}
+	return cfg, nil
+}
+
+// validateStorageConfig проверяет обязательные поля хранилища в зависимости
+// от типа. FS и пустой Kind валидации не требуют.
+func validateStorageConfig(cfg RemoteStorageConfig, role string) error {
+	if cfg.Kind == "" || cfg.Kind == StorageFS {
+		return nil
+	}
+	switch cfg.Kind {
+	case StorageS3:
+		if cfg.Bucket == "" {
+			return fmt.Errorf("composition: %s storage: s3 bucket is required", role)
+		}
+		if (cfg.AccessKey == "") != (cfg.SecretKey == "") {
+			return fmt.Errorf("composition: %s storage: s3 access-key and secret-key must be set together", role)
+		}
+	case StorageSFTP:
+		if cfg.Addr == "" || cfg.User == "" {
+			return fmt.Errorf("composition: %s storage: sftp addr and user are required", role)
+		}
+		if cfg.HostKeyFingerprint == "" {
+			return fmt.Errorf("composition: %s storage: sftp host-key-fingerprint is required (SHA256:...)", role)
+		}
+	case StorageFTP, StorageFTPS:
+		if cfg.Addr == "" {
+			return fmt.Errorf("composition: %s storage: %s addr is required", role, cfg.Kind)
+		}
+		if cfg.Kind == StorageFTPS && !cfg.TLSVerify {
+			return fmt.Errorf("composition: %s storage: ftps tls-verify=false is forbidden; set tls-verify: true", role)
+		}
+	case StorageHTTP:
+		if cfg.BaseURL == "" {
+			return fmt.Errorf("composition: %s storage: http base-url is required", role)
+		}
+	}
+	return nil
+}

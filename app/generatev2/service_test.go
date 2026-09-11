@@ -1,0 +1,792 @@
+package generatev2
+
+import (
+	"context"
+	"errors"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pkg-ru/dynamic"
+	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
+	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"gitverse.ru/pkg-ru/imager/internal/testutil"
+	"gitverse.ru/pkg-ru/imager/ports/coordinator"
+	"gitverse.ru/pkg-ru/imager/ports/processor"
+)
+
+// testEnv — окружение для тестов.
+type testEnv struct {
+	svc   *Service
+	src   *testutil.MemSourceStore
+	res   *testutil.MemResultStore
+	proc  *fakeProcessor
+	coord coordinator.Keyed
+}
+
+// newTestEnv собирает Service с fake-зависимостями.
+func newTestEnv(t *testing.T, opts ...func(*Deps)) *testEnv {
+	t.Helper()
+
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
+	proc := newFakeProcessor([]byte("IMG"))
+	coord := singleflight.New(singleflight.Options{})
+
+	// Политика: "/" (fallback) с пресетом thumb. Канонические (программные)
+	// запросы разрешаются, если path-policy существует; segment-запросы
+	// разрешаются через Resolve (пресет thumb на любом пути).
+	pol, err := policy.Compile(policy.Config{
+		PathPolicies: map[string]policy.PathPolicyConfig{
+			"/": {
+				Presets: dynamic.StringSlice{dynamic.String("thumb")},
+			},
+		},
+		Presets: map[string]policy.PresetConfig{
+			"thumb": {
+				Crop:          dynamic.String("center"),
+				Width:         dynamic.Uint32(100),
+				Height:        dynamic.Uint32(100),
+				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
+			},
+		},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("policy compile: %v", err)
+	}
+	presets, err := asset.NewPresetSet([]*asset.Preset{
+		mustPreset(t, "thumb", asset.CropCenter, "100x100", "webp"),
+	})
+	if err != nil {
+		t.Fatalf("presets: %v", err)
+	}
+
+	deps := Deps{
+		Sources:     src,
+		Results:     res,
+		Coordinator: coord,
+		Processor:   proc,
+		Policy:      pol.Policy,
+		Presets:     presets,
+		Limits:      &Limits{},
+		Quality:     85,
+		Logger:      testutil.NopLogger{},
+	}
+	for _, o := range opts {
+		o(&deps)
+	}
+
+	svc, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return &testEnv{svc: svc, src: src, res: res, proc: proc, coord: coord}
+}
+
+func mustPreset(t *testing.T, name string, crop asset.Crop, size string, outFmt string) *asset.Preset {
+	t.Helper()
+	of, err := asset.NewFormat(outFmt)
+	if err != nil {
+		t.Fatalf("format: %v", err)
+	}
+	sz, err := parseSize(size)
+	if err != nil {
+		t.Fatalf("size: %v", err)
+	}
+	p, err := asset.NewPreset(name, crop, false, sz, []asset.Format{of}, 0, false, 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("preset: %v", err)
+	}
+	return p
+}
+
+func parseSize(s string) (asset.Size, error) {
+	var w, h *asset.Dimension
+	// формат "WxH"
+	var ws, hs string
+	sep := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == 'x' {
+			sep = i
+			break
+		}
+	}
+	if sep < 0 {
+		return asset.Size{}, errors.New("bad size")
+	}
+	ws, hs = s[:sep], s[sep+1:]
+	if ws != "" {
+		v, err := asset.NewDimension(atoi(ws))
+		if err != nil {
+			return asset.Size{}, err
+		}
+		w = &v
+	}
+	if hs != "" {
+		v, err := asset.NewDimension(atoi(hs))
+		if err != nil {
+			return asset.Size{}, err
+		}
+		h = &v
+	}
+	return asset.NewSize(w, h)
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// mustReq строит канонический Request.
+func mustReq(t *testing.T, path, srcName, srcFmt string, crop asset.Crop, trim bool, size string, dpr int, outFmt string) *asset.Request {
+	t.Helper()
+	sn, err := asset.NewSourceName(srcName)
+	if err != nil {
+		t.Fatalf("source name: %v", err)
+	}
+	sf, err := asset.NewFormat(srcFmt)
+	if err != nil {
+		t.Fatalf("source format: %v", err)
+	}
+	of, err := asset.NewFormat(outFmt)
+	if err != nil {
+		t.Fatalf("output format: %v", err)
+	}
+	sz, err := parseSize(size)
+	if err != nil {
+		t.Fatalf("size: %v", err)
+	}
+	d := asset.DPR(dpr)
+	r, err := asset.NewRequest(path, sn, sf, crop, trim, sz, d, of)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	return r
+}
+
+func TestGenerateCacheMissThenHit(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+
+	// Miss: генерация.
+	res1, err := env.svc.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("Generate miss: %v", err)
+	}
+	if res1.FromCache {
+		t.Fatal("expected miss on first call")
+	}
+	data1, _ := io.ReadAll(res1.Opened)
+	res1.Close()
+	if string(data1) != "IMG" {
+		t.Fatalf("result data = %q, want IMG", data1)
+	}
+	if env.proc.callCount() != 1 {
+		t.Fatalf("processor calls = %d, want 1", env.proc.callCount())
+	}
+
+	// Hit: кэш, генерация не повторяется.
+	res2, err := env.svc.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("Generate hit: %v", err)
+	}
+	if !res2.FromCache {
+		t.Fatal("expected cache hit")
+	}
+	data2, _ := io.ReadAll(res2.Opened)
+	res2.Close()
+	if string(data2) != "IMG" {
+		t.Fatalf("hit data = %q, want IMG", data2)
+	}
+	if env.proc.callCount() != 1 {
+		t.Fatalf("processor calls after hit = %d, want 1", env.proc.callCount())
+	}
+}
+
+func TestGeneratePresetResolves(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photos/photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	// Preset-запрос: photos/photo-png/thumb@2.webp
+	sn, _ := asset.NewSourceName("photo")
+	sf, _ := asset.NewFormat("png")
+	pn, _ := asset.NewSegmentName("thumb")
+	of, _ := asset.NewFormat("webp")
+	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
+	if err != nil {
+		t.Fatalf("preset request: %v", err)
+	}
+
+	res, err := env.svc.Generate(ctx, preq)
+	if err != nil {
+		t.Fatalf("Generate preset: %v", err)
+	}
+	defer res.Close()
+	// Resolve применяет настройки пресета, сохраняя segmentName: запрос
+	// остаётся preset-запросом, но уже разрешённым (IsResolved).
+	if !res.Request.IsResolved() {
+		t.Fatal("resolved request must be marked as resolved")
+	}
+	if res.Request.Size().String() != "100x100" {
+		t.Fatalf("resolved size = %s, want 100x100", res.Request.Size().String())
+	}
+}
+
+// TestGenerateKeyIsCanonicalURL проверяет, что Result.Key (и, следовательно,
+// ключ ResultStore/кэша) равен каноническому URL, а не SHA-256 хешу.
+// Resolve сохраняет segmentName, поэтому ключ — segment URL
+// (photos/photo-png/thumb@2.webp).
+func TestGenerateKeyIsCanonicalURL(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photos/photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	// Preset-запрос: photos/photo-png/thumb@2.webp.
+	sn, _ := asset.NewSourceName("photo")
+	sf, _ := asset.NewFormat("png")
+	pn, _ := asset.NewSegmentName("thumb")
+	of, _ := asset.NewFormat("webp")
+	preq, err := asset.NewPresetRequest("photos", sn, sf, pn, asset.DPR(2), of)
+	if err != nil {
+		t.Fatalf("preset request: %v", err)
+	}
+
+	res, err := env.svc.Generate(ctx, preq)
+	if err != nil {
+		t.Fatalf("Generate preset: %v", err)
+	}
+	defer res.Close()
+
+	want := object.ObjectKey("photos/photo-png/thumb@2.webp")
+	if res.Key != want {
+		t.Fatalf("Result.Key = %q, want canonical URL %q", res.Key, want)
+	}
+	if res.URL != string(want) {
+		t.Fatalf("Result.URL = %q, want %q", res.URL, want)
+	}
+
+	// Повторный запрос должен попасть в кэш по тому же каноническому ключу.
+	res2, err := env.svc.Generate(ctx, preq)
+	if err != nil {
+		t.Fatalf("Generate preset (hit): %v", err)
+	}
+	defer res2.Close()
+	if !res2.FromCache {
+		t.Fatal("expected cache hit on second preset request")
+	}
+	if res2.Key != want {
+		t.Fatalf("hit Result.Key = %q, want %q", res2.Key, want)
+	}
+}
+
+func TestGenerateForbidden(t *testing.T) {
+	// Политика без path-policy для пути "" → deny-by-default (path_not_allowed).
+	pol, err := policy.Compile(policy.Config{}, nil, nil)
+	if err != nil {
+		t.Fatalf("policy compile: %v", err)
+	}
+	env := newTestEnv(t, func(d *Deps) {
+		d.Policy = pol.Policy
+	})
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "1x1", 2, "webp")
+	_, err = env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected forbidden error")
+	}
+	wantOutcome(t, err, OutcomeForbidden)
+}
+
+func TestGenerateNotFound(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	req := mustReq(t, "", "missing", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	wantOutcome(t, err, OutcomeNotFound)
+}
+
+func TestGenerateProcessorError(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.proc.setErr(errors.New("boom"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected processing error")
+	}
+	wantOutcome(t, err, OutcomeProcessing)
+}
+
+// TestGenerateProcessorOverloaded проверяет, что перегрузка процессора
+// (processor.ErrTooManyConcurrency) маппится в OutcomeOverloaded, а не
+// OutcomeProcessing. Распознавание по identity (errors.Is), а не по тексту:
+// переименование сообщения sentinel-ошибки не ломает маппинг.
+func TestGenerateProcessorOverloaded(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.proc.setErr(processor.ErrTooManyConcurrency)
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected overloaded error")
+	}
+	wantOutcome(t, err, OutcomeOverloaded)
+}
+
+// TestGenerateProcessorOverloadedDetection проверяет, что перегрузка
+// detection-семафора (processor.ErrTooManyDetectionConcurrency) также
+// маппится в OutcomeOverloaded.
+func TestGenerateProcessorOverloadedDetection(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.proc.setErr(processor.ErrTooManyDetectionConcurrency)
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected overloaded error")
+	}
+	wantOutcome(t, err, OutcomeOverloaded)
+}
+
+// TestGenerateProcessorOverloadedNotByText проверяет, что ошибка с похожим
+// текстом, но ДРУГИМ identity НЕ маппится в OutcomeOverloaded (защита от
+// хрупкого сопоставления по строке).
+func TestGenerateProcessorOverloadedNotByText(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.proc.setErr(errors.New("libvips: too many concurrent requests waiting for a slot"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected processing error")
+	}
+	wantOutcome(t, err, OutcomeProcessing)
+}
+
+func TestGeneratePublishError(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.res.SetPubErr(object.ErrUnavailable)
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected unavailable error")
+	}
+	wantOutcome(t, err, OutcomeUnavailable)
+}
+
+func TestGenerateOutputLimit(t *testing.T) {
+	env := newTestEnv(t, func(d *Deps) {
+		d.Limits = &Limits{OutputBytes: 2} // payload "IMG" = 3 байта > 2
+	})
+	env.src.Add("photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected quota error")
+	}
+	wantOutcome(t, err, OutcomeQuota)
+}
+
+func TestGenerateQuotaOnPublish(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+	env.res.SetPubErr(object.ErrQuota)
+
+	ctx := context.Background()
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "webp")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected quota error")
+	}
+	wantOutcome(t, err, OutcomeQuota)
+}
+
+func TestGenerateInvalidPlan(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+
+	ctx := context.Background()
+	// Неподдерживаемый выходной формат → invalid.
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 2, "tiff")
+	_, err := env.svc.Generate(ctx, req)
+	if err == nil {
+		t.Fatal("expected invalid error")
+	}
+	wantOutcome(t, err, OutcomeInvalid)
+}
+
+func TestGenerateNilRequest(t *testing.T) {
+	env := newTestEnv(t)
+	_, err := env.svc.Generate(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected invalid error")
+	}
+	wantOutcome(t, err, OutcomeInvalid)
+}
+
+// TestBuildPlanDetectionCrops проверяет маппинг детекторных режимов кропа
+// (smart/face/object) в операции обработки внутри buildPlan.
+func TestBuildPlanDetectionCrops(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		crop asset.Crop
+		want processing.Operation
+	}{
+		{asset.CropSmart, processing.OpSmartCrop},
+		{asset.CropFace, processing.OpFaceCrop},
+		{asset.CropObject, processing.OpObjectCrop},
+	}
+	for _, c := range cases {
+		t.Run(string(c.crop), func(t *testing.T) {
+			req := mustReq(t, "", "photo", "png", c.crop, false, "100x100", 1, "webp")
+			plan, err := env.svc.buildPlan(req)
+			if err != nil {
+				t.Fatalf("buildPlan(%q) error: %v", c.crop, err)
+			}
+			if plan.Operation != c.want {
+				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.crop, plan.Operation, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildPlanEncodingOverrides проверяет проброс native-параметров
+// кодирования из Request (заполняются при разрешении пресета/custom) в
+// ProcessingPlan.EncodingOverrides, а также что скалярный quality из Deps
+// используется, когда в запросе quality == 0 (default-quality семантика).
+func TestBuildPlanEncodingOverrides(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
+	over := map[string]map[string]any{
+		"webp": {"quality": 90, "reduction-effort": 6},
+		"png":  {"compression-level": 9},
+	}
+	// quality == 0 → default-quality (Deps.Quality = 85); overrides
+	// прокидываются как есть (валидация — на уровне построения плана).
+	req = req.WithProcessingOptions(0, 0, 0, nil, nil, over)
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Quality != env.svc.deps.Quality {
+		t.Errorf("plan.Quality = %d, want default %d", plan.Quality, env.svc.deps.Quality)
+	}
+	if got := plan.EncodingOverrides["webp"]["quality"]; got != 90 {
+		t.Errorf("EncodingOverrides webp quality = %v, want 90", got)
+	}
+	if got := plan.EncodingOverrides["webp"]["reduction-effort"]; got != 6 {
+		t.Errorf("EncodingOverrides webp reduction-effort = %v, want 6", got)
+	}
+	if got := plan.EncodingOverrides["png"]["compression-level"]; got != 9 {
+		t.Errorf("EncodingOverrides png compression-level = %v, want 9", got)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("plan.Validate error: %v", err)
+	}
+}
+
+// TestBuildPlanOrientationDefault проверяет, что buildPlan проставляет
+// глобальный дефолт ориентации, когда запрос не имеет своей.
+func TestBuildPlanOrientationDefault(t *testing.T) {
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	env := newTestEnv(t, func(d *Deps) {
+		d.DefaultOrientation = def
+	})
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if plan.Orientation != def {
+		t.Errorf("plan.Orientation = %v, want %v", plan.Orientation, def)
+	}
+}
+
+// TestBuildPlanOrientationPresetPriority проверяет, что ориентация пресета
+// имеет приоритет над глобальным дефолтом.
+func TestBuildPlanOrientationPresetPriority(t *testing.T) {
+	presetOr := &processing.OrientationSpec{AutoOrient: false, Rotate: processing.Rotation270, Flip: processing.FlipVertical}
+	presets, err := asset.NewPresetSet([]*asset.Preset{
+		mustPreset(t, "thumb", asset.CropCenter, "100x100", "webp").WithOrientation(presetOr),
+	})
+	if err != nil {
+		t.Fatalf("presets: %v", err)
+	}
+	def := &processing.OrientationSpec{AutoOrient: true, Rotate: processing.Rotation90, Flip: processing.FlipHorizontal}
+	env := newTestEnv(t, func(d *Deps) {
+		d.Presets = presets
+		d.DefaultOrientation = def
+	})
+	// Разрешаем preset URL в канонический запрос (ориентация пресета
+	// переносится в запрос через Resolve).
+	req, err := asset.Parse("/photos/photo-1-jpg/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	resolved, err := presets.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	plan, err := env.svc.buildPlan(resolved)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if plan.Orientation != presetOr {
+		t.Errorf("plan.Orientation = %v, want preset orientation %v", plan.Orientation, presetOr)
+	}
+}
+
+// TestBuildPlanOrientationFallbackDefault проверяет, что при отсутствии
+// настроек buildPlan использует {AutoOrient: true}.
+func TestBuildPlanOrientationFallbackDefault(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Orientation == nil {
+		t.Fatal("expected orientation in plan")
+	}
+	if !plan.Orientation.AutoOrient || plan.Orientation.Rotate != processing.RotationNone || plan.Orientation.Flip != processing.FlipNone {
+		t.Errorf("plan.Orientation = %v, want auto-orient on, no rotate, no flip", plan.Orientation)
+	}
+}
+
+// TestBuildPlanTrimDetectionCrops проверяет комбинацию независимых сущностей
+// (режим кропа + trim=true): trim — независимый булев фильтр, а не отдельная
+// операция. Операция плана — только режим кропа, trim выделяется в plan.Trim
+// (применяется первым).
+func TestBuildPlanTrimDetectionCrops(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		crop asset.Crop
+		op   processing.Operation
+	}{
+		{asset.CropSmart, processing.OpSmartCrop},
+		{asset.CropFace, processing.OpFaceCrop},
+		{asset.CropObject, processing.OpObjectCrop},
+	}
+	for _, c := range cases {
+		t.Run(string(c.crop), func(t *testing.T) {
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", c.crop, true, "100x100", 1, "webp"))
+			if err != nil {
+				t.Fatalf("buildPlan(%q) error: %v", c.crop, err)
+			}
+			if plan.Operation != c.op {
+				t.Errorf("buildPlan(%q).Operation = %q, want %q", c.crop, plan.Operation, c.op)
+			}
+			if !plan.Trim {
+				t.Errorf("buildPlan(%q).Trim = false, want true", c.crop)
+			}
+		})
+	}
+}
+
+// TestBuildPlanCropSingleDimensionDowngradesToResize проверяет, что для
+// размеров с ОДНИМ измерением (x200/200x — вторая сторона вычисляется
+// пропорционально) кроп невозможен: операция понижается до resize. Trim
+// при этом сохраняется.
+func TestBuildPlanCropSingleDimensionDowngradesToResize(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		name string
+		crop asset.Crop
+		size string
+		trim bool
+	}{
+		{"crop height-only", asset.CropCenter, "x200", false},
+		{"crop width-only", asset.CropCenter, "200x", false},
+		{"smart-crop height-only", asset.CropSmart, "x200", false},
+		{"face-crop width-only", asset.CropFace, "200x", false},
+		{"object-crop height-only", asset.CropObject, "x200", false},
+		{"crop-trim height-only keeps trim", asset.CropCenter, "x200", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", c.crop, c.trim, c.size, 1, "webp"))
+			if err != nil {
+				t.Fatalf("buildPlan(%q, %q) error: %v", c.crop, c.size, err)
+			}
+			if plan.Operation != processing.OpResize {
+				t.Errorf("buildPlan(%q, %q).Operation = %q, want %q (crop impossible for single-dimension size)",
+					c.crop, c.size, plan.Operation, processing.OpResize)
+			}
+			if plan.Trim != c.trim {
+				t.Errorf("buildPlan(%q, %q).Trim = %v, want %v", c.crop, c.size, plan.Trim, c.trim)
+			}
+		})
+	}
+}
+
+// TestBuildPlanCropBothDimensionsKept проверяет, что для размеров с ОБОИМИ
+// измерениями (200x200) кроп сохраняется.
+func TestBuildPlanCropBothDimensionsKept(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "200x200", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Operation != processing.OpCrop {
+		t.Errorf("plan.Operation = %q, want %q", plan.Operation, processing.OpCrop)
+	}
+}
+
+// TestBuildPlanDPRMultiplication проверяет, что итоговый размер плана =
+// базовый размер × dpr: умножение происходит ВНУТРИ (base*dpr), а НЕ
+// пред-умножением в конфиге. Для 100x100 с dpr: 2 план даёт 200x200.
+func TestBuildPlanDPRMultiplication(t *testing.T) {
+	env := newTestEnv(t)
+
+	cases := []struct {
+		name string
+		size string
+		dpr  int
+		want processing.Size
+	}{
+		// dpr=1: множитель 1 — размер без изменений.
+		{"dpr=1", "100x100", 1, processing.Size{Width: 100, Height: 100}},
+		// dpr=2: итоговый размер = base*2.
+		{"dpr=2", "100x100", 2, processing.Size{Width: 200, Height: 200}},
+		{"dpr=3", "100x100", 3, processing.Size{Width: 300, Height: 300}},
+		// Только ширина: 100 * 2 = 200 (высота 0 = пропорционально).
+		{"dpr=2 width-only", "100x", 2, processing.Size{Width: 200, Height: 0}},
+		// Только высота: 200 * 2 = 400.
+		{"dpr=2 height-only", "x200", 2, processing.Size{Width: 0, Height: 400}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan, err := env.svc.buildPlan(mustReq(t, "", "photo", "png", asset.CropCenter, false, c.size, c.dpr, "webp"))
+			if err != nil {
+				t.Fatalf("buildPlan error: %v", err)
+			}
+			if plan.Size != c.want {
+				t.Errorf("plan.Size = %dx%d, want %dx%d", plan.Size.Width, plan.Size.Height, c.want.Width, c.want.Height)
+			}
+			if plan.DPR != c.dpr {
+				t.Errorf("plan.DPR = %d, want %d", plan.DPR, c.dpr)
+			}
+		})
+	}
+}
+
+// TestInFlightByPath проверяет, что InFlightByPath возвращает true, пока
+// идёт singleflight-генерация ассета по URL-пути, и false после её
+// завершения. Используется admission control для bypass.
+func TestInFlightByPath(t *testing.T) {
+	env := newTestEnv(t)
+	env.src.Add("photo.png", []byte("SRC"))
+
+	// Пресет thumb разрешён политикой "/" (см. newTestEnv). Segment-запрос
+	// photo-png/thumb@2.webp — канонический ключ для InFlightByPath.
+	ctx := context.Background()
+	req := mustSegmentReq(t, "", "photo", "png", "thumb", 2, "webp")
+	url, err := req.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	path := "/" + url // /photo-png/thumb@2.webp
+
+	// Блокируем процессор, чтобы генерация "зависла" в singleflight.
+	block := make(chan struct{})
+	env.proc.setBlock(block)
+
+	// Запускаем генерацию в фоне (она блокируется на процессоре).
+	genDone := make(chan struct{})
+	go func() {
+		res, gerr := env.svc.Generate(ctx, req)
+		if gerr == nil {
+			res.Close()
+		}
+		close(genDone)
+	}()
+
+	// Ждём, пока генерация войдёт в singleflight (процессор вызван).
+	deadline := time.Now().Add(2 * time.Second)
+	for env.proc.callCount() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if env.proc.callCount() < 1 {
+		t.Fatal("generation did not enter processor")
+	}
+
+	// Пока генерация идёт — InFlightByPath == true для того же пути.
+	if !env.svc.InFlightByPath(ctx, path) {
+		t.Fatalf("InFlightByPath(%q) = false during generation, want true", path)
+	}
+	// Другой ассет — false.
+	if env.svc.InFlightByPath(ctx, "/photo-png/other@2.webp") {
+		t.Fatal("InFlightByPath(other) = true, want false")
+	}
+	// Невалидный путь — false (без паники).
+	if env.svc.InFlightByPath(ctx, "/not-an-asset") {
+		t.Fatal("InFlightByPath(invalid) = true, want false")
+	}
+
+	// Освобождаем процессор — генерация завершается.
+	close(block)
+	select {
+	case <-genDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("generation did not finish")
+	}
+
+	// После завершения — InFlightByPath == false.
+	if env.svc.InFlightByPath(ctx, path) {
+		t.Fatalf("InFlightByPath(%q) = true after generation, want false", path)
+	}
+}
+
+// TestMapCoordinatorWaitTimeout проверяет: истечение WaitTimeout
+// singleflight (ErrWaitTimeout) маппится в OutcomeUnavailable (→ 503 +
+// Retry-After), а не в необработанную ошибку/панику.
+func TestMapCoordinatorWaitTimeout(t *testing.T) {
+	env := newTestEnv(t)
+	err := env.svc.mapCoordinatorError(context.Background(), singleflight.ErrWaitTimeout)
+	wantOutcome(t, err, OutcomeUnavailable)
+	var oe *OutcomeError
+	if !errors.As(err, &oe) {
+		t.Fatalf("err = %v, want *OutcomeError", err)
+	}
+	if !strings.Contains(oe.Reason, "wait timeout") {
+		t.Errorf("reason = %q, want wait timeout mention", oe.Reason)
+	}
+}
