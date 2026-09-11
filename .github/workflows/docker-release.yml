@@ -1,0 +1,106 @@
+name: Docker Hub Release
+
+# Публикация Docker-образа altrap/imager на Docker Hub.
+#
+# ПОЧЕМУ ЗДЕСЬ (GitHub), а не в GitVerse:
+#   раннеры GitVerse выполняются в контейнере БЕЗ привилегий — нет NET_ADMIN
+#   (нельзя создать docker0-bridge), нет mount-привилегий и unshare (нельзя
+#   выполнять RUN-шаги Dockerfile). Docker-сборка на них невозможна (проверено:
+#   dockerd, BuildKit, legacy builder и kaniko упираются в эти ограничения).
+#   GitHub Actions использует полноценные виртуальные машины, где docker build
+#   и docker push работают штатно.
+#
+# GitHub — зеркало gitverse.ru/pkg-ru/imager: refs (ветки и теги) синхронизирует
+# .gitverse/workflows/mirror.yml, поэтому push тега v* приходит сюда
+# автоматически и запускает публикацию.
+#
+# Секрет DOCKERHUB_TOKEN (учётка altrap, права Read & Write):
+#   GitHub → Settings → Secrets and variables → Actions → New repository secret.
+#
+# Триггеры:
+#   - push тега v* (приходит из зеркала GitVerse) — автоматическая публикация;
+#   - workflow_dispatch с input imager_version — ручной запуск.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      imager_version:
+        description: 'Версия релиза (например "v1.2.3" / "1.0.0") или "latest"'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build image + Trivy scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Сборка из исходников (target from-source): не зависит от наличия
+      # release-артефактов в GitHub releases. Использует production build tags
+      # libvips,onnx (см. Dockerfile: source-builder).
+      - name: Build image (from-source)
+        run: docker build --target from-source -t imager:ci .
+
+      # Скан уязвимостей (HIGH,CRITICAL, --ignore-unfixed). Остановка сборки
+      # при exit-code=1 — найденные критические уязвимости блокируют релиз.
+      - name: Container scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: imager:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: '1'
+
+  publish:
+    name: Publish to Docker Hub
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      # Единая переменная для обоих триггеров:
+      # - push тега: github.ref_name (например "v2.0.0");
+      # - workflow_dispatch: github.ref_name — ветка (например "master"),
+      #   поэтому `||` переключается на inputs.imager_version.
+      IMAGER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.imager_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: altrap
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # "latest" -> самый свежий тег v* (resolve_release_version из docker/lib.sh:
+      # GitHub API releases/latest github.com/pkg-ru/imager, fallback git ls-remote).
+      # Конкретный тег ("v1.2.3" / "1.0.0") нормализуется с префиксом "v".
+      - name: Resolve release version
+        id: version
+        run: |
+          . ./docker/lib.sh
+          resolved=$(resolve_release_version "${IMAGER_VERSION}")
+          echo "resolved=${resolved}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${resolved}"
+
+      # Сборка + публикация: altrap/imager:latest и altrap/imager:<VERSION_TAG>.
+      - name: Build and push
+        run: |
+          resolved="${{ steps.version.outputs.resolved }}"
+          docker build \
+            --target from-source \
+            -t "altrap/imager:latest" \
+            -t "altrap/imager:${resolved}" .
+          docker push "altrap/imager:latest"
+          docker push "altrap/imager:${resolved}"
+
+      - name: Verify image
+        run: docker run --rm "altrap/imager:latest" imager --version

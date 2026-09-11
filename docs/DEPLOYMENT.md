@@ -16,8 +16,9 @@ docker pull altrap/imager:1.0.0
 (основной; fallback — теги зеркала `github.com/pkg-ru/imager`)
 (`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)).
 Теги публикуются через `make docker-release IMAGER_VERSION=<tag>` или
-автоматически при релизе (GitVerse CI, джоба `docker-release` в
-[`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml)).
+автоматически при релизе (GitHub Actions, workflow
+[`.github/workflows/docker-release.yml`](../.github/workflows/docker-release.yml);
+GitVerse — зеркало, см. [CI](#ci)).
 
 Последующие шаги (mounts, пользователь, env) — одинаковы для pull'нутого и
 для собранного вручную образа.
@@ -237,12 +238,21 @@ GitHub Actions-действий). Toolchain и зависимости **не у�
 
 ### Публикация на Docker Hub (docker-release)
 
-Джоба `docker-release` публикует `altrap/imager` на Docker Hub **только** при
-создании нового тега вида `vX.Y.Z` (например `v2.0.0`): условие
-`github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
-github.event.created`. Повторный push/force-push существующего тега
-(например из `mirror.yml`) джобу не запускает. Ручной запуск — через
-`workflow_dispatch` с input `imager_version` (тег или `latest`).
+Docker-сборка и публикация `altrap/imager` выполняются **в GitHub Actions**
+(workflow [`.github/workflows/docker-release.yml`](../.github/workflows/docker-release.yml)),
+а не в GitVerse. Причина: раннеры GitVerse работают в контейнере без привилегий
+(нет NET_ADMIN / mount / unshare), где Docker-сборка невозможна. GitHub Actions
+использует полноценные VM, где `docker build` и `docker push` работают штатно.
+
+GitVerse — основной репозиторий, GitHub — зеркало: refs (ветки и теги)
+синхронизирует [`.gitverse/workflows/mirror.yml`](../.gitverse/workflows/mirror.yml),
+поэтому push тега `vX.Y.Z` автоматически попадает в GitHub и запускает
+публикацию (джоба `publish`). Ручной запуск — через `workflow_dispatch`
+с input `imager_version` (тег или `latest`).
+
+Джоба `build` собирает образ из исходников (target `from-source`, build tags
+`libvips,onnx`) и сканирует его Trivy (HIGH, CRITICAL, `--ignore-unfixed`);
+при найденных критических уязвимостях публикация блокируется (`needs: build`).
 
 Секрет `DOCKERHUB_TOKEN` (учётка `altrap`, права Read & Write) задаётся в
-настройках репозитория GitVerse (Settings → Secrets).
+настройках репозитория **GitHub** (Settings → Secrets and variables → Actions).

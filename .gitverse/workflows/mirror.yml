@@ -2,9 +2,11 @@ name: Mirror to GitHub
 
 # Зеркалирование GitVerse (основной репозиторий) в GitHub (зеркало).
 # Все ветки и теги синхронизируются в github.com/pkg-ru/imager по PAT.
-# Публикация Docker Hub (docker-release) выполняется в GitVerse по release /
-# workflow_dispatch из ci.yml, поэтому mirror.yml НЕ отправляет dispatch —
-# только синхронизирует refs.
+#
+# Публикация Docker Hub (altrap/imager) выполняется в GitHub Actions
+# (.github/workflows/docker-release.yml): раннеры GitVerse работают в контейнере
+# без привилегий, где Docker-сборка невозможна. Поэтому mirror.yml только
+# синхронизирует refs — push тега v* приходит в GitHub и запускает публикацию.
 
 on:
   push:

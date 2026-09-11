@@ -3,20 +3,10 @@ name: CI
 on:
   push:
     branches: [master, main]
-    # Публикация образа на Docker Hub (docker-release) выполняется ТОЛЬКО
-    # при push нового тега вида vX.Y.Z (например v2.0.0) или при ручном
-    # workflow_dispatch (см. условие джобы docker-release ниже).
     tags:
       - 'v*'
   pull_request:
   workflow_dispatch:
-    inputs:
-      imager_version:
-        description: >-
-          Версия релиза (например "v1.2.3" / "1.0.0") или "latest" —
-          для "latest" версия резолвится в самый свежий тег (см. docker/lib.sh)
-        required: false
-        default: "latest"
 
 permissions:
   contents: read
@@ -26,9 +16,9 @@ jobs:
   # Быстрый CI (Pull Request + push в master/main + release-теги + dispatch).
   #
   # Единственная джоба для обычного PR: gofmt (fail-fast) + go test с
-  # production build tags (libvips,onnx). Race / govulncheck / fuzz /
-  # docker build / trivy здесь НЕ выполняются — они перенесены в master/main,
-  # release и nightly (см. ниже), т.к. для каждого PR они не нужны.
+  # production build tags (libvips,onnx). Race / govulncheck / fuzz здесь
+  # НЕ выполняются — они перенесены в master/main и nightly (см. ниже),
+  # т.к. для каждого PR они не нужны.
   #
   # gofmt и go test объединены в одну джобу: обе лёгкие, работают в одном
   # предварительно собранном CI-образе gitverse.ru/pkg-ru/imager-ci:v1
@@ -42,7 +32,7 @@ jobs:
   fast-ci:
     name: "gofmt + go test (libvips,onnx)"
     runs-on: ubuntu-latest
-    # PR, push в master/main, push тега v* и workflow_dispatch (release).
+    # PR, push в master/main, push тега v* и workflow_dispatch.
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     container:
       image: gitverse.ru/pkg-ru/imager-ci:v1
@@ -124,111 +114,17 @@ jobs:
         run: go build -tags="${TAGS}" -trimpath -ldflags="-s -w" ./cmd/imager
 
   # ===========================================================================
-  # Docker: сборка образа без push + сканирование уязвимостей (Trivy).
-  # Только master/main, release-теги и workflow_dispatch (не PR).
+  # Docker-сборка и публикация altrap/imager на Docker Hub выполняются в
+  # GitHub Actions (.github/workflows/docker-release.yml), а НЕ здесь.
+  #
+  # Причина: раннеры GitVerse работают в контейнере БЕЗ привилегий — нет
+  # NET_ADMIN (нельзя создать docker0-bridge), нет mount-привилегий и unshare
+  # (нельзя выполнять RUN-шаги Dockerfile). Docker-сборка на них невозможна
+  # (проверено: dockerd, BuildKit, legacy builder и kaniko упираются в эти
+  # ограничения). GitHub Actions использует полноценные VM, где docker build
+  # и docker push работают штатно.
+  #
+  # GitHub — зеркало gitverse.ru/pkg-ru/imager: refs (ветки и теги)
+  # синхронизирует .gitverse/workflows/mirror.yml, поэтому push тега v*
+  # приходит в GitHub автоматически и запускает публикацию.
   # ===========================================================================
-  docker:
-    name: Container build + scan
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    # ВАЖНО (GitVerse): раннер работает внутри контейнера БЕЗ привилегий —
-    # нет NET_ADMIN (нельзя создать docker0), нет mount-привилегий (buildkit/
-    # legacy builder падают на mount/unshare). Docker-сборка невозможна.
-    # Поэтому образ собирается kaniko (userspace, chroot вместо namespaces,
-    # без daemon) и сканируется trivy как standalone-бинарник по tar
-    # (см. docker/kaniko-build.sh, docker/trivy-scan.sh).
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build image (kaniko)
-        run: sh docker/kaniko-build.sh . imager:ci
-
-      - name: Container scan (Trivy)
-        run: sh docker/trivy-scan.sh imager:ci.tar
-
-  # ===========================================================================
-  # Docker Hub Release: публикация altrap/imager (Docker Hub, НЕ репозиторий кода).
-  # Триггеры:
-  # - push тега v* (например v2.0.0) — автоматически при создании нового тега:
-  #   берётся его имя (тег vX.Y.Z), собирается altrap/imager:X.Y.Z + latest;
-  # - workflow_dispatch — ручной запуск из UI (CI → Run workflow) с input
-  #   imager_version: конкретный тег ("v1.2.3" / "1.0.0") или "latest" (в таком
-  #   случае версия резолвится в самый свежий тег тем же механизмом, что
-  #   docker/lib.sh: resolve_release_version в Makefile).
-  #
-  # ИСПРАВЛЕНО: раньше условие разрешало только push+tag+created, из-за чего
-  # workflow_dispatch фактически не проходил. Теперь оба сценария работают.
-  # Публикация НЕ выполняется при обычном push в ветку (без тега).
-  #
-  # Джоба ждёт все проверки (fast-ci, race, security, docker), поэтому перед
-  # публикацией гарантированно пройдены: тесты, race, govulncheck, go build,
-  # docker build и trivy-скан (HIGH,CRITICAL, --ignore-unfixed).
-  #
-  # Секрет DOCKERHUB_TOKEN:
-  #   создаётся в Docker Hub (Account Settings → Security → New Access Token,
-  #   права Read & Write) и добавляется в GitVerse-репозиторий
-  #   (Settings → Secrets). Без него push не пройдёт.
-  #
-  # Как проверить результат после прогона:
-  #   docker pull altrap/imager:latest && docker run --rm altrap/imager:latest imager --version
-  # ===========================================================================
-  docker-release:
-    name: Docker Hub Release
-    runs-on: ubuntu-latest
-    needs: [fast-ci, race, security, docker]
-    # Только создание нового тега v* (push) или ручной запуск (workflow_dispatch).
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.created) || github.event_name == 'workflow_dispatch'
-    env:
-      # Единая переменная для обоих триггеров. Выражение ниже работает так:
-      # - при push тега: github.ref_name не пуст (напр. "v2.0.0");
-      # - при workflow_dispatch: github.ref_name — ветка (напр. "master"),
-      #   поэтому `||` переключается на inputs.imager_version.
-      IMAGER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.imager_version }}
-    steps:
-      - name: Checkout репозитория
-        uses: actions/checkout@v4
-
-      # ВАЖНО (GitVerse): раннер работает внутри контейнера БЕЗ привилегий —
-      # Docker-сборка невозможна (нет NET_ADMIN/mount/unshare). Образ собирается
-      # kaniko (userspace, без daemon) и пушится напрямую в Docker Hub.
-      # Версия резолвится тем же механизмом, что docker/lib.sh:
-      # resolve_release_version (см. Makefile).
-      - name: Resolve release version
-        id: version
-        run: |
-          . ./docker/lib.sh
-          resolved=$(resolve_release_version "${IMAGER_VERSION}")
-          echo "resolved=${resolved}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${resolved}"
-        env:
-          IMAGER_VERSION: ${{ env.IMAGER_VERSION }}
-
-      # Логин в Docker Hub: kaniko пушит напрямую, используя DOCKER_CONFIG
-      # (docker login создаёт ~/.docker/config.json, kaniko его читает).
-      - name: Логин в Docker Hub
-        run: |
-          mkdir -p "$HOME/.docker"
-          printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"}}}' \
-            "$(printf '%s:%s' 'altrap' "$DOCKERHUB_TOKEN" | base64 -w0)" \
-            > "$HOME/.docker/config.json"
-        env:
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # Сборка + публикация: теги altrap/imager:latest и altrap/imager:<VERSION_TAG>.
-      # kaniko собирает из исходников (target from-source) и пушит оба тега.
-      - name: Собрать и опубликовать образ (kaniko)
-        run: |
-          sh docker/kaniko-build.sh . "altrap/imager:latest" --target from-source --push
-          sh docker/kaniko-build.sh . "altrap/imager:${{ steps.version.outputs.resolved }}" --target from-source --push
-
-  # --- Расширение на arm64 (на будущее) ---
-  # Сейчас single-arch linux/amd64: fetcher-стадия Dockerfile скачивает
-  # production-бинь под amd64 (docker/install-imager.sh, detect_arch из
-  # docker/lib.sh), поэтому для мультиарх потребуется:
-  #   1) docker/setup-qemu-action@v3 (до шага buildx) для эмуляции arm64;
-  #   2) перенос сборки на buildx с --platform linux/amd64,linux/arm64
-  #      (buildx build --push, единый manifest list);
-  #   3) проверка, что install-imager.sh умеет скачивать arm64-бинь
-  #      (docker/lib.sh: detect_arch уже есть; нужны arm64-артефакты в релизах)
-  #      либо альтернативно сборка из исходников целиком.
