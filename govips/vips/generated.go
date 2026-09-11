@@ -423,15 +423,15 @@ func vipsGenAdd(left *C.VipsImage, right *C.VipsImage) (*C.VipsImage, error) {
 
 // AffineOptions are optional parameters for affine.
 type AffineOptions struct {
-	Interpolate *C.VipsInterpolate
-	Oarea []int
-	Odx *float64
-	Ody *float64
-	Idx *float64
-	Idy *float64
-	Background []float64
+	Interpolate   *C.VipsInterpolate
+	Oarea         []int
+	Odx           *float64
+	Ody           *float64
+	Idx           *float64
+	Idy           *float64
+	Background    []float64
 	Premultiplied *bool
-	Extend *ExtendStrategy
+	Extend        *ExtendStrategy
 }
 
 // vipsGenAffine calls the vips affine operation.
@@ -497,13 +497,13 @@ func vipsGenAffine(input *C.VipsImage, matrix []float64, opts *AffineOptions) (*
 
 // ArrayjoinOptions are optional parameters for arrayjoin.
 type ArrayjoinOptions struct {
-	Across *int
-	Shim *int
+	Across     *int
+	Shim       *int
 	Background []float64
-	Halign *Align
-	Valign *Align
-	Hspacing *int
-	Vspacing *int
+	Halign     *Align
+	Valign     *Align
+	Hspacing   *int
+	Vspacing   *int
 }
 
 // vipsGenArrayjoin calls the vips arrayjoin operation.
@@ -823,9 +823,9 @@ func vipsGenByteswap(input *C.VipsImage) (*C.VipsImage, error) {
 
 // CacheOptions are optional parameters for cache.
 type CacheOptions struct {
-	MaxTiles *int
+	MaxTiles   *int
 	TileHeight *int
-	TileWidth *int
+	TileWidth  *int
 }
 
 // vipsGenCache calls the vips cache operation.
@@ -861,7 +861,7 @@ func vipsGenCache(input *C.VipsImage, opts *CacheOptions) (*C.VipsImage, error) 
 
 // CannyOptions are optional parameters for canny.
 type CannyOptions struct {
-	Sigma *float64
+	Sigma     *float64
 	Precision *Precision
 }
 
@@ -955,12 +955,12 @@ func vipsGenClamp(input *C.VipsImage, opts *ClampOptions) (*C.VipsImage, error) 
 
 // CompassOptions are optional parameters for compass.
 type CompassOptions struct {
-	Times *int
-	Angle *Angle45
-	Combine *Combine
+	Times     *int
+	Angle     *Angle45
+	Combine   *Combine
 	Precision *Precision
-	Layers *int
-	Cluster *int
+	Layers    *int
+	Cluster   *int
 }
 
 // vipsGenCompass calls the vips compass operation.
@@ -1068,10 +1068,10 @@ func vipsGenComplexget(input *C.VipsImage, get OperationComplexget) (*C.VipsImag
 
 // Composite2Options are optional parameters for composite2.
 type Composite2Options struct {
-	X *int
-	Y *int
+	X                *int
+	Y                *int
 	CompositingSpace *Interpretation
-	Premultiplied *bool
+	Premultiplied    *bool
 }
 
 // vipsGenComposite2 calls the vips composite2 operation.
@@ -1112,8 +1112,8 @@ func vipsGenComposite2(base *C.VipsImage, overlay *C.VipsImage, mode BlendMode, 
 // ConvOptions are optional parameters for conv.
 type ConvOptions struct {
 	Precision *Precision
-	Layers *int
-	Cluster *int
+	Layers    *int
+	Cluster   *int
 }
 
 // vipsGenConv calls the vips conv operation.
@@ -1149,7 +1149,7 @@ func vipsGenConv(input *C.VipsImage, mask *C.VipsImage, opts *ConvOptions) (*C.V
 
 // ConvaOptions are optional parameters for conva.
 type ConvaOptions struct {
-	Layers *int
+	Layers  *int
 	Cluster *int
 }
 
@@ -1241,8 +1241,8 @@ func vipsGenConvi(input *C.VipsImage, mask *C.VipsImage) (*C.VipsImage, error) {
 // ConvsepOptions are optional parameters for convsep.
 type ConvsepOptions struct {
 	Precision *Precision
-	Layers *int
-	Cluster *int
+	Layers    *int
+	Cluster   *int
 }
 
 // vipsGenConvsep calls the vips convsep operation.
@@ -1278,16 +1278,16 @@ func vipsGenConvsep(input *C.VipsImage, mask *C.VipsImage, opts *ConvsepOptions)
 
 // CopyOptions are optional parameters for copy.
 type CopyOptions struct {
-	Width *int
-	Height *int
-	Bands *int
-	Format *BandFormat
-	Coding *Coding
+	Width          *int
+	Height         *int
+	Bands          *int
+	Format         *BandFormat
+	Coding         *Coding
 	Interpretation *Interpretation
-	Xres *float64
-	Yres *float64
-	Xoffset *int
-	Yoffset *int
+	Xres           *float64
+	Yres           *float64
+	Xoffset        *int
+	Yoffset        *int
 }
 
 // vipsGenCopy calls the vips copy operation.
@@ -1484,7 +1484,7 @@ func vipsGenExtractBand(input *C.VipsImage, band int, opts *ExtractBandOptions) 
 
 // EyeOptions are optional parameters for eye.
 type EyeOptions struct {
-	Uchar *bool
+	Uchar  *bool
 	Factor *float64
 }
 
@@ -1564,7 +1564,7 @@ func vipsGenFillNearest(input *C.VipsImage) (*C.VipsImage, *C.VipsImage, error) 
 // FlattenOptions are optional parameters for flatten.
 type FlattenOptions struct {
 	Background []float64
-	MaxAlpha *float64
+	MaxAlpha   *float64
 }
 
 // vipsGenFlatten calls the vips flatten operation.
@@ -1703,7 +1703,7 @@ func vipsGenGamma(input *C.VipsImage, opts *GammaOptions) (*C.VipsImage, error) 
 
 // GaussblurOptions are optional parameters for gaussblur.
 type GaussblurOptions struct {
-	MinAmpl *float64
+	MinAmpl   *float64
 	Precision *Precision
 }
 
@@ -1770,8 +1770,8 @@ func vipsGenGaussmat(sigma float64, minAmpl float64, opts *GaussmatOptions) (*C.
 // GaussnoiseOptions are optional parameters for gaussnoise.
 type GaussnoiseOptions struct {
 	Sigma *float64
-	Mean *float64
-	Seed *int
+	Mean  *float64
+	Seed  *int
 }
 
 // vipsGenGaussnoise calls the vips gaussnoise operation.
@@ -1807,7 +1807,7 @@ func vipsGenGaussnoise(width int, height int, opts *GaussnoiseOptions) (*C.VipsI
 
 // GlobalbalanceOptions are optional parameters for globalbalance.
 type GlobalbalanceOptions struct {
-	Gamma *float64
+	Gamma     *float64
 	IntOutput *bool
 }
 
@@ -1840,7 +1840,7 @@ func vipsGenGlobalbalance(input *C.VipsImage, opts *GlobalbalanceOptions) (*C.Vi
 
 // GravityOptions are optional parameters for gravity.
 type GravityOptions struct {
-	Extend *ExtendStrategy
+	Extend     *ExtendStrategy
 	Background []float64
 }
 
@@ -2150,7 +2150,7 @@ func vipsGenHistPlot(input *C.VipsImage) (*C.VipsImage, error) {
 
 // HoughCircleOptions are optional parameters for hough_circle.
 type HoughCircleOptions struct {
-	Scale *int
+	Scale     *int
 	MinRadius *int
 	MaxRadius *int
 }
@@ -2188,7 +2188,7 @@ func vipsGenHoughCircle(input *C.VipsImage, opts *HoughCircleOptions) (*C.VipsIm
 
 // HoughLineOptions are optional parameters for hough_line.
 type HoughLineOptions struct {
-	Width *int
+	Width  *int
 	Height *int
 }
 
@@ -2221,11 +2221,11 @@ func vipsGenHoughLine(input *C.VipsImage, opts *HoughLineOptions) (*C.VipsImage,
 
 // IccExportOptions are optional parameters for icc_export.
 type IccExportOptions struct {
-	Pcs *int
-	Intent *Intent
+	Pcs                    *int
+	Intent                 *Intent
 	BlackPointCompensation *bool
-	OutputProfile *string
-	Depth *int
+	OutputProfile          *string
+	Depth                  *int
 }
 
 // vipsGenIccExport calls the vips icc_export operation.
@@ -2271,11 +2271,11 @@ func vipsGenIccExport(input *C.VipsImage, opts *IccExportOptions) (*C.VipsImage,
 
 // IccImportOptions are optional parameters for icc_import.
 type IccImportOptions struct {
-	Pcs *int
-	Intent *Intent
+	Pcs                    *int
+	Intent                 *Intent
 	BlackPointCompensation *bool
-	Embedded *bool
-	InputProfile *string
+	Embedded               *bool
+	InputProfile           *string
 }
 
 // vipsGenIccImport calls the vips icc_import operation.
@@ -2321,9 +2321,9 @@ func vipsGenIccImport(input *C.VipsImage, opts *IccImportOptions) (*C.VipsImage,
 
 // IdentityOptions are optional parameters for identity.
 type IdentityOptions struct {
-	Bands *int
+	Bands  *int
 	Ushort *bool
-	Size *int
+	Size   *int
 }
 
 // vipsGenIdentity calls the vips identity operation.
@@ -2387,7 +2387,7 @@ func vipsGenIfthenelse(cond *C.VipsImage, in1 *C.VipsImage, in2 *C.VipsImage, op
 
 // InsertOptions are optional parameters for insert.
 type InsertOptions struct {
-	Expand *bool
+	Expand     *bool
 	Background []float64
 }
 
@@ -2495,10 +2495,10 @@ func vipsGenInvfft(input *C.VipsImage, opts *InvfftOptions) (*C.VipsImage, error
 
 // JoinOptions are optional parameters for join.
 type JoinOptions struct {
-	Expand *bool
-	Shim *int
+	Expand     *bool
+	Shim       *int
 	Background []float64
-	Align *Align
+	Align      *Align
 }
 
 // vipsGenJoin calls the vips join operation.
@@ -2587,8 +2587,8 @@ func vipsGenLinear(input *C.VipsImage, a []float64, b []float64, opts *LinearOpt
 // LinecacheOptions are optional parameters for linecache.
 type LinecacheOptions struct {
 	TileHeight *int
-	Access *int
-	Threaded *bool
+	Access     *int
+	Threaded   *bool
 	Persistent *bool
 }
 
@@ -2662,10 +2662,10 @@ func vipsGenLogmat(sigma float64, minAmpl float64, opts *LogmatOptions) (*C.Vips
 
 // MapimOptions are optional parameters for mapim.
 type MapimOptions struct {
-	Interpolate *C.VipsInterpolate
-	Background []float64
+	Interpolate   *C.VipsInterpolate
+	Background    []float64
 	Premultiplied *bool
-	Extend *ExtendStrategy
+	Extend        *ExtendStrategy
 }
 
 // vipsGenMapim calls the vips mapim operation.
@@ -2737,9 +2737,9 @@ func vipsGenMaplut(input *C.VipsImage, lut *C.VipsImage, opts *MaplutOptions) (*
 
 // MaskButterworthOptions are optional parameters for mask_butterworth.
 type MaskButterworthOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2780,9 +2780,9 @@ func vipsGenMaskButterworth(width int, height int, order float64, frequencyCutof
 
 // MaskButterworthBandOptions are optional parameters for mask_butterworth_band.
 type MaskButterworthBandOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2823,9 +2823,9 @@ func vipsGenMaskButterworthBand(width int, height int, order float64, frequencyC
 
 // MaskButterworthRingOptions are optional parameters for mask_butterworth_ring.
 type MaskButterworthRingOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2866,9 +2866,9 @@ func vipsGenMaskButterworthRing(width int, height int, order float64, frequencyC
 
 // MaskFractalOptions are optional parameters for mask_fractal.
 type MaskFractalOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2909,9 +2909,9 @@ func vipsGenMaskFractal(width int, height int, fractalDimension float64, opts *M
 
 // MaskGaussianOptions are optional parameters for mask_gaussian.
 type MaskGaussianOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2952,9 +2952,9 @@ func vipsGenMaskGaussian(width int, height int, frequencyCutoff float64, amplitu
 
 // MaskGaussianBandOptions are optional parameters for mask_gaussian_band.
 type MaskGaussianBandOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -2995,9 +2995,9 @@ func vipsGenMaskGaussianBand(width int, height int, frequencyCutoffX float64, fr
 
 // MaskGaussianRingOptions are optional parameters for mask_gaussian_ring.
 type MaskGaussianRingOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -3038,9 +3038,9 @@ func vipsGenMaskGaussianRing(width int, height int, frequencyCutoff float64, amp
 
 // MaskIdealOptions are optional parameters for mask_ideal.
 type MaskIdealOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -3081,9 +3081,9 @@ func vipsGenMaskIdeal(width int, height int, frequencyCutoff float64, opts *Mask
 
 // MaskIdealBandOptions are optional parameters for mask_ideal_band.
 type MaskIdealBandOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -3124,9 +3124,9 @@ func vipsGenMaskIdealBand(width int, height int, frequencyCutoffX float64, frequ
 
 // MaskIdealRingOptions are optional parameters for mask_ideal_ring.
 type MaskIdealRingOptions struct {
-	Uchar *bool
-	Nodc *bool
-	Reject *bool
+	Uchar   *bool
+	Nodc    *bool
+	Reject  *bool
 	Optical *bool
 }
 
@@ -3167,9 +3167,9 @@ func vipsGenMaskIdealRing(width int, height int, frequencyCutoff float64, ringwi
 
 // MatchOptions are optional parameters for match.
 type MatchOptions struct {
-	Hwindow *int
-	Harea *int
-	Search *bool
+	Hwindow     *int
+	Harea       *int
+	Search      *bool
 	Interpolate *C.VipsInterpolate
 }
 
@@ -3359,9 +3359,9 @@ func vipsGenMorph(input *C.VipsImage, mask *C.VipsImage, morph OperationMorpholo
 // MosaicOptions are optional parameters for mosaic.
 type MosaicOptions struct {
 	Hwindow *int
-	Harea *int
-	Mblend *int
-	Bandno *int
+	Harea   *int
+	Mblend  *int
+	Bandno  *int
 }
 
 // vipsGenMosaic calls the vips mosaic operation.
@@ -3407,11 +3407,11 @@ func vipsGenMosaic(ref *C.VipsImage, sec *C.VipsImage, direction Direction, xref
 
 // Mosaic1Options are optional parameters for mosaic1.
 type Mosaic1Options struct {
-	Hwindow *int
-	Harea *int
-	Search *bool
+	Hwindow     *int
+	Harea       *int
+	Search      *bool
 	Interpolate *C.VipsInterpolate
-	Mblend *int
+	Mblend      *int
 }
 
 // vipsGenMosaic1 calls the vips mosaic1 operation.
@@ -3514,8 +3514,8 @@ func vipsGenPercent(input *C.VipsImage, percent float64) (int, error) {
 // PerlinOptions are optional parameters for perlin.
 type PerlinOptions struct {
 	CellSize *int
-	Uchar *bool
-	Seed *int
+	Uchar    *bool
+	Seed     *int
 }
 
 // vipsGenPerlin calls the vips perlin operation.
@@ -3715,7 +3715,7 @@ func vipsGenRecomb(input *C.VipsImage, m *C.VipsImage) (*C.VipsImage, error) {
 // ReduceOptions are optional parameters for reduce.
 type ReduceOptions struct {
 	Kernel *Kernel
-	Gap *float64
+	Gap    *float64
 }
 
 // vipsGenReduce calls the vips reduce operation.
@@ -3748,7 +3748,7 @@ func vipsGenReduce(input *C.VipsImage, hshrink float64, vshrink float64, opts *R
 // ReducehOptions are optional parameters for reduceh.
 type ReducehOptions struct {
 	Kernel *Kernel
-	Gap *float64
+	Gap    *float64
 }
 
 // vipsGenReduceh calls the vips reduceh operation.
@@ -3781,7 +3781,7 @@ func vipsGenReduceh(input *C.VipsImage, hshrink float64, opts *ReducehOptions) (
 // ReducevOptions are optional parameters for reducev.
 type ReducevOptions struct {
 	Kernel *Kernel
-	Gap *float64
+	Gap    *float64
 }
 
 // vipsGenReducev calls the vips reducev operation.
@@ -3951,11 +3951,11 @@ func vipsGenRot45(input *C.VipsImage, opts *Rot45Options) (*C.VipsImage, error) 
 // RotateOptions are optional parameters for rotate.
 type RotateOptions struct {
 	Interpolate *C.VipsInterpolate
-	Background []float64
-	Odx *float64
-	Ody *float64
-	Idx *float64
-	Idy *float64
+	Background  []float64
+	Odx         *float64
+	Ody         *float64
+	Idx         *float64
+	Idy         *float64
 }
 
 // vipsGenRotate calls the vips rotate operation.
@@ -4200,11 +4200,11 @@ func vipsGenSequential(input *C.VipsImage, opts *SequentialOptions) (*C.VipsImag
 // SharpenOptions are optional parameters for sharpen.
 type SharpenOptions struct {
 	Sigma *float64
-	X1 *float64
-	Y2 *float64
-	Y3 *float64
-	M1 *float64
-	M2 *float64
+	X1    *float64
+	Y2    *float64
+	Y3    *float64
+	M1    *float64
+	M2    *float64
 }
 
 // vipsGenSharpen calls the vips sharpen operation.
@@ -4351,14 +4351,14 @@ func vipsGenSign(input *C.VipsImage) (*C.VipsImage, error) {
 
 // SimilarityOptions are optional parameters for similarity.
 type SimilarityOptions struct {
-	Scale *float64
-	Angle *float64
+	Scale       *float64
+	Angle       *float64
 	Interpolate *C.VipsInterpolate
-	Background []float64
-	Odx *float64
-	Ody *float64
-	Idx *float64
-	Idy *float64
+	Background  []float64
+	Odx         *float64
+	Ody         *float64
+	Idx         *float64
+	Idy         *float64
 }
 
 // vipsGenSimilarity calls the vips similarity operation.
@@ -4456,7 +4456,7 @@ func vipsGenSines(width int, height int, opts *SinesOptions) (*C.VipsImage, erro
 
 // SmartcropOptions are optional parameters for smartcrop.
 type SmartcropOptions struct {
-	Interesting *Interesting
+	Interesting   *Interesting
 	Premultiplied *bool
 }
 
@@ -4552,9 +4552,9 @@ func vipsGenStats(input *C.VipsImage) (*C.VipsImage, error) {
 // StdifOptions are optional parameters for stdif.
 type StdifOptions struct {
 	S0 *float64
-	B *float64
+	B  *float64
 	M0 *float64
-	A *float64
+	A  *float64
 }
 
 // vipsGenStdif calls the vips stdif operation.
@@ -4652,11 +4652,11 @@ func vipsGenSum(input []*C.VipsImage) (*C.VipsImage, error) {
 
 // TilecacheOptions are optional parameters for tilecache.
 type TilecacheOptions struct {
-	TileWidth *int
+	TileWidth  *int
 	TileHeight *int
-	MaxTiles *int
-	Access *int
-	Threaded *bool
+	MaxTiles   *int
+	Access     *int
+	Threaded   *bool
 	Persistent *bool
 }
 
@@ -4705,16 +4705,16 @@ func vipsGenTilecache(input *C.VipsImage, opts *TilecacheOptions) (*C.VipsImage,
 
 // TonelutOptions are optional parameters for tonelut.
 type TonelutOptions struct {
-	InMax *int
+	InMax  *int
 	OutMax *int
-	Lb *float64
-	Lw *float64
-	Ps *float64
-	Pm *float64
-	Ph *float64
-	S *float64
-	M *float64
-	H *float64
+	Lb     *float64
+	Lw     *float64
+	Ps     *float64
+	Pm     *float64
+	Ph     *float64
+	S      *float64
+	M      *float64
+	H      *float64
 }
 
 // vipsGenTonelut calls the vips tonelut operation.
@@ -4821,7 +4821,7 @@ func vipsGenUhdr2scRGB(input *C.VipsImage) (*C.VipsImage, error) {
 
 // UnpremultiplyOptions are optional parameters for unpremultiply.
 type UnpremultiplyOptions struct {
-	MaxAlpha *float64
+	MaxAlpha  *float64
 	AlphaBand *int
 }
 
@@ -4855,7 +4855,7 @@ func vipsGenUnpremultiply(input *C.VipsImage, opts *UnpremultiplyOptions) (*C.Vi
 // WorleyOptions are optional parameters for worley.
 type WorleyOptions struct {
 	CellSize *int
-	Seed *int
+	Seed     *int
 }
 
 // vipsGenWorley calls the vips worley operation.
@@ -4998,4 +4998,3 @@ func vipsGenZoom(input *C.VipsImage, xfac int, yfac int) (*C.VipsImage, error) {
 
 	return out_out, nil
 }
-
