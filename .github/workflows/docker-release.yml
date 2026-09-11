@@ -52,7 +52,7 @@ jobs:
       # Скан уязвимостей (HIGH,CRITICAL, --ignore-unfixed). Остановка сборки
       # при exit-code=1 — найденные критические уязвимости блокируют релиз.
       - name: Container scan (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: imager:ci
           severity: HIGH,CRITICAL
