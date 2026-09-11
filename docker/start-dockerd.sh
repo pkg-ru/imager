@@ -2,16 +2,19 @@
 # start-dockerd.sh - ensure a working Docker daemon on CI runners.
 #
 # GitVerse CI runners may ship the docker CLI without a running daemon
-# (no /var/run/docker.sock), unlike GitHub Actions where dockerd is
-# pre-started. This script ensures a usable daemon with a cascade of
-# fallbacks:
+# (no /var/run/docker.sock, and sometimes no dockerd binary at all),
+# unlike GitHub Actions where dockerd is pre-started. This script ensures
+# a usable daemon with a cascade of fallbacks:
 #   0. `docker info` succeeds -> done (daemon reachable via DOCKER_HOST
 #      or a non-standard socket; idempotent);
 #   1. if the socket is already present -> done (idempotent);
 #   2. systemctl start docker (systemd runners, root or passwordless sudo);
 #   3. service docker start (SysV fallback, Debian/Ubuntu);
-#   4. dockerd in the background (log to /tmp/dockerd.log);
-#   5. wait for the socket with a timeout, print diagnostics on failure.
+#   4. dockerd in the background (log to /tmp/dockerd.log), with retries
+#      using container-friendly flags (--iptables=false, --storage-driver=vfs);
+#   5. if dockerd is missing entirely - install it via the package manager
+#      (apt-get / apk / dnf / yum), then start it;
+#   6. wait for the socket with a timeout, print diagnostics on failure.
 #
 # Environment overrides:
 #   DOCKER_HOST_SOCKET  - socket path to wait for (default /var/run/docker.sock)
@@ -122,29 +125,78 @@ find_dockerd() {
     return 1
 }
 
-if _dockerd_bin=$(find_dockerd); then
-    echo "[imager] starting dockerd in the background ($_dockerd_bin, log: /tmp/dockerd.log)"
-    if run_as_root sh -c "nohup '$_dockerd_bin' > /tmp/dockerd.log 2>&1 &"; then
-        if wait_for_socket; then
-            echo "[imager] Docker daemon started (dockerd)"
-            exit 0
+# try_launch_dockerd <bin>: start dockerd with progressively more
+# container-friendly flags. In restricted CI containers iptables may be
+# unavailable (no NET_ADMIN) and overlayfs may not work - retry with
+# --iptables=false and --storage-driver=vfs. Kills the previous attempt
+# before retrying.
+try_launch_dockerd() {
+    _bin="$1"
+    for _flags in "" "--iptables=false --ip6tables=false" \
+                  "--iptables=false --ip6tables=false --storage-driver=vfs"; do
+        echo "[imager] starting dockerd in the background ($_bin $_flags, log: /tmp/dockerd.log)"
+        if run_as_root sh -c "nohup '$_bin' $_flags > /tmp/dockerd.log 2>&1 &"; then
+            if wait_for_socket; then
+                echo "[imager] Docker daemon started (dockerd)"
+                exit 0
+            fi
+            echo "[imager] dockerd did not become ready, stopping it and retrying"
+            run_as_root sh -c "pkill -f '$_bin' 2>/dev/null; sleep 1" || true
+        else
+            echo "[imager] failed to launch dockerd (no root/sudo)"
+            return 1
         fi
-        echo "[imager] dockerd did not become ready, see /tmp/dockerd.log"
-    else
-        echo "[imager] failed to launch dockerd (no root/sudo)"
+    done
+    echo "[imager] dockerd failed to start, see /tmp/dockerd.log"
+    return 1
+}
+
+# --- 5. Install dockerd if missing --------------------------------------------
+# Some GitVerse runners ship only the docker CLI (no dockerd binary at all).
+# We are root (or have passwordless sudo), so install the daemon via the
+# package manager, then start it.
+install_dockerd() {
+    echo "[imager] dockerd binary not found, installing via package manager"
+    if command -v apt-get >/dev/null 2>&1; then
+        run_as_root sh -c "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io"
+        return $?
     fi
+    if command -v apk >/dev/null 2>&1; then
+        run_as_root sh -c "apk add --no-cache docker"
+        return $?
+    fi
+    if command -v dnf >/dev/null 2>&1; then
+        run_as_root sh -c "dnf install -y -q docker"
+        return $?
+    fi
+    if command -v yum >/dev/null 2>&1; then
+        run_as_root sh -c "yum install -y -q docker"
+        return $?
+    fi
+    echo "[imager] no supported package manager found (apt-get/apk/dnf/yum)" >&2
+    return 1
+}
+
+if _dockerd_bin=$(find_dockerd); then
+    try_launch_dockerd "$_dockerd_bin"
 else
-    echo "[imager] dockerd binary not found in PATH or common locations"
+    if install_dockerd; then
+        if _dockerd_bin=$(find_dockerd); then
+            try_launch_dockerd "$_dockerd_bin"
+        else
+            echo "[imager] dockerd still not found after install" >&2
+        fi
+    fi
 fi
 
-# --- 5. Diagnostics -----------------------------------------------------------
+# --- 6. Diagnostics -----------------------------------------------------------
 # Print everything needed to understand the runner environment on failure.
 echo "[imager] ERROR: Docker daemon is not available" >&2
 echo "[imager] --- diagnostics ---" >&2
 echo "[imager] id: $(id 2>&1)" >&2
 echo "[imager] PATH: $PATH" >&2
 echo "[imager] DOCKER_HOST: '${DOCKER_HOST:-}'" >&2
-for _c in docker dockerd systemctl service sudo; do
+for _c in docker dockerd systemctl service sudo apt-get apk dnf yum; do
     if command -v "$_c" >/dev/null 2>&1; then
         echo "[imager] $_c: $(command -v "$_c")" >&2
     else
