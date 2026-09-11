@@ -43,7 +43,9 @@ if [ -S "$SOCKET" ]; then
     exit 0
 fi
 
-# --- 2. systemd --------------------------------------------------------------
+# --- 2. systemd / service ----------------------------------------------------
+# systemctl: на некоторых раннерах юнит docker отсутствует или нет прав —
+# тогда пробуем SysV-скрипт `service docker start` (Debian/Ubuntu).
 if command -v systemctl >/dev/null 2>&1; then
     echo "[imager] starting docker via systemctl"
     if run_as_root systemctl start docker 2>/dev/null; then
@@ -57,10 +59,41 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
+if command -v service >/dev/null 2>&1; then
+    echo "[imager] starting docker via service"
+    if run_as_root service docker start 2>/dev/null; then
+        if wait_for_socket; then
+            echo "[imager] Docker daemon started via service"
+            exit 0
+        fi
+        echo "[imager] service docker start: socket not ready, falling back"
+    else
+        echo "[imager] service docker start failed, falling back"
+    fi
+fi
+
 # --- 3. dockerd in the background --------------------------------------------
-if command -v dockerd >/dev/null 2>&1; then
-    echo "[imager] starting dockerd in the background (log: /tmp/dockerd.log)"
-    if run_as_root sh -c 'nohup dockerd > /tmp/dockerd.log 2>&1 &'; then
+# dockerd может отсутствовать в PATH (например, docker CLI установлен без
+# daemon-компонента или PATH урезан в CI-контейнере) — ищем бинарник в
+# типичных местах установки.
+find_dockerd() {
+    if command -v dockerd >/dev/null 2>&1; then
+        command -v dockerd
+        return 0
+    fi
+    for _p in /usr/bin/dockerd /usr/local/bin/dockerd /usr/sbin/dockerd \
+              /sbin/dockerd /snap/bin/dockerd /opt/docker/bin/dockerd; do
+        if [ -x "$_p" ]; then
+            printf '%s\n' "$_p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if _dockerd_bin=$(find_dockerd); then
+    echo "[imager] starting dockerd in the background ($_dockerd_bin, log: /tmp/dockerd.log)"
+    if run_as_root sh -c "nohup '$_dockerd_bin' > /tmp/dockerd.log 2>&1 &"; then
         if wait_for_socket; then
             echo "[imager] Docker daemon started (dockerd)"
             exit 0
