@@ -3,12 +3,12 @@ name: CI
 on:
   push:
     branches: [master, main]
+    # Публикация образа на Docker Hub (docker-release) выполняется ТОЛЬКО
+    # при push нового тега вида vX.Y.Z (например v2.0.0). Джоба docker-release
+    # дополнительно фильтрует по github.event.created (см. ниже).
+    tags:
+      - 'v*'
   pull_request:
-  # Публикация образа на Docker Hub (docker-release):
-  # - release (published) — при публикации релиза (тег vX.Y.Z) берётся его tag_name;
-  # - workflow_dispatch — ручной запуск с input imager_version (см. джобу ниже).
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       imager_version:
@@ -28,25 +28,28 @@ jobs:
   # stub/onnx-комбинации и Windows-джобы убраны: пайплайн быстрее, а покрытие
   # не теряется (платформозависимые файлы _unix/_windows компилируются в
   # Linux-джобе через go vet/build всех пакетов).
+  #
+  # УСКОРЕНИЕ: джобы test/quality выполняются в предварительно собранном
+  # CI-образе gitverse.ru/pkg-ru/imager-ci (Go 1.27 + libvips + onnxruntime +
+  # gofmt + предзагруженный GOMODCACHE). Toolchain и зависимости
+  # НЕ устанавливаются в каждом запуске (см. .gitverse/docker/imager-ci/).
+  # Тег образа фиксированный (immutable), не latest. Обновление образа —
+  # отдельное контролируемое изменение (см. README в каталоге образа).
   test:
-    name: "libvips,onnx @ ubuntu-latest"
+    name: "libvips,onnx @ imager-ci"
     runs-on: ubuntu-latest
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
     env:
       CGO_ENABLED: "1"
       TAGS: "libvips,onnx"
+      # GOMODCACHE предзагружен в образ (go mod download при сборке образа);
+      # исходники монтируются в /src, модули не скачиваются заново.
+      GOMODCACHE: /gomodcache
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.0"
-          cache: true
-
-      - name: Install libvips (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libvips-dev
 
       - name: go vet
         run: go vet -tags="${TAGS}" ./...
@@ -67,15 +70,13 @@ jobs:
     name: Lint, Format, Analysis & Fuzz
     runs-on: ubuntu-latest
     needs: test
+    container:
+      image: gitverse.ru/pkg-ru/imager-ci:v1
+    env:
+      GOMODCACHE: /gomodcache
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.0"
-          cache: true
 
       - name: gofmt check
         run: |
@@ -86,8 +87,10 @@ jobs:
             exit 1
           fi
 
+      # govulncheck предустановлен в CI-образе (см. .gitverse/docker/imager-ci/),
+      # поэтому go run ...@latest (скачивание+компиляция в каждом запуске) не нужен.
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: govulncheck ./...
 
       - name: fuzz smoke (FuzzParse)
         run: go test -run=^$ -fuzz=^FuzzParse$ -fuzztime=10s ./domain/asset
@@ -99,6 +102,9 @@ jobs:
         run: go test -run=^$ -fuzz=^FuzzCleanRelContainment$ -fuzztime=10s ./adapters/storage/fs
 
   # Docker: сборка образа без push + сканирование уязвимостей.
+  # ВАЖНО (GitVerse): в отличие от GitHub Actions, на раннерах GitVerse Docker
+  # daemon НЕ запущен по умолчанию (нет /var/run/docker.sock) — его нужно
+  # поднимать явно перед любыми docker-командами (см. docker/start-dockerd.sh).
   docker:
     name: Container build + scan
     runs-on: ubuntu-latest
@@ -106,6 +112,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Start Docker daemon
+        run: sh docker/start-dockerd.sh
 
       - name: Build image
         run: docker build -t imager:ci .
@@ -115,12 +124,16 @@ jobs:
 
   # Docker Hub Release: публикация altrap/imager (Docker Hub, НЕ репозиторий кода).
   # Триггеры:
-  # - release (types: [published]) — автоматически при публикации релиза:
-  #   берётся его tag_name (тег vX.Y.Z), собирается altrap/imager:X.Y.Z + latest;
+  # - push тега v* (например v2.0.0) — автоматически при создании нового тега:
+  #   берётся его имя (тег vX.Y.Z), собирается altrap/imager:X.Y.Z + latest;
   # - workflow_dispatch — ручной запуск из UI (CI → Run workflow) с input
   #   imager_version: конкретный тег ("v1.2.3" / "1.0.0") или "latest" (в таком
   #   случае версия резолвится в самый свежий тег тем же механизмом, что
   #   docker/lib.sh: resolve_release_version в Makefile).
+  #
+  # ВАЖНО: публикация выполняется ТОЛЬКО при создании НОВОГО тега
+  # (github.event.created == true). Повторный push/force-push существующего
+  # тега (например из mirror.yml) джобу не запускает.
   #
   # Секрет DOCKERHUB_TOKEN:
   #   создаётся в Docker Hub (Account Settings → Security → New Access Token,
@@ -132,22 +145,28 @@ jobs:
   docker-release:
     name: Docker Hub Release
     runs-on: ubuntu-latest
+    # Только создание нового тега v* (push) или ручной запуск (workflow_dispatch).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.event.created
     env:
       # Единая переменная для обоих триггеров. Выражение ниже работает так:
-      # - при release: github.event.release.tag_name не пуст (напр. "v1.2.3");
-      # - при workflow_dispatch: github.event.release отсутствует (null),
-      #   tag_name пустой, поэтому `||` переключается на inputs.imager_version.
-      IMAGER_VERSION: ${{ github.event.release.tag_name || inputs.imager_version }}
+      # - при push тега: github.ref_name не пуст (напр. "v2.0.0");
+      # - при workflow_dispatch: github.ref_name — ветка (напр. "master"),
+      #   поэтому `||` переключается на inputs.imager_version.
+      IMAGER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.imager_version }}
     steps:
       - name: Checkout репозитория
         uses: actions/checkout@v4
 
-      # Buildx-драйвер нужен для мультиплатформенных сборок (см. комментарий
-      # ниже); для single-arch он безвреден и подготавливает будущее расширение.
-      - name: Настроить Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # ВАЖНО (GitVerse): Docker daemon на раннерах GitVerse не запущен по
+      # умолчанию (нет /var/run/docker.sock) — поднимаем его явно. Скрипт
+      # идемпотентен и имеет fallback-и (systemd → dockerd в фоне).
+      - name: Start Docker daemon
+        run: sh docker/start-dockerd.sh
 
       # Логин под учёткой altrap (это учётка Docker Hub, НЕ репозиторий кода).
+      # setup-buildx-action НЕ используется: сборка single-arch идёт обычным
+      # `docker build` (make docker-release), а docker-container драйвер buildx
+      # требует работающий daemon и не нужен для этого сценария.
       - name: Логин в Docker Hub
         uses: docker/login-action@v3
         with:

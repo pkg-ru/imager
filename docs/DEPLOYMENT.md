@@ -222,9 +222,34 @@ application:
 
 Workflow: [`.gitverse/workflows/ci.yml`](../.gitverse/workflows/ci.yml).
 
-- матрица build tags: `default`/`onnx` на Linux и Windows, `libvips`/`libvips,onnx` на Linux (CGO);
-- `gofmt`, `go vet`, `go test`, `go test -race` (Linux);
-- fuzz smoke: `FuzzParse`, `FuzzParseSize` (domain/asset), `FuzzCleanRelContainment` (storage/fs);
-- `govulncheck`, сборка `cmd/imager`, container build и сканирование Trivy;
-- публикация `altrap/imager` на Docker Hub: автоматически при релизе и
-  вручную через `workflow_dispatch` (джоба `docker-release`).
+### CI-образ (test/quality)
+
+Джобы `test` и `quality` выполняются в предварительно собранном образе
+[`gitverse.ru/pkg-ru/imager-ci`](../.gitverse/docker/imager-ci/README.md)
+(Go 1.27 + libvips + ONNX Runtime + ffmpeg + gofmt + govulncheck +
+предзагруженный `GOMODCACHE` + ONNX-модели). Toolchain и зависимости
+**не устанавливаются в каждом запуске** — это основное ускорение пайплайна.
+
+Тег образа — фиксированный (immutable), не `latest`:
+`gitverse.ru/pkg-ru/imager-ci:v<N>` (например `v1`). Обновление образа —
+отдельное контролируемое изменение (см. README в каталоге образа).
+
+### Docker daemon на раннерах GitVerse
+
+В отличие от GitHub Actions, на раннерах GitVerse Docker daemon **не запущен**
+по умолчанию (нет `/var/run/docker.sock`). Джобы `docker` и `docker-release`
+перед любыми docker-командами выполняют `sh docker/start-dockerd.sh` —
+идемпотентный скрипт с fallback-ами (systemd → `dockerd` в фоне, ожидание
+сокета, диагностика при сбое).
+
+### Публикация на Docker Hub (docker-release)
+
+Джоба `docker-release` публикует `altrap/imager` на Docker Hub **только** при
+создании нового тега вида `vX.Y.Z` (например `v2.0.0`): условие
+`github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
+github.event.created`. Повторный push/force-push существующего тега
+(например из `mirror.yml`) джобу не запускает. Ручной запуск — через
+`workflow_dispatch` с input `imager_version` (тег или `latest`).
+
+Секрет `DOCKERHUB_TOKEN` (учётка `altrap`, права Read & Write) задаётся в
+настройках репозитория GitVerse (Settings → Secrets).
