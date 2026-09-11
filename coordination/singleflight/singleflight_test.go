@@ -245,54 +245,61 @@ func TestDoPanicDoesNotBlockKey(t *testing.T) {
 // TestDoPanicWaitersGetError проверяет C4: ожидающие вызовы получают ошибку
 // паники, а не зависают навсегда.
 //
-// Детерминированность: между стартом горутины-ожидателя и её входом в Do нет
-// синхронизации, поэтому ожидатель может войти в Do уже ПОСЛЕ того, как
-// владелец завершился и удалил ключ из map. В этом случае ожидатель корректно
-// выполняет собственный fn и получает nil — это валидное поведение, но не то,
-// что проверяет данный тест. Поэтому сценарий повторяется до первой попытки,
-// в которой ожидатель гарантированно застал владельца inflight и получил
-// ошибку паники.
+// Детерминированность: ожидатель регистрируется ДО завершения владельца.
+// Раньше сценарий повторялся до 100 раз, потому что горутина-ожидатель могла
+// войти в Do уже ПОСЛЕ того, как владелец завершился и удалил ключ из map
+// (ожидатель тогда корректно выполнял собственный fn и получал nil — валидное
+// поведение, но не то, что проверяет тест). На быстром CI-раннере эта гонка
+// проигрывалась во всех 100 попытках. Теперь тест берёт inflight-call
+// владельца напрямую (тест в том же пакете) и вызывает g.wait — ровно то,
+// что делает ожидающий вызов Do после lookup в map (сам lookup покрыт
+// тестом дедупликации). Гонки планировщика исключены.
 func TestDoPanicWaitersGetError(t *testing.T) {
-	const attempts = 100
+	g := New(Options{})
+	key := object.ObjectKey("k")
 
-	for i := 0; i < attempts; i++ {
-		g := New(Options{})
-		key := object.ObjectKey("k")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ownerDone := make(chan struct{})
+	go func() {
+		defer close(ownerDone)
+		_, _ = g.Do(context.Background(), key, func() (any, error) {
+			close(started)
+			<-release
+			panic("boom")
+		})
+	}()
+	<-started
 
-		started := make(chan struct{})
-		release := make(chan struct{})
-		ownerDone := make(chan struct{})
-		go func() {
-			defer close(ownerDone)
-			_, _ = g.Do(context.Background(), key, func() (any, error) {
-				close(started)
-				<-release
-				panic("boom")
-			})
-		}()
-		<-started
-
-		// Ожидающий вызов должен получить ошибку после паники.
-		errCh := make(chan error, 1)
-		go func() {
-			_, err := g.Do(context.Background(), key, func() (any, error) { return "x", nil })
-			errCh <- err
-		}()
-		close(release)
-
-		var err error
-		select {
-		case err = <-errCh:
-		case <-time.After(5 * time.Second):
-			t.Fatal("waiter did not return after panic")
-		}
-		<-ownerDone
-
-		if err != nil && strings.Contains(err.Error(), "panic") {
-			return // ожидатель получил ошибку паники — контракт выполнен
-		}
+	// inflight-call владельца: ожидатель получает его из map в Do и ждёт
+	// через g.wait. Берём указатель напрямую — регистрация ожидателя
+	// происходит до close(release), поэтому детерминированно.
+	g.mu.Lock()
+	c := g.inflight[string(key)]
+	g.mu.Unlock()
+	if c == nil {
+		t.Fatal("owner call not found in inflight map")
 	}
-	t.Fatalf("waiter never observed panic error in %d attempts", attempts)
+
+	// Ожидающий вызов должен получить ошибку после паники.
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := g.wait(context.Background(), c)
+		errCh <- err
+	}()
+	close(release)
+
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter did not return after panic")
+	}
+	<-ownerDone
+
+	if err == nil || !strings.Contains(err.Error(), "panic") {
+		t.Fatalf("waiter err = %v, want panic error", err)
+	}
 }
 
 // TestDoWaitTimeout проверяет, что ожидание завершения владельца ограничено
