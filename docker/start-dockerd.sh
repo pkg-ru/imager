@@ -7,24 +7,30 @@
 # a usable daemon with a cascade of fallbacks:
 #   0. `docker info` succeeds -> done (daemon reachable via DOCKER_HOST
 #      or a non-standard socket; idempotent);
-#   1. if the socket is already present -> done (idempotent);
+#   1. stale socket cleanup: if the socket exists but the daemon is dead,
+#      remove it and continue;
 #   2. systemctl start docker (systemd runners, root or passwordless sudo);
 #   3. service docker start (SysV fallback, Debian/Ubuntu);
 #   4. dockerd in the background (log to /tmp/dockerd.log), with retries
 #      using container-friendly flags (--iptables=false, --storage-driver=vfs);
 #   5. if dockerd is missing entirely - install it via the package manager
 #      (apt-get / apk / dnf / yum), then start it;
-#   6. wait for the socket with a timeout, print diagnostics on failure.
+#   6. wait for the daemon (`docker info`) with a timeout, print diagnostics.
+#
+# IMPORTANT (act/GitVerse runners): background processes started inside a
+# step are killed when the step finishes (the runner kills the step's process
+# group). dockerd is therefore launched via `setsid` (new session) so it
+# survives the end of the step and stays alive for the following steps.
 #
 # Environment overrides:
 #   DOCKER_HOST_SOCKET  - socket path to wait for (default /var/run/docker.sock)
-#   DOCKERD_WAIT_SECONDS- socket wait timeout (default 30)
+#   DOCKERD_WAIT_SECONDS- daemon wait timeout (default 60)
 #   DOCKERD_BIN         - explicit path to the dockerd binary (skips search)
 #
 # Pure POSIX sh (same style as docker/lib.sh).
 
 SOCKET="${DOCKER_HOST_SOCKET:-/var/run/docker.sock}"
-TIMEOUT="${DOCKERD_WAIT_SECONDS:-30}"
+TIMEOUT="${DOCKERD_WAIT_SECONDS:-60}"
 
 # run_as_root <cmd...>: run as root (directly or via passwordless sudo).
 run_as_root() {
@@ -37,11 +43,18 @@ run_as_root() {
     fi
 }
 
-# wait_for_socket: poll the socket until it appears or the timeout elapses.
-wait_for_socket() {
+# daemon_ok: true if the docker CLI can talk to a daemon.
+daemon_ok() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# wait_for_daemon: poll `docker info` until it succeeds or the timeout elapses.
+# Checking the daemon (not just the socket) avoids false positives from a
+# stale socket file left by a dead daemon.
+wait_for_daemon() {
     _i=0
     while [ "$_i" -lt "$TIMEOUT" ]; do
-        if [ -S "$SOCKET" ]; then
+        if daemon_ok; then
             return 0
         fi
         _i=$((_i + 1))
@@ -53,29 +66,29 @@ wait_for_socket() {
 # --- 0. Idempotent check: is the daemon already reachable? -------------------
 # Covers DOCKER_HOST (tcp://...) and non-standard socket paths: if the CLI
 # can talk to a daemon, nothing needs to be started.
-if command -v docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-        echo "[imager] Docker daemon already reachable via docker CLI (DOCKER_HOST='${DOCKER_HOST:-}')"
-        exit 0
-    fi
-    echo "[imager] docker CLI present but daemon not reachable, trying to start it"
-fi
-
-# --- 1. Idempotent check: socket already present? ----------------------------
-if [ -S "$SOCKET" ]; then
-    echo "[imager] Docker socket already present ($SOCKET)"
+if daemon_ok; then
+    echo "[imager] Docker daemon already reachable via docker CLI (DOCKER_HOST='${DOCKER_HOST:-}')"
     exit 0
+fi
+echo "[imager] docker CLI present but daemon not reachable, trying to start it"
+
+# --- 1. Stale socket cleanup --------------------------------------------------
+# A socket file may exist from a previous run while the daemon is dead.
+# Remove it so dockerd can bind the path again.
+if [ -S "$SOCKET" ]; then
+    echo "[imager] socket exists but daemon is not reachable - removing stale socket"
+    run_as_root rm -f "$SOCKET" 2>/dev/null || true
 fi
 
 # --- 2. systemd ---------------------------------------------------------------
 if command -v systemctl >/dev/null 2>&1; then
     echo "[imager] starting docker via systemctl"
     if run_as_root systemctl start docker 2>/dev/null; then
-        if wait_for_socket; then
+        if wait_for_daemon; then
             echo "[imager] Docker daemon started via systemctl"
             exit 0
         fi
-        echo "[imager] systemctl start docker: socket not ready, falling back"
+        echo "[imager] systemctl start docker: daemon not ready, falling back"
     else
         echo "[imager] systemctl start docker failed (rc=$?), falling back"
     fi
@@ -85,11 +98,11 @@ fi
 if command -v service >/dev/null 2>&1; then
     echo "[imager] starting docker via service"
     if run_as_root service docker start 2>/dev/null; then
-        if wait_for_socket; then
+        if wait_for_daemon; then
             echo "[imager] Docker daemon started via service"
             exit 0
         fi
-        echo "[imager] service docker start: socket not ready, falling back"
+        echo "[imager] service docker start: daemon not ready, falling back"
     else
         echo "[imager] service docker start failed (rc=$?), falling back"
     fi
@@ -125,6 +138,18 @@ find_dockerd() {
     return 1
 }
 
+# launch_dockerd <bin> <flags>: start dockerd detached from the step's
+# process group (setsid) so it survives the end of the step.
+launch_dockerd() {
+    _bin="$1"
+    _flags="$2"
+    if command -v setsid >/dev/null 2>&1; then
+        run_as_root sh -c "setsid nohup '$_bin' $_flags > /tmp/dockerd.log 2>&1 < /dev/null &"
+    else
+        run_as_root sh -c "nohup '$_bin' $_flags > /tmp/dockerd.log 2>&1 < /dev/null &"
+    fi
+}
+
 # try_launch_dockerd <bin>: start dockerd with progressively more
 # container-friendly flags. In restricted CI containers iptables may be
 # unavailable (no NET_ADMIN) and overlayfs may not work - retry with
@@ -135,17 +160,13 @@ try_launch_dockerd() {
     for _flags in "" "--iptables=false --ip6tables=false" \
                   "--iptables=false --ip6tables=false --storage-driver=vfs"; do
         echo "[imager] starting dockerd in the background ($_bin $_flags, log: /tmp/dockerd.log)"
-        if run_as_root sh -c "nohup '$_bin' $_flags > /tmp/dockerd.log 2>&1 &"; then
-            if wait_for_socket; then
-                echo "[imager] Docker daemon started (dockerd)"
-                exit 0
-            fi
-            echo "[imager] dockerd did not become ready, stopping it and retrying"
-            run_as_root sh -c "pkill -f '$_bin' 2>/dev/null; sleep 1" || true
-        else
-            echo "[imager] failed to launch dockerd (no root/sudo)"
-            return 1
+        launch_dockerd "$_bin" "$_flags"
+        if wait_for_daemon; then
+            echo "[imager] Docker daemon started (dockerd)"
+            exit 0
         fi
+        echo "[imager] dockerd did not become ready, stopping it and retrying"
+        run_as_root sh -c "pkill -f '$_bin' 2>/dev/null; sleep 1" || true
     done
     echo "[imager] dockerd failed to start, see /tmp/dockerd.log"
     return 1
@@ -196,13 +217,17 @@ echo "[imager] --- diagnostics ---" >&2
 echo "[imager] id: $(id 2>&1)" >&2
 echo "[imager] PATH: $PATH" >&2
 echo "[imager] DOCKER_HOST: '${DOCKER_HOST:-}'" >&2
-for _c in docker dockerd systemctl service sudo apt-get apk dnf yum; do
+for _c in docker dockerd systemctl service sudo setsid apt-get apk dnf yum; do
     if command -v "$_c" >/dev/null 2>&1; then
         echo "[imager] $_c: $(command -v "$_c")" >&2
     else
         echo "[imager] $_c: NOT FOUND" >&2
     fi
 done
+echo "[imager] docker info error:" >&2
+docker info >&2 2>&1 || true
+echo "[imager] dockerd processes:" >&2
+ps aux 2>/dev/null | grep -i dockerd | grep -v grep >&2 || echo "[imager]   (none)" >&2
 echo "[imager] /var/run contents (docker-related):" >&2
 ls -la /var/run 2>/dev/null | grep -i docker >&2 || echo "[imager]   (none)" >&2
 if [ -f /tmp/dockerd.log ]; then
