@@ -77,7 +77,9 @@ RUN apk add --no-cache --upgrade onnxruntime
 # проходит. Разбиваем на два RUN-слоя: golang.org (111MB) и остальные (163MB).
 WORKDIR /src
 COPY go.mod go.sum ./
-COPY go.work go.work.sum ./
+# go.work/go.work.sum НЕ копируются: go.work содержит только `use ./` и для
+# сборки не нужен (сборка идёт через go.mod с replace на ./govips), а
+# go.work.sum исключён из git (.gitignore) и отсутствует в CI-чекауте.
 COPY govips/ ./govips/
 RUN go mod download golang.org/x/crypto golang.org/x/image golang.org/x/net golang.org/x/sys golang.org/x/term golang.org/x/text
 RUN go mod download -x

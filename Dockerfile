@@ -52,8 +52,10 @@ WORKDIR /src
 
 # Сначала модули — для кэширования слоя зависимостей. Локальный replace-модуль
 # govips должен быть в контейнере до `go mod download`.
+# go.work/go.work.sum НЕ копируются: go.work содержит только `use ./` и для
+# сборки не нужен (сборка идёт через go.mod с replace на ./govips), а
+# go.work.sum исключён из git (.gitignore) и отсутствует в CI-чекауте.
 COPY go.mod go.sum ./
-COPY go.work go.work.sum ./
 COPY govips/ ./govips/
 RUN go mod download
 
