@@ -19,7 +19,7 @@ require (
 	github.com/pkg-ru/dynamic v1.0.0
 	github.com/pkg/sftp v1.13.11
 	github.com/yalue/onnxruntime_go v1.35.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
