@@ -107,5 +107,21 @@ jobs:
           docker push "altrap/imager:latest"
           docker push "altrap/imager:${resolved}"
 
-      - name: Verify image
-        run: docker run --rm "altrap/imager:latest" imager --version
+      # Проверка работоспособности опубликованного образа: контейнер
+      # запускается в фоне (без mount'ов; конфиг из образа /etc/imager) и
+      # опрашивается healthz-эндпоинт (тот же, что в HEALTHCHECK Dockerfile).
+      # Таймаут 60с: если сервер не поднялся — логи контейнера + fail.
+      - name: Verify image (healthz)
+        run: |
+          cid=$(docker run -d -e IMAGER_SKIP_MODELS=1 "altrap/imager:latest")
+          trap 'docker rm -f "$cid" >/dev/null 2>&1' EXIT
+          for i in $(seq 1 30); do
+            if docker exec "$cid" wget -q -O- http://127.0.0.1:8080/healthz 2>/dev/null; then
+              echo "healthz OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::container did not become healthy in 60s"
+          docker logs "$cid" || true
+          exit 1
