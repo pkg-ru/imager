@@ -255,4 +255,6 @@ GitVerse — основной репозиторий, GitHub — зеркало:
 при найденных критических уязвимостях публикация блокируется (`needs: build`).
 
 Секрет `DOCKERHUB_TOKEN` (учётка `altrap`, права Read & Write) задаётся в
-настройках репозитория **GitHub** (Settings → Secrets and variables → Actions).
+настройках репозитория **GitHub** как environment secret окружения `Imager`
+(Settings → Environments → Imager → Environment secrets); джоба `publish`
+объявляет `environment: Imager`, чтобы получить к нему доступ.

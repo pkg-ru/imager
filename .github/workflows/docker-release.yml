@@ -64,6 +64,11 @@ jobs:
     name: Publish to Docker Hub
     runs-on: ubuntu-latest
     needs: build
+    # DOCKERHUB_TOKEN задан как environment secret окружения "Imager"
+    # (Settings → Environments → Imager). Environment-секреты доступны
+    # только джобам с явным указанием environment; без этой строки
+    # secrets.DOCKERHUB_TOKEN пуст ("Error: Password required" в login).
+    environment: Imager
     env:
       # Единая переменная для обоих триггеров:
       # - push тега: github.ref_name (например "v2.0.0");
