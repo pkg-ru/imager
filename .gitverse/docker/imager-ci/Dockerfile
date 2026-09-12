@@ -37,7 +37,12 @@ ENV CGO_ENABLED=1 \
     GOARCH=amd64 \
     GOFLAGS="-buildvcs=false" \
     GOMODCACHE=/gomodcache \
-    IMAGER_MODELS_DIR=/etc/imager/models
+    IMAGER_MODELS_DIR=/etc/imager/models \
+    # gcc 15 (Alpine 3.24) собирает cgo-объекты с PIE по умолчанию; Go-линковка
+    # cgo-бинарей создаёт текстовые релокации (DT_TEXTREL) в read-only секции
+    # .go.func, которые musl не может применить в PIE -> segfault при загрузке
+    # тестового бинаря. -no-pie отключает PIE (стандартное исправление).
+    CGO_LDFLAGS="-no-pie"
 
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
 # на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —

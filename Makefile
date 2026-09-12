@@ -13,9 +13,15 @@ install:
 # onnx требует C-библиотеку ONNX Runtime (libonnxruntime) и cgo.
 TAGS ?= libvips onnx
 
+# gcc 15 (Alpine 3.24/musl) собирает cgo-объекты с PIE по умолчанию; Go-линковка
+# cgo-бинарей создаёт текстовые релокации (DT_TEXTREL) в read-only секции
+# .go.func, которые musl не может применить в PIE -> segfault при загрузке.
+# -no-pie отключает PIE (стандартное исправление для Alpine/musl).
+CGO_LDFLAGS ?= -no-pie
+
 .PHONY: build
 build:
-	go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
+	CGO_LDFLAGS="$(CGO_LDFLAGS)" go build -tags "$(TAGS)" -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
 
 .PHONY: run
 run: build
@@ -65,7 +71,7 @@ tags-check:
 # Сборка с реальным ONNX Runtime (требует libonnxruntime + cgo).
 .PHONY: build-onnx
 build-onnx:
-	go build -tags "libvips onnx" -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
+	CGO_LDFLAGS="$(CGO_LDFLAGS)" go build -tags "libvips onnx" -trimpath -ldflags="-s -w" -o ./imager ./cmd/imager
 
 # Тесты реального инференса (YuNet + SSD) с тегом onnx.
 # Требует модели в ./models и libonnxruntime.
@@ -111,7 +117,7 @@ endif
 
 .PHONY: build-prod
 build-prod:
-	cd cmd/imager && go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
+	cd cmd/imager && CGO_LDFLAGS="$(CGO_LDFLAGS)" go build -tags libvips -trimpath -ldflags="-s -w" -o ../../imager .
 
 # Сборка образа из исходников (локально/CI).
 .PHONY: docker-build

@@ -42,6 +42,10 @@ jobs:
       # GOMODCACHE предзагружен в образ (go mod download при сборке образа);
       # исходники монтируются в /src, модули не скачиваются заново.
       GOMODCACHE: /gomodcache
+      # gcc 15 (Alpine 3.24) собирает cgo-объекты с PIE; Go-линковка cgo-бинарей
+      # создаёт DT_TEXTREL в read-only .go.func, musl не применяет их в PIE ->
+      # segfault тестов cgo-пакетов. -no-pie отключает PIE (исправление).
+      CGO_LDFLAGS: "-no-pie"
 
     steps:
       - name: Checkout
@@ -74,6 +78,10 @@ jobs:
       CGO_ENABLED: "1"
       TAGS: "libvips,onnx"
       GOMODCACHE: /gomodcache
+      # gcc 15 (Alpine 3.24) собирает cgo-объекты с PIE; Go-линковка cgo-бинарей
+      # создаёт DT_TEXTREL в read-only .go.func, musl не применяет их в PIE ->
+      # segfault тестов cgo-пакетов. -no-pie отключает PIE (исправление).
+      CGO_LDFLAGS: "-no-pie"
 
     steps:
       - name: Checkout
@@ -102,6 +110,10 @@ jobs:
       CGO_ENABLED: "1"
       TAGS: "libvips,onnx"
       GOMODCACHE: /gomodcache
+      # gcc 15 (Alpine 3.24) собирает cgo-объекты с PIE; Go-линковка cgo-бинарей
+      # создаёт DT_TEXTREL в read-only .go.func, musl не применяет их в PIE ->
+      # segfault тестов cgo-пакетов. -no-pie отключает PIE (исправление).
+      CGO_LDFLAGS: "-no-pie"
 
     steps:
       - name: Checkout
