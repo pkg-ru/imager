@@ -67,11 +67,18 @@ RUN apk add --no-cache ffmpeg~=8.1 curl ca-certificates
 # git нужен actions/checkout для клонирования. Слой ~86MB — безопасен для
 # лимита QRATOR (~256MB).
 RUN apk add --no-cache git nodejs
+# Edge-репозитории — для edge-фиксов CVE (см. следующий шаг).
+#
+# ВАЖНО: апгрейд libstdc++/libgcc (и транзитивно gcc) из edge здесь УБРАН.
+# Раньше он требовался for onnxruntime из edge (C++23); теперь onnxruntime
+# берётся из стабильного community 3.24. Апгрейд gcc из edge
+# (15.2.0-r5 -> r9) удаляет crtbegin.o из комплекта gcc, что ломает линковку
+# cgo с CGO_LDFLAGS="-no-pie" (см. ENV выше): "ld: cannot find crtbegin.o".
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
-    && apk add --no-cache --upgrade libstdc++ libgcc
+    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories
 # onnxruntime в 3.24 доступен в стабильном community; edge-фиксы CVE
 # (ffmpeg/libraw/libde265/libass/nghttp2) — как в production build-deps.sh.
+# (edge-пакеты не тянут апгрейд gcc: проверено сборкой Dockerfile.test.)
 RUN apk add --no-cache --upgrade onnxruntime ffmpeg libraw libde265 libass nghttp2
 
 # --- GOMODCACHE: предзагруженные модули из go.sum ---------------------------
