@@ -2,6 +2,114 @@
 
 ## Запуск
 
+### Быстрый старт (готовый образ)
+
+Минимальный запуск готового образа `altrap/imager` с Docker Hub — без
+клонирования репозитория и без сборки. Все базовые конфиги (`server.yaml`,
+`generate.yaml`, `failback.yaml`) уже в образе: при старте entrypoint
+подтянет их в смонтированный каталог конфигурации, если там их нет.
+
+```bash
+# 1. Каталоги: конфигурация (можно пустой), исходники, результаты
+mkdir -p setting data/source data/result
+chmod -R a+rwX data/result            # запись нужна uid 10001 (imager)
+
+# 2. Исходник и запуск
+cp /path/to/photo.jpg data/source/test.jpg
+docker run -d --name imager -p 8080:8080 \
+  -v ./setting:/etc/imager/setting:rw \
+  -v ./data/source:/data/source:ro \
+  -v ./data/result:/data/result:rw \
+  -e IMAGER_CONFIG_DIR=/etc/imager/setting \
+  altrap/imager:latest
+
+# 3. Проверка
+curl http://localhost:8080/healthz                      # {"status":"alive"}
+curl -o out.webp http://localhost:8080/test-jpg/x.webp  # ассет в webp
+```
+
+#### Volumes: обязательные и опциональные
+
+| Volume | Обязательность | Назначение |
+|--------|----------------|------------|
+| `./setting:/etc/imager/setting:rw` | **обязателен** | Конфигурация. Может быть **пустым**: entrypoint скопирует базовые конфиги (`server.yaml`, `generate.yaml`, `failback.yaml`) и шаблоны `*-local.yaml.example` из образа при первом старте. `:rw` — чтобы entrypoint мог создавать файлы |
+| `./data/source:/data/source:ro` | **обязателен** | Исходные файлы (fs-source из конфига) |
+| `./data/result:/data/result:rw` | **обязателен** | Результаты генерации (fs-result из конфига); uid 10001 должен иметь запись |
+| `./models:/etc/imager/models:rw` | опционален | ONNX-модели. Без монтирования entrypoint скачает их в анонимный volume — при пересоздании контейнера скачивание повторится. Монтируйте, чтобы модели сохранялись на хосте |
+
+#### Переопределение конфигурации
+
+Два способа (см. [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации)):
+
+- **Только `*-local.yaml`** (рекомендуется): монтируйте пустой `./setting`
+  и кладите туда только `server-local.yaml` / `generate-local.yaml` /
+  `failback-local.yaml`. Базовые конфиги подтянутся из образа, а `-local`
+  файлы глубоко мержатся поверх них. Существующие файлы entrypoint никогда
+  не перезаписывает.
+- **Все конфиги целиком**: положите в `./setting` полный набор
+  `server.yaml` + `generate.yaml` + `failback.yaml` (+ `*-local.yaml`) —
+  они полностью заменят дефолты образа.
+
+Что происходит при старте:
+
+- entrypoint ([`docker/entrypoint.sh`](../docker/entrypoint.sh)) копирует
+  отсутствующие базовые конфиги и шаблоны `*-local.yaml.example` из
+  `/etc/imager` (дефолты образа) в `IMAGER_CONFIG_DIR`, затем создаёт
+  `*-local.yaml` из шаблонов (только если файла ещё нет);
+- entrypoint скачивает ONNX-модели в `IMAGER_MODELS_DIR` (по умолчанию
+  `/etc/imager/models`; идемпотентно; без сети сервис всё равно стартует —
+  детекция опциональна);
+- конфигурация читается из `IMAGER_CONFIG_DIR` (три слоя: `server.yaml`,
+  `generate.yaml`, `failback.yaml` + `*-local.yaml`);
+- порт только `8080` (plain HTTP; TLS терминируется на reverse-proxy —
+  см. [NGINX.md](NGINX.md)); портов 80/443, как в ранних версиях образа, нет.
+
+Тот же запуск через docker-compose — положите `docker-compose.yaml` рядом
+с каталогами `setting/`, `data/` (опции для production закомментированы):
+
+```yaml
+services:
+  imager:
+    image: altrap/imager:latest
+    restart: unless-stopped
+    stop_signal: INT
+    stop_grace_period: 15s
+    ports:
+      - "8080:8080"
+    environment:
+      IMAGER_CONFIG_DIR: /etc/imager/setting
+    volumes:
+      - ./setting:/etc/imager/setting:rw
+      - ./data/source:/data/source:ro
+      - ./data/result:/data/result:rw
+      # - ./models:/etc/imager/models:rw   # опционально (ONNX-модели)
+
+    # --- Опции для production (раскомментируйте при необходимости) ---
+    # Resource limits (обязательные для production).
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2.0"
+    #       memory: 2G
+    #     reservations:
+    #       cpus: "0.25"
+    #       memory: 128M
+```
+
+```bash
+docker compose up -d
+```
+
+> **Права на каталоги.** Контейнер работает от non-root `imager` (uid 10001):
+> `./data/result` (и `./models`, если монтируете) должны быть доступны ему
+> на запись (`chmod -R a+rwX` или `chown -R 10001:10001`), иначе публикация
+> результатов и автоскачивание моделей не сработают (сервис при этом
+> стартует с warning).
+
+Для production используйте полный вариант ниже (hardening, лимиты ресурсов,
+health-check) — [`docker-compose.yaml`](../docker-compose.yaml) в корне
+репозитория или ручной `docker run` из раздела «Docker вручную».
+
 ### Pull готового образа (основной путь)
 
 ```bash

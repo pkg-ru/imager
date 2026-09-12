@@ -164,7 +164,14 @@ IMAGER_CONFIG_DIR=./setting ./imager
 docker pull altrap/imager
 ```
 
-Запуск, hardening и bind-mounts — в [DEPLOYMENT.md](DEPLOYMENT.md#запуск).
+Все базовые конфиги (`server.yaml`, `generate.yaml`, `failback.yaml`) уже
+в образе: при старте entrypoint подтянет их в смонтированный каталог
+конфигурации, если там их нет. Переопределять можно только `*-local.yaml`
+или все конфиги целиком.
+
+Быстрый старт с готовым образом (`docker run` + docker-compose, без
+клонирования репозитория) — [DEPLOYMENT.md](DEPLOYMENT.md#быстрый-старт-готовый-образ);
+запуск, hardening и bind-mounts — в [DEPLOYMENT.md](DEPLOYMENT.md#запуск).
 
 ### Сборка образа из релиза (GitHub releases)
 

@@ -94,21 +94,30 @@ RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
     && chown root:imager /etc/imager/models \
     && chmod 0755 /etc/imager/models
 
-# Базовый конфиг и entrypoint-скрипты автоскачивания моделей.
-# Модели в образ не входят (скачиваются в рантайме в rw-каталог).
-COPY setting/server.yaml /etc/imager/server.yaml
-# Шаблоны локальных переопределений: при старте контейнера entrypoint копирует
-# каждый шаблон в *-local.yaml каталога IMAGER_CONFIG_DIR, ТОЛЬКО если целевой
-# файл ещё не существует (см. docker/entrypoint.sh).
+# Базовые конфиги всех трёх слоёв (setting/generate/failback) и шаблоны
+# локальных переопределений. Модели в образ не входят (скачиваются в
+# рантайме в rw-каталог).
+#
+# /etc/imager — каталог ДЕФОЛТОВ образа. При старте контейнера entrypoint
+# (docker/entrypoint.sh) копирует отсутствующие базовые конфиги и шаблоны
+# *-local.yaml.example в IMAGER_CONFIG_DIR (по умолчанию /etc/imager), НЕ
+# перезаписывая существующие файлы. Это позволяет:
+#   - запускать контейнер вообще без монтирования конфигов (все дефолты из
+#     образа);
+#   - монтировать пустой каталог ./setting — дефолты подтянутся при старте;
+#   - переопределять только *-local.yaml (base-файлы остаются из образа);
+#   - переопределять все конфиги целиком (смонтировать свою папку с полным
+#     набором server/generate/failback + *-local.yaml).
+COPY setting/server.yaml setting/generate.yaml setting/failback.yaml /etc/imager/
 COPY setting/*-local.yaml.example /etc/imager/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/download-models.sh /usr/local/bin/download-models.sh
 
-# Restrictive permissions: конфиг 0640, шаблоны 0640, скрипты 0755
+# Restrictive permissions: конфиги 0640, шаблоны 0640, скрипты 0755
 # (копируются как root:root, затем chown — entrypoint'у не нужен root для
 # скачивания в смонтированный каталог: uid imager должен иметь запись в ./models:rw).
-RUN chmod 0640 /etc/imager/server.yaml \
-    && chown root:imager /etc/imager/server.yaml \
+RUN chmod 0640 /etc/imager/server.yaml /etc/imager/generate.yaml /etc/imager/failback.yaml \
+    && chown root:imager /etc/imager/server.yaml /etc/imager/generate.yaml /etc/imager/failback.yaml \
     && chmod 0640 /etc/imager/*-local.yaml.example \
     && chown root:imager /etc/imager/*-local.yaml.example \
     && chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/download-models.sh \

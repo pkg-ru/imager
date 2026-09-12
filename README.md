@@ -36,17 +36,88 @@ GET /photos/city-skyline-jpg/300x@2.webp
 
 ## Быстрый старт
 
-### Docker Compose (рекомендуется)
+### Готовый образ (Docker Hub)
+
+Без клонирования репозитория и сборки — только готовый образ
+`altrap/imager` и ваши каталоги с данными. Все базовые конфиги
+(`server.yaml`, `generate.yaml`, `failback.yaml`) уже в образе: при старте
+entrypoint подтянет их в смонтированный каталог конфигурации, если там их
+нет.
 
 ```bash
-git clone https://gitverse.ru/pkg-ru/imager.git
-cd imager
-docker compose up -d --build
-curl http://localhost:8080/healthz   # {"status":"alive"}
+# 1. Каталоги: конфигурация (можно пустой), исходники, результаты
+mkdir -p setting data/source data/result
+chmod -R a+rwX data/result            # запись нужна uid 10001 (imager)
+
+docker run -d --name imager -p 8080:8080 \
+  -v ./setting:/etc/imager/setting:rw \
+  -v ./data/source:/data/source:ro \
+  -v ./data/result:/data/result:rw \
+  -e IMAGER_CONFIG_DIR=/etc/imager/setting \
+  altrap/imager:latest
+
+curl http://localhost:8080/healthz                      # {"status":"alive"}
+curl -o out.webp http://localhost:8080/test-jpg/x.webp  # ассет в webp
 ```
 
-Конфигурация монтируется read-only из `./setting` в `/etc/imager/setting`
-(подробнее — [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+Обязательные volumes: `setting` (конфигурация; пустой каталог заполнится
+дефолтами образа при старте), `data/source` (исходники), `data/result`
+(результаты). Опциональные: `./models:/etc/imager/models:rw` — каталог
+ONNX-моделей (entrypoint скачает их при старте; без монтирования модели
+попадут в анонимный volume и скачаются заново при пересоздании контейнера).
+Порт — `8080` (plain HTTP, TLS — на reverse-proxy).
+
+**Переопределение конфигурации** — два способа:
+
+- **Только `*-local.yaml`** (рекомендуется): монтируйте пустой `./setting`
+  и кладите туда только `server-local.yaml` / `generate-local.yaml` /
+  `failback-local.yaml` — они глубоко мержатся поверх базовых конфигов
+  образа (см. [docs/CONFIGURATION.md](docs/CONFIGURATION.md#загрузка-конфигурации));
+- **Все конфиги целиком**: положите в `./setting` полный набор
+  `server.yaml` + `generate.yaml` + `failback.yaml` (+ `*-local.yaml`) —
+  они полностью заменят дефолты образа.
+
+### Docker Compose
+
+Тот же запуск через compose (минимальный вариант; опции для production
+закомментированы):
+
+```yaml
+services:
+  imager:
+    image: altrap/imager:latest
+    restart: unless-stopped
+    stop_signal: INT
+    stop_grace_period: 15s
+    ports:
+      - "8080:8080"
+    environment:
+      IMAGER_CONFIG_DIR: /etc/imager/setting
+    volumes:
+      - ./setting:/etc/imager/setting:rw
+      - ./data/source:/data/source:ro
+      - ./data/result:/data/result:rw
+      # - ./models:/etc/imager/models:rw   # опционально (ONNX-модели)
+
+    # --- Опции для production (раскомментируйте при необходимости) ---
+    # Resource limits (обязательные для production).
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2.0"
+    #       memory: 2G
+    #     reservations:
+    #       cpus: "0.25"
+    #       memory: 128M
+```
+
+```bash
+docker compose up -d
+```
+
+Production-вариант с hardening (лимиты ресурсов, health-check, tmpfs) —
+[`docker-compose.yaml`](docker-compose.yaml) в корне репозитория. Подробнее —
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#быстрый-старт-готовый-образ).
 
 ### Сборка из исходников
 
