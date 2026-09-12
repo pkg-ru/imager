@@ -99,3 +99,24 @@ URL, query, raw user input и секреты не логируются и не �
 ## Контейнерный hardening
 
 См. [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening): non-root, dropped capabilities, no-new-privileges, tmpfs для `/tmp`. Read-only rootfs не используется (см. объяснение в [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening)).
+
+## Сканирование уязвимостей образа
+
+Базовый образ — **Alpine 3.24** (стабильная ветка; `onnxruntime` доступен в
+community, edge-репозиторий используется только для точечных фиксов CVE —
+см. `docker/build-deps.sh`). Пакеты пиннуются (`~=`) для воспроизводимости.
+
+Сканирование в CI (`.github/workflows/docker-release.yml`):
+
+- **Trivy** (`HIGH,CRITICAL`, `--ignore-unfixed`) — гейт релиза: найденные
+  fixable-уязвимости блокируют публикацию;
+- **Docker Scout** (все severity, включая unfixed) — мониторинг полной
+  картины, той же, что показывает вкладка Security на Docker Hub.
+
+Остаточные риски (на Alpine 3.24, все `not fixed` — фиксов нет в
+репозиториях Alpine на момент сборки): `openexr` (3×HIGH), `cjson`
+(2×HIGH, 2×MEDIUM), `jbig2dec` (1×MEDIUM), `libxml2` (3×LOW), `cairo`
+(1×LOW), а также Go/Cargo-зависимости бинарника (UNSPECIFIED/LOW).
+Эти CVE не имеют исправленных версий в стабильных репозиториях; обновление
+доступно только после выхода фиксов в Alpine. Регулярно пересобирайте образ
+и следите за отчётом Docker Scout.

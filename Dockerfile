@@ -9,9 +9,9 @@ ARG IMAGER_VERSION=latest
 # Go toolchain: install-imager.sh резолвит версию ("latest" через GitHub API/
 # git ls-remote) и кладёт бинарь в /out/imager.
 ###############################################################################
-FROM alpine:3.23 AS release-fetcher
+FROM alpine:3.24 AS release-fetcher
 ARG IMAGER_VERSION=latest
-# busybox wget в alpine:3.23 умеет https, но CA-сертификаты нужны для проверки
+# busybox wget в alpine:3.24 умеет https, но CA-сертификаты нужны для проверки
 # цепочки; curl предпочтительнее для редиректов GitHub.
 RUN apk add --no-cache ca-certificates curl
 COPY docker/lib.sh docker/install-imager.sh /tmp/
@@ -21,10 +21,10 @@ RUN IMAGER_VERSION=${IMAGER_VERSION} INSTALL_DIR=/out sh /tmp/install-imager.sh
 # Builder (from-source): собирает production binary из cmd/imager.
 # CGO_ENABLED=1 + -tags libvips (govips, cgo). Кодеки: vips, heif, jxl, rsvg,
 # poppler, libraw. ONNX Runtime (детекция) — -tags onnx: пакет onnxruntime
-# есть только в edge-репозитории Alpine (musl); libstdc++/libgcc из edge
-# требуются из-за C++23-символа в onnxruntime.
+# есть в стабильном community Alpine 3.24; edge-репозиторий используется
+# только для точечных фиксов CVE (см. docker/build-deps.sh: EDGE_PACKAGES).
 ###############################################################################
-FROM golang:1.27.0-alpine3.23 AS source-builder
+FROM golang:1.27.0-alpine3.24 AS source-builder
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 ARG GOFLAGS="-buildvcs=false"
@@ -38,11 +38,11 @@ ENV CGO_ENABLED=1 \
 ARG BUILD_TAGS=libvips,onnx
 
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.23 для golang:1.27.0-alpine3.23). Список пакетов —
+# на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —
 # единый источник: docker/build-deps.sh (pinned версии сохранены).
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-builder \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
@@ -68,14 +68,15 @@ RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -
 # из docker/build-deps.sh (install-runtime/install-edge). Бинарь копируется
 # в финальных таргетах from-release / from-source.
 ###############################################################################
-FROM alpine:3.23 AS runtime-base
+FROM alpine:3.24 AS runtime-base
 
 # Pinned версии пакетов для воспроизводимости. onnxruntime — runtime для
-# бинаря с -tags onnx; обновление libstdc++/libgcc обязательно (edge-пакет
-# собран с C++23).
+# бинаря с -tags onnx; в Alpine 3.24 он есть в стабильном community.
+# Edge-репозитории включаются для edge-фиксов CVE (см. build-deps.sh:
+# EDGE_PACKAGES — ffmpeg/libraw/libde265/libass/nghttp2).
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-runtime \

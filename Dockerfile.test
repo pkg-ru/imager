@@ -13,7 +13,7 @@
 #       -e IMAGER_MODEL_FACE_URL=... -e IMAGER_MODEL_OBJECT_URL=... imager:test \
 #       sh -c "download-models.sh && go mod tidy && go test -tags 'libvips onnx' ./... -count=1"
 ###############################################################################
-FROM golang:1.27.0-alpine3.23
+FROM golang:1.27.0-alpine3.24
 
 ENV CGO_ENABLED=1 \
     GOOS=linux \
@@ -21,18 +21,18 @@ ENV CGO_ENABLED=1 \
     IMAGER_MODELS_DIR=/etc/imager/models
 
 # cgo-зависимости (libvips, govips) — те же, что в production builder, без
-# пиннинга (golang:1.27.0-alpine3.23 базируется на Alpine 3.23). onnxruntime и
-# libstdc++/libgcc — из edge (C++23-символ). dl-cdn.alpinelinux.org недоступен
-# из Docker — репозитории переопределены на mirror.yandex.ru. curl нужен
-# download-models.sh (в production-образе используется busybox wget; здесь
-# ставим curl для надёжного следования редиректам).
+# пиннинга (golang:1.27.0-alpine3.24 базируется на Alpine 3.24). onnxruntime —
+# из стабильного community 3.24. dl-cdn.alpinelinux.org недоступен из Docker —
+# репозитории переопределены на mirror.yandex.ru. curl нужен download-models.sh
+# (в production-образе используется busybox wget; здесь ставим curl для
+# надёжного следования редиректам).
 #
 # Пакетный список — единый источник docker/build-deps.sh (тот же, что в
-# production Dockerfile): builder-пакеты + edge (onnxruntime). Дополнительно
-# ставим tzdata, curl, ca-certificates для тестов.
+# production Dockerfile): builder-пакеты + edge-фиксы (ffmpeg/libraw/libde265/
+# libass/nghttp2). Дополнительно ставим tzdata, curl, ca-certificates для тестов.
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-builder \
     && apk add --no-cache tzdata~=2026 curl ca-certificates \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \

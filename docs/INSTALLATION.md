@@ -189,7 +189,7 @@ docker build --target from-release -t altrap/imager .
 > последнюю стадию Dockerfile (`from-source`) и `IMAGER_VERSION` игнорируется.
 
 Target `from-release`: бинарь скачивается fetcher-стадией
-(`alpine:3.23` + `ca-certificates`/`curl` + `docker/install-imager.sh` +
+(`alpine:3.24` + `ca-certificates`/`curl` + `docker/install-imager.sh` +
 `docker/lib.sh`) из GitHub releases (`github.com/pkg-ru/imager`, fallback
 теги `gitverse.ru/pkg-ru/imager`) — Go toolchain и исходники не нужны.
 
@@ -209,10 +209,10 @@ HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 docker build --target from-source -t imager:from-source .
 ```
 
-Target `from-source`: builder `golang:1.27.0-alpine3.23` + libvips/кодеки/onnxruntime,
+Target `from-source`: builder `golang:1.27.0-alpine3.24` + libvips/кодеки/onnxruntime,
 бинарный файл собирается с `-tags libvips,onnx`.
 
-Runtime-стадия (`alpine:3.23`) содержит libvips, heif, de265, jxl, poppler,
+Runtime-стадия (`alpine:3.24`) содержит libvips, heif, de265, jxl, poppler,
 libraw, rsvg, ghostscript, ffmpeg, onnxruntime; non-root `imager` (uid 10001);
 пакетные списки — единый источник [`docker/build-deps.sh`](../docker/build-deps.sh);
 каталог конфигурации — `/etc/imager` (env `IMAGER_CONFIG_DIR`).

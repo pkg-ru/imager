@@ -174,7 +174,7 @@ docker run -d \
 | no-new-privileges | `security_opt: no-new-privileges:true` |
 | tmpfs | `/tmp`: `rw,noexec,nosuid,size=64m` |
 | Права доступа | Бинарь `0755`, конфиг `0640`, каталоги данных `0750` |
-| Pinned образы | `golang:1.27.0-alpine3.23` / `alpine:3.23`, pinned версии пакетов |
+| Pinned образы | `golang:1.27.0-alpine3.24` / `alpine:3.24`, pinned версии пакетов |
 | Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
 
 **`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` и `/etc/imager/setting` монтируются `:ro`.

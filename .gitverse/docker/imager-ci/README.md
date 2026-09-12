@@ -8,15 +8,15 @@
 
 | Компонент | Версия | Источник |
 |-----------|--------|----------|
-| Go | 1.27.0 | `golang:1.27.0-alpine3.23` |
-| libvips + codecs | pinned (build-deps.sh) | Alpine 3.23 (mirror.yandex.ru) |
-| ONNX Runtime | edge (C++23) | Alpine edge |
-| ffmpeg / ffprobe | 8.0 | Alpine 3.23 (mirror.yandex.ru) |
+| Go | 1.27.0 | `golang:1.27.0-alpine3.24` |
+| libvips + codecs | pinned (build-deps.sh) | Alpine 3.24 (mirror.yandex.ru) |
+| ONNX Runtime | 1.24+ (community 3.24) | Alpine 3.24 |
+| ffmpeg / ffprobe | 8.1 | Alpine 3.24 (mirror.yandex.ru) |
 | gofmt | встроен в Go 1.27 | `/usr/local/go/bin/gofmt` |
 | govulncheck | latest | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
 | ONNX-модели | YuNet + SSD MobileNet + selfie.jpg | `/etc/imager/models` (download-models.sh) |
 | GOMODCACHE | из `go.sum` | `go mod download` |
-| nodejs / git | 24.x / latest | Alpine 3.23 (для GitHub Actions-действий) |
+| nodejs / git | 24.x / latest | Alpine 3.24 (для GitHub Actions-действий) |
 
 ## Версионирование
 

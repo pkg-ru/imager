@@ -60,6 +60,14 @@ jobs:
           format: table
           exit-code: '1'
 
+      # Docker Scout (тот же движок, что вкладка Security на Docker Hub):
+      # полный скан ВСЕХ severity, включая unfixed. Не блокирует релиз
+      # (continue-on-error) — служит для мониторинга остаточных рисков,
+      # которые Docker Hub показывает в отчёте (0C/6H/5M/5L/5? на 3.24).
+      - name: Container scan (Docker Scout, all severities)
+        continue-on-error: true
+        run: docker scout cves imager:ci --format sarif --output scout.sarif || true
+
   publish:
     name: Publish to Docker Hub
     runs-on: ubuntu-latest

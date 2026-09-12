@@ -8,9 +8,9 @@
 # не скачивали зависимости в каждом запуске.
 #
 # Состав:
-#   Go        1.27.0  (golang:1.27.0-alpine3.23, официальный образ)
+#   Go        1.27.0  (golang:1.27.0-alpine3.24, официальный образ)
 #   libvips   + codecs (HEIF/AVIF, JPEG XL, SVG, PDF, RAW) — builder-пакеты
-#   ONNX Runtime (edge, C++23) — для тегов libvips,onnx
+#   ONNX Runtime (community 3.24) — для тегов libvips,onnx
 #   ffmpeg/ffprobe — интеграционные тесты видеокадров
 #   gofmt     (встроен в дистрибутив Go 1.27: /usr/local/go/bin/gofmt)
 #   govulncheck (golang.org/x/vuln/cmd/govulncheck) — предустановлен
@@ -27,7 +27,7 @@
 #   docker push gitverse.ru/pkg-ru/imager-ci:v1
 ###############################################################################
 
-FROM golang:1.27.0-alpine3.23
+FROM golang:1.27.0-alpine3.24
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 # IMAGER_MODELS_DIR — каталог ONNX-моделей: тесты реального инференса
@@ -40,7 +40,7 @@ ENV CGO_ENABLED=1 \
     IMAGER_MODELS_DIR=/etc/imager/models
 
 # dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.23 для golang:1.27.0-alpine3.23). Список пакетов —
+# на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —
 # единый источник: docker/build-deps.sh (pinned версии сохранены).
 # Дополнительно: ffmpeg/ffprobe (интеграционные тесты видеокадров),
 # curl (download-models.sh), tzdata/ca-certificates (как в Dockerfile.test).
@@ -50,12 +50,12 @@ ENV CGO_ENABLED=1 \
 # слой 295MB прошёл). Поэтому установка пакетов разбита на ОТДЕЛЬНЫЕ RUN-слои,
 # каждый из которых меньше лимита.
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.23/community" >> /etc/apk/repositories \
+RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
     && apk add --no-cache build-base pkgconf musl-dev tzdata~=2026
-RUN apk add --no-cache vips-dev~=8.17 glib-dev
+RUN apk add --no-cache vips-dev~=8.18 glib-dev
 RUN apk add --no-cache libheif-dev libde265-dev libjxl-dev librsvg-dev poppler-dev libraw-dev
-RUN apk add --no-cache ffmpeg~=8.0 curl ca-certificates
+RUN apk add --no-cache ffmpeg~=8.1 curl ca-certificates
 # Node.js + git — для GitHub Actions-действий (actions/checkout@v4 и др.):
 # джобы test/quality выполняются ВНУТРИ этого контейнера, а Node.js-действия
 # запускаются через `node` из PATH контейнера (иначе: "exec: node: not found").
@@ -65,7 +65,9 @@ RUN apk add --no-cache git nodejs
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
     && apk add --no-cache --upgrade libstdc++ libgcc
-RUN apk add --no-cache --upgrade onnxruntime
+# onnxruntime в 3.24 доступен в стабильном community; edge-фиксы CVE
+# (ffmpeg/libraw/libde265/libass/nghttp2) — как в production build-deps.sh.
+RUN apk add --no-cache --upgrade onnxruntime ffmpeg libraw libde265 libass nghttp2
 
 # --- GOMODCACHE: предзагруженные модули из go.sum ---------------------------
 # Копируем манифесты и govips (локальный replace-модуль), скачиваем модули.
