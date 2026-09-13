@@ -693,8 +693,6 @@ encoders:
 		palette: true
 		palette-colors: 128
 		palette-bit-depth: 4
-	apng:
-		compression-level: 7
 	gif:
 		effort: 5
 		bit-depth: 4
@@ -741,9 +739,6 @@ encoders:
 	if got := ptrOr(e.Formats["gif"].Effort, -1); got != 5 {
 		t.Errorf("gif.effort = %d, want 5", got)
 	}
-	if got := ptrOr(e.Formats["apng"].CompressionLevel, -1); got != 7 {
-		t.Errorf("apng.compression-level = %d, want 7", got)
-	}
 }
 
 // TestParseRuntimeConfigLibvipsEncodersDefaults проверяет дефолты ЕДИНОЙ
@@ -768,7 +763,7 @@ policy: {}
 	if e.DefaultQuality != 80 {
 		t.Errorf("EncodersConfig.DefaultQuality = %d, want 80", e.DefaultQuality)
 	}
-	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "apng", "gif"} {
+	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "gif"} {
 		fc, ok := e.Formats[f]
 		if !ok {
 			t.Errorf("EncodersConfig.Formats[%q] missing", f)
@@ -783,7 +778,7 @@ policy: {}
 		}
 	}
 	// Все группы форматов присутствуют в формате EncodersConfig.
-	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "apng", "gif"} {
+	for _, f := range []string{"jpeg", "webp", "avif", "heif", "jxl", "png", "gif"} {
 		if _, ok := rc.Encoders.Formats[f]; !ok {
 			t.Errorf("Encoders.Formats[%q] missing", f)
 		}
@@ -1074,16 +1069,6 @@ policy: {}
 encoders:
 	gif:
 		bit-depth: -1
-`,
-		},
-		{
-			name: "apng compression-level > 9",
-			yaml: `
-version: "1"
-policy: {}
-encoders:
-	apng:
-		compression-level: 10
 `,
 		},
 	}

@@ -36,7 +36,9 @@ policy:
   # Каждый пресет:
   #   width/height — размер (0 = не задан, вычисляется пропорционально);
   #   output-formats — МАССИВ выходных форматов (whitelist, непустой):
-  #     jpeg | png | webp | gif | avif | heif | apng | jxl;
+  #     jpeg | png | webp | gif | avif | heif | jxl;
+  #     (APNG-запись НЕ поддерживается: требует libvips, собранного с
+  #     libspng; см. docs/INSTALLATION.md)
   #   dpr — множитель плотности пикселей. Правила:
   #     - пресет с суффиксом @N в имени (например "thumb@2") ОБЯЗАН иметь
   #       dpr: N (2/3). Отсутствие или другое значение — ошибка конфига;
@@ -63,11 +65,11 @@ policy:
   #     avif-speed, avif-lossless, heif-quality, jxl-quality, jxl-effort,
   #     jxl-lossless, png-compression-level, png-interlace, png-palette,
   #     png-palette-colors, png-palette-bit-depth, png-dither,
-  #     apng-compression-level, apng-interlace, gif-effort, gif-bit-depth,
-  #     gif-dither. Диапазоны проверяются по реестру при старте (fail-fast).
+  #     gif-effort, gif-bit-depth, gif-dither. Диапазоны проверяются по
+  #     реестру при старте (fail-fast).
   #     per-format quality (webp-quality и т.п.) — ТОЛЬКО для lossy-форматов
   #     (jpeg/webp/avif/heif/jxl), переопределяет скалярный quality для этого
-  #     формата; для lossless (png/apng/gif) задавать его — ошибка конфига —
+  #     формата; для lossless (png/gif) задавать его — ошибка конфига —
   #     их упаковка управляется скалярным quality.
   #   frames/duration — макс. кадры/длительность анимации (0 = без лимита);
   #   loop — nil = processing.default-loop; true/false — явно;
@@ -232,7 +234,7 @@ policy:
     # /originals:
     #   customs:
     #     x:
-    #       output-formats: [jpeg, png, webp, gif, avif, heif, apng, jxl]
+    #       output-formats: [jpeg, png, webp, gif, avif, heif, jxl]
 
     # /admin — отдельный путь с пресетом thumb.
     # /admin:
@@ -263,11 +265,10 @@ policy:
 #   opacity  — прозрачность знака в процентах: 100 = полностью непрозрачный
 #              (дефолт), 0 = полностью прозрачный (невидимый). Значения вне
 #              диапазона [0,100] трактуются как дефолт (100).
-# На анимированных выходах (GIF/WebP/APNG) ватермарка накладывается на
-# КАЖДЫЙ кадр с сохранением delay/loop. Примечание: APNG-запись требует
-# libvips, собранного с libspng (Alpine-пакет vips собран только с libpng —
-# pngsave в нём пишет статичный PNG). Секция опциональна; примеры —
-# docs/CONFIGURATION.md.
+# На анимированных выходах (GIF/WebP) ватермарка накладывается на
+# КАЖДЫЙ кадр с сохранением delay/loop. APNG-запись НЕ поддерживается
+# (требует libvips, собранного с libspng; см. docs/INSTALLATION.md).
+# Секция опциональна; примеры — docs/CONFIGURATION.md.
 ########################################
 watermarks: {}
 # Пример:

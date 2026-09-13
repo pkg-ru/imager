@@ -52,8 +52,15 @@ func IsEngineUnavailable(err error) bool {
 
 // Capability — описание покрытия движка.
 type Capability struct {
-	// Formats — набор поддерживаемых форматов (нижний регистр).
+	// Formats — набор поддерживаемых ВЫХОДНЫХ форматов (нижний регистр).
+	// APNG-выход не покрывается: запись APNG требует libvips, собранного
+	// с libspng (Alpine-пакет vips собран только с libpng — pngsave пишет
+	// статичный PNG вместо анимированного APNG).
 	Formats map[processing.Format]bool
+	// SourceFormats — набор поддерживаемых ВХОДНЫХ форматов. nil = как
+	// Formats. APNG-вход разрешён (чтение APNG как анимированного PNG
+	// работает всегда, независимо от libspng).
+	SourceFormats map[processing.Format]bool
 	// Name — имя движка ("libvips").
 	Name string
 }
@@ -121,9 +128,16 @@ func (p *Processor) PrepareRGB(ctx context.Context, src io.ReadSeeker) (*process
 	return prep.PrepareRGB(ctx, src)
 }
 
-// primaryCovered проверяет, что оба формата плана покрыты primary-движком.
+// primaryCovered проверяет, что оба формата плана покрыты primary-движком:
+// source-формат — по SourceFormats (nil = Formats), output-формат — по
+// Formats. Разделение позволяет разрешать APNG-вход (чтение как
+// анимированный PNG), но отклонять APNG-выход (запись требует libspng).
 func (p *Processor) primaryCovered(plan *processing.ProcessingPlan) bool {
-	if _, ok := p.primaryCaps.Formats[plan.SourceFormat]; !ok {
+	src := p.primaryCaps.SourceFormats
+	if src == nil {
+		src = p.primaryCaps.Formats
+	}
+	if _, ok := src[plan.SourceFormat]; !ok {
 		return false
 	}
 	if _, ok := p.primaryCaps.Formats[plan.OutputFormats]; !ok {

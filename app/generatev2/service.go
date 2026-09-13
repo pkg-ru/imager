@@ -1425,7 +1425,9 @@ func (s *bufferStream) Metadata() object.ObjectMetadata { return s.meta }
 // Только медиа-файлы: картинки/анимации (jpeg/png/webp/gif/avif/heif/apng/
 // jxl), векторы (svg) и видео (mp4/webm/mov/mkv/avi/m4v). Любые другие
 // форматы (HTML, метаданные, исходники и т.п.) не отдаются, даже если
-// файл существует.
+// файл существует. apng остаётся в списке для serveOriginal (отдача
+// APNG-исходника как есть); APNG-ВЫХОД при обработке отклоняется
+// маршрутизатором (запись требует libvips с libspng).
 var mediaFormats = map[string]struct{}{
 	"jpeg": {}, "jpg": {}, "png": {}, "webp": {}, "gif": {},
 	"avif": {}, "heif": {}, "heic": {}, "apng": {}, "jxl": {},

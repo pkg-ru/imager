@@ -19,9 +19,11 @@ GET /photos/city-skyline-jpg/300x@2.webp
   конфигурации.
 - **Преобразования** — изменение размера, центральная обрезка, trim, smart-crop
   (attention-based), face-crop и object-crop через ONNX-модели детекции.
-- **Форматы** — JPEG, PNG, WebP, GIF, AVIF, HEIF/HEIC, APNG, JPEG XL.
-- **Анимированные изображения** — GIF/WebP/APNG с лимитами на кадры и
-  длительность.
+- **Форматы** — JPEG, PNG, WebP, GIF, AVIF, HEIF/HEIC, JPEG XL.
+- **Анимированные изображения** — GIF/WebP с лимитами на кадры и
+  длительность. APNG-входы читаются как анимированный PNG; запись APNG
+  возможна только при самостоятельной сборке libvips с libspng
+  (см. [INSTALLATION.md](docs/INSTALLATION.md)).
 - **Водяные знаки** — настраиваемое наложение с кэшированием.
 - **Политика deny-by-default** — path-policies по префиксам пути разрешают
   только явно перечисленные пресеты/custom-размеры; жёсткие лимиты (байты
@@ -150,7 +152,7 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 | Компонент | Назначение | Обязательность |
 |-----------|------------|----------------|
 | Go ≥ 1.27 | Сборка из исходников | Да (для локальных сборок) |
-| libvips ≥ 8.13 + заголовки | Основной движок обработки (все форматы, включая APNG) | Рекомендуется |
+| libvips ≥ 8.13 + заголовки | Основной движок обработки (все форматы) | Рекомендуется |
 | C-компилятор, `pkg-config` | CGO-сборка govips (`-tags libvips`) | При `-tags libvips` |
 | Кодеки: libheif, libde265, libjxl, librsvg, poppler, libraw | HEIF/AVIF, JPEG XL, SVG, PDF, RAW | Для соответствующих форматов |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов (преобразования `fc`/`oc`) | Опционально (`-tags onnx`) |

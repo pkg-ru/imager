@@ -28,7 +28,7 @@ type EncodersConfig struct {
 	// DefaultQuality — encoders.default-quality [1,100] (0 = дефолт кода 80).
 	DefaultQuality int
 	// Formats — per-format параметры (ключ — каноническое имя формата
-	// domain/encoding: jpeg/webp/avif/heif/jxl/png/apng/gif).
+	// domain/encoding: jpeg/webp/avif/heif/jxl/png/gif).
 	Formats map[string]FormatEncodersConfig
 }
 
@@ -44,8 +44,8 @@ type FormatEncodersConfig struct {
 	NearLossless     *bool    // webp
 	Speed            *int     // avif [0,9] (0 валиден)
 	Effort           *int     // jxl [3,9] / gif [1,10]
-	CompressionLevel *int     // png/apng [1,9]
-	Interlace        *bool    // png/apng
+	CompressionLevel *int     // png [1,9]
+	Interlace        *bool    // png
 	Palette          *bool    // png
 	PaletteColors    *int     // png [2,256]
 	PaletteBitDepth  *int     // png [1,8]

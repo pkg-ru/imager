@@ -9,8 +9,9 @@
 //
 // Адаптер реализует порт processor.Processor (ports/
 // processor). Используется как primary-движок в routing.Processor. libvips
-// (≥ 8.13) поддерживает все форматы, включая APNG (чтение и запись как
-// multi-page PNG).
+// (≥ 8.13) поддерживает все форматы. Чтение APNG-входов работает (как
+// multi-page PNG); запись APNG требует libvips, собранного с libspng, и
+// маршрутизатором не заявляется.
 package libvips
 
 import (

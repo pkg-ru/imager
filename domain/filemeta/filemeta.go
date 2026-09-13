@@ -129,7 +129,7 @@ type AIAssetInfo struct {
 	Width int `json:"width"`
 	// Height — высота ассета (px), > 0.
 	Height int `json:"height"`
-	// Format — выходной формат (jpeg|png|webp|gif|avif|heif|apng|jxl).
+	// Format — выходной формат (jpeg|png|webp|gif|avif|heif|jxl).
 	Format string `json:"format"`
 	// Key — канонический ключ ассета в result-store.
 	Key string `json:"key"`

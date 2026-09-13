@@ -80,11 +80,11 @@ type FormatDef struct {
 	AnchorQuality uint8
 	// DirectQuality — true для форматов с прямым quality (jpeg/webp/avif/
 	// heif/jxl): quality запроса передаётся кодеру как качество и управляет
-	// Lossless=false форматами. Для AlwaysLossless-форматов (png/apng/gif)
+	// Lossless=false форматами. Для AlwaysLossless-форматов (png/gif)
 	// quality никогда не вводит потерю: оно влияет только на усилие
 	// упаковки и палитровую автоматику.
 	DirectQuality bool
-	// AlwaysLossless — формат принципиально lossless (png/apng/gif):
+	// AlwaysLossless — формат принципиально lossless (png/gif):
 	// quality влияет только на усилие упаковки/палитру, но не на качество
 	// пикселей.
 	AlwaysLossless bool
@@ -181,9 +181,9 @@ var registry = map[Format]FormatDef{
 			{Name: "quality", Kind: KindInt, Min: 1, Max: 100, Default: 80,
 				Help: "Якорное качество запроса для PNG: влияет только на усилие упаковки и палитру, потерь не вводит. Не допускается в пресетах."},
 			{Name: "compression-level", Kind: KindInt, Min: 1, Max: 9, Default: 6, Auto: true,
-				Help: "Уровень сжатия PNG/APNG [1,9] (больше = меньше размер, медленнее). Якорь: q=85→6, q=100→9, q=0→1."},
+				Help: "Уровень сжатия PNG [1,9] (больше = меньше размер, медленнее). Якорь: q=85→6, q=100→9, q=0→1."},
 			{Name: "interlace", Kind: KindBool, Default: 0,
-				Help: "Чересстрочный (Adam7) PNG; дефолт false (server.yaml:362). Применяется и к APNG."},
+				Help: "Чересстрочный (Adam7) PNG; дефолт false (server.yaml:362)."},
 			{Name: "palette", Kind: KindBool, Default: 0, Auto: true,
 				Help: "Палитровый (quantized) экспорт PNG. Явное значение из пресета побеждает. Автоматика: если не задана явно — палитра ON при q<90, OFF (truecolor) при q>=90 (палитра портит градиенты, а высокий quality требует качества). Дефолт конфига false (server.yaml:370)."},
 			{Name: "palette-colors", Kind: KindInt, Min: 2, Max: 256, Default: 256, Auto: true,

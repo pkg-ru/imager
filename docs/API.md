@@ -30,10 +30,10 @@
 |-----------|----------|
 | `path` | Логический путь исходника в хранилище; запрещены `..`, `%2f`, control-символы |
 | `source_name` | Имя исходного файла без расширения; до 128 символов; любые Unicode-символы кроме `/`, `\`, `..`, control-символов |
-| `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl`, а также видео `mp4\|webm\|mov\|mkv\|avi\|m4v` (ассеты из видео строятся из кадра — см. [PROCESSING.md](PROCESSING.md)) |
+| `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl`, а также видео `mp4\|webm\|mov\|mkv\|avi\|m4v` (ассеты из видео строятся из кадра — см. [PROCESSING.md](PROCESSING.md)). APNG-вход читается как анимированный PNG |
 | `segment` | Имя пресета (≤64 символа, без дефисов; буквы, цифры, `_`, `.`, `@`) или custom-имя: `120x80`, `x400`, `300x`, `x` (исходный размер) |
 | `dpr` | Device pixel ratio; отсутствие = 1; явно допустимы только `2` и `3` (`@1`/`@0` — ошибка) |
-| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl` |
+| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|jxl`. APNG-выход не поддерживается (запись требует libvips с libspng) |
 
 Разрешение сегмента описано в [CONFIGURATION.md](CONFIGURATION.md#policy) (path-policies, deny-by-default).
 

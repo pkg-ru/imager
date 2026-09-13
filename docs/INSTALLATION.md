@@ -5,7 +5,7 @@
 | Компонент | Назначение | Обязательность |
 |-----------|------------|----------------|
 | Go ≥ 1.27 | Сборка из исходников | Да (для локальной сборки) |
-| libvips ≥ 8.13 + заголовки (`vips-dev`) | Основной движок обработки, все форматы включая APNG | Рекомендуется |
+| libvips ≥ 8.13 + заголовки (`vips-dev`) | Основной движок обработки, все форматы | Рекомендуется |
 | C-компилятор (`gcc`/`build-base`), `pkgconf`, `musl-dev` | cgo-сборка govips | Нужны при сборке с `-tags libvips` |
 | Кодеки: `libheif`, `libde265`, `libjxl`, `librsvg`, `poppler`, `libraw` | HEIF/AVIF, JPEG XL, SVG, PDF, RAW в libvips | Для соответствующих форматов |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов для `face`/`object`-кропов | Опциональна; сборка с `-tags onnx` |
@@ -65,7 +65,13 @@ curl -fsSL https://raw.githubusercontent.com/pkg-ru/imager/main/docker/install-h
 go build -tags libvips -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 ```
 
-libvips работает in-process (govips, cgo) и покрывает все выходные форматы: JPEG, PNG, WebP, GIF, AVIF, HEIF, APNG, JPEG XL.
+libvips работает in-process (govips, cgo) и покрывает все выходные форматы: JPEG, PNG, WebP, GIF, AVIF, HEIF, JPEG XL.
+
+> **APNG-запись** не поддерживается в стандартной сборке: она требует libvips,
+> собранного с **libspng** (Alpine-пакет `vips` собран только с libpng —
+> `pngsave` в нём пишет статичный PNG вместо анимированного APNG). Чтение
+> APNG-входов работает всегда (как анимированный PNG). Как включить запись
+> APNG — см. [APNG-запись](#apng-запись-самостоятельная-сборка-libvips).
 
 ### Без libvips
 
@@ -254,3 +260,34 @@ curl http://localhost:8080/metrics
 
 # генерация ассета (файл data/source/test.jpg должен существовать)
 curl -o out.webp http://localhost:8080/test-jpg/thumb.webp
+```
+
+## APNG-запись (самостоятельная сборка libvips)
+
+Запись APNG (анимированного PNG) **не поддерживается** в стандартной сборке:
+она требует libvips, собранного с **libspng**. Пакетные сборки libvips
+(включая Alpine-пакет `vips`, используемый в `Dockerfile`) собраны только с
+libpng — `pngsave` в них пишет статичный PNG вместо анимированного APNG.
+
+Чтение APNG-входов работает всегда: `pngload` читает multi-page PNG
+независимо от libspng, поэтому APNG-вход обрабатывается как анимированный
+PNG (кадры, delay/loop, покадровая ватермарка).
+
+Чтобы включить запись APNG, соберите libvips из исходников с libspng:
+
+```bash
+# зависимости (пример для Debian/Ubuntu)
+apt-get install -y libspng-dev libpng-dev meson ninja-build \
+    libjpeg-dev libwebp-dev libgif-dev libheif-dev libjxl-dev
+
+# сборка libvips с PNG-декодером libspng
+git clone https://github.com/libvips/libvips.git
+cd libvips
+meson setup build -Dpng=spng -Dspng=enabled
+meson compile -C build
+meson install -C build
+```
+
+Затем соберите imager с `-tags libvips` (см. [Сборка](#сборка)) — маршрутизатор
+разрешит APNG-выход, и `pngsave` будет писать APNG-чанки (acTL/fcTL/fdAT)
+для multi-page изображений.

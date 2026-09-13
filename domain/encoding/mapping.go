@@ -42,7 +42,7 @@ func (r ResolvedParams) EffectiveNearLossless(_ uint8, explicit *bool) bool {
 	return false
 }
 
-// EffectiveInterlace — чересстрочный PNG/APNG (дефолт false, server.yaml:362).
+// EffectiveInterlace — чересстрочный PNG (дефолт false, server.yaml:362).
 func (r ResolvedParams) EffectiveInterlace(_ uint8, explicit *bool) bool {
 	if explicit != nil {
 		return *explicit
@@ -119,7 +119,7 @@ func (r ResolvedParams) EffectiveGIFEffort(q uint8, explicit *int) int {
 	return GIFEffort(int(q))
 }
 
-// CompressionLevel: png/apng compression-level [1..9].
+// CompressionLevel: png compression-level [1..9].
 // Физика: compression-level не влияет на размер пикселей, только на усилие
 // упаковки (на lossless-качество не влияет). Якорь: q=85→6 (конфиг
 // png-compression-level=6), q=100→9 (максимальная упаковка), q=0→1 (быстрое
@@ -136,7 +136,7 @@ func PNGCompressionLevel(q int) int {
 	return 6 + int(math.Round(float64(q-85)/5.0))
 }
 
-// EffectiveCompressionLevel — png/apng compression-level: явный → он, иначе
+// EffectiveCompressionLevel — png compression-level: явный → он, иначе
 // автомаппинг от quality (lossless-формат: потерь не вводит).
 func (r ResolvedParams) EffectiveCompressionLevel(q uint8, explicit *int) int {
 	if explicit != nil {

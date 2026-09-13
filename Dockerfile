@@ -68,7 +68,8 @@ COPY . .
 RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -w" -o /out/imager ./cmd/imager
 
 ###############################################################################
-# Runtime base: минимальный образ с libvips (все форматы, включая APNG) и
+# Runtime base: минимальный образ с libvips (все форматы; запись APNG требует
+# самостоятельной сборки libvips с libspng — см. docs/INSTALLATION.md) и
 # FFmpeg. Pinned base image, non-root пользователь. Пакетные списки —
 # из docker/build-deps.sh (install-runtime/install-edge). Бинарь копируется
 # в финальных таргетах from-release / from-source.

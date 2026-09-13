@@ -49,8 +49,8 @@ type ProcessorBuild struct {
 
 // BuildProcessor собирает процессор:
 //
-//   - primary: libvips (govips, in-process). libvips покрывает все форматы,
-//     включая APNG (≥ 8.13). Требует сборки с тэком "libvips".
+//   - primary: libvips (govips, in-process). libvips покрывает все форматы
+//     (≥ 8.13). Требует сборки с тэком "libvips".
 //
 // Возвращает процессор, реализующий processor.Processor и Close, закрывающий
 // созданный движок, а также детектор для sidecar-кэша моделей.
@@ -101,7 +101,7 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 		return nil, fmt.Errorf("no processor available: libvips: %w", lvErr)
 	}
 	closers = append(closers, lvProc)
-	logger.Infof("imager: processor: primary=libvips (all formats, incl. APNG)")
+	logger.Infof("imager: processor: primary=libvips (all formats)")
 	r, err := routing.New(routing.Options{
 		Primary:     lvProc,
 		PrimaryCaps: LibvipsCaps(),
@@ -145,13 +145,30 @@ func (c *closedProcessor) Close() error {
 	return first
 }
 
-// LibvipsCaps — покрытие форматов libvips (primary). Включает все форматы,
-// в том числе APNG (libvips ≥ 8.13 поддерживает чтение и запись APNG как
-// multi-page PNG).
+// LibvipsCaps — покрытие форматов libvips (primary).
+//
+// Выходные форматы (Formats) НЕ включают APNG: запись APNG требует libvips,
+// собранного с libspng (Alpine-пакет vips собран только с libpng — pngsave
+// пишет статичный PNG вместо анимированного APNG). APNG-выход отклоняется
+// маршрутизатором (engine-unavailable).
+//
+// Входные форматы (SourceFormats) включают APNG: чтение APNG-входов работает
+// всегда (pngload читает multi-page PNG независимо от libspng) — APNG-вход
+// обрабатывается как анимированный PNG.
 func LibvipsCaps() routing.Capability {
 	return routing.Capability{
 		Name: "libvips",
 		Formats: map[processing.Format]bool{
+			processing.FormatJPEG:   true,
+			processing.FormatPNG:    true,
+			processing.FormatWebP:   true,
+			processing.FormatGIF:    true,
+			processing.FormatAVIF:   true,
+			processing.FormatHEIF:   true,
+			processing.FormatAPNG:   true,
+			processing.FormatJPEGXL: true,
+		},
+		SourceFormats: map[processing.Format]bool{
 			processing.FormatJPEG:   true,
 			processing.FormatPNG:    true,
 			processing.FormatWebP:   true,

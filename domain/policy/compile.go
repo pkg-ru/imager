@@ -81,7 +81,7 @@ type PathPolicyConfig struct {
 //
 // Per-format quality (jpeg-quality/webp-quality/avif-quality/heif-quality/
 // jxl-quality) допустим только для lossy-форматов и переопределяет скалярный
-// quality для этого формата. Lossless-форматам (png/apng/gif) quality-ключи
+// quality для этого формата. Lossless-форматам (png/gif) quality-ключи
 // формата НЕ задаются (png-quality и т.п. отсутствуют в структуре — их
 // задание даёт неизвестное поле при строгом парсинге). Указатели отличают
 // «не задано» от нулевого значения.
@@ -549,7 +549,7 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 
 // encodingOverridesFromConfig собирает map[формат]map[нативный ключ]значение
 // из плоских нативных полей PresetConfig. Формат в карте — каноническое имя
-// реестра (jpeg/webp/avif/heif/jxl/png/apng/gif). Возвращает nil, если ни
+// реестра (jpeg/webp/avif/heif/jxl/png/gif). Возвращает nil, если ни
 // одного нативного поля не задано.
 //
 // Ключи внутри формата — реестровые имена БЕЗ префикса (compression-level,

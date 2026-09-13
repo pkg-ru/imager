@@ -202,11 +202,11 @@ Deny-by-default политика. Всё запрещено, кроме явно
 | *(ключ)* | string | обязателен | Имя пресета: ≤64 символа, без дефисов; допустимы буквы, цифры, `_`, `.`, `@`; уникально. Может содержать фиксированный суффикс `@2`/`@3` (например `"banner@2"`); суффиксы `@0`/`@1` запрещены. Если имя содержит `@N`, поле `dpr` ОБЯЗАНО быть задано и равно `N` (см. [правила dpr](#правила-dpr)) |
 | `width` | uint32 | `0` | БАЗОВАЯ (логическая) ширина в px; `0` = не задана (вычисляется пропорционально). Итоговый размер = `width × dpr` |
 | `height` | uint32 | `0` | БАЗОВАЯ (логическая) высота в px; `0` = не задана (вычисляется пропорционально). Итоговый размер = `height × dpr`. Оба = `0` → исходный размер (`x`) |
-| `output-formats` | list[string] | обязателен | **Массив** допустимых выходных форматов (whitelist): `jpeg\|png\|webp\|gif\|avif\|heif\|apng\|jxl`. Непустой; формат URL обязан входить в список |
+| `output-formats` | list[string] | обязателен | **Массив** допустимых выходных форматов (whitelist): `jpeg\|png\|webp\|gif\|avif\|heif\|jxl`. Непустой; формат URL обязан входить в список. APNG-выход не поддерживается (запись требует libvips с libspng) |
 | `dpr` | uint32 | ключ отсутствует | Множитель плотности пикселей. Имя с суффиксом `@N` — поле ОБЯЗАТЕЛЬНО и равно `N`. Имя без суффикса: не задан = wildcard-режим (`P.webp`, `P@2.webp`, `P@3.webp` допустимы в URL), `1` = фиксированный множитель (`@dpr` в URL запрещён), `2`/`3` = ошибка конфигурации. Подробнее — [правила dpr](#правила-dpr) |
 | `crop` | string | `""` | `""`=resize, `center`=crop, `smart`=smart-crop, `face`=face-crop, `object`=object-crop, `face-fix`=face-fix-crop, `object-fix`=object-fix-crop. Fix-режимы: cover-масштаб до целевого размера без зума в лицо/объект — кроп только по пропорционально избыточной оси, позиция окна по центру области детекции (bbox + `detection.margin`) с clamp к границам; нет детекции — центр. Требуют настроенной детекции так же, как `face`/`object` |
 | `trim` | bool | `false` | Обрезка однотонных полей. `crop`+`trim` — независимые фильтры: применяется сначала trim, затем кроп. |
-| `quality` | uint32 | `0` | 0–100; 0 = `encoders.default-quality` (см. [encoders](#encoders)); для lossy-форматов передаётся кодеру как качество потери, для lossless (png/apng/gif) управляет только усилием упаковки/палитрой |
+| `quality` | uint32 | `0` | 0–100; 0 = `encoders.default-quality` (см. [encoders](#encoders)); для lossy-форматов передаётся кодеру как качество потери, для lossless (png/gif) управляет только усилием упаковки/палитрой |
 | `frames` | uint32 | `0` | Максимум кадров анимации; 0 = без ограничения |
 | `duration` | uint32 | `0` | Максимум длительности анимации (мс); 0 = без ограничения |
 | `loop` | bool* | nil | nil = `processing.default-loop`; true = бесконечная анимация |
@@ -258,14 +258,12 @@ presets:
 | `jxl-quality` | jxl | int `[1,100]` | — | Per-format quality (lossy) |
 | `jxl-effort` | jxl | int `[3,9]` | ✅ | Effort JPEG XL: больше = лучше сжатие, медленнее |
 | `jxl-lossless` | jxl | bool | — | Lossless-режим JPEG XL |
-| `png-compression-level` | png | int `[1,9]` | ✅ | Уровень сжатия PNG (применяется и к APNG при apng-экспорте — формат выбирает свой ключ) |
+| `png-compression-level` | png | int `[1,9]` | ✅ | Уровень сжатия PNG |
 | `png-interlace` | png | bool | — | Чересстрочный (Adam7) PNG |
 | `png-palette` | png | bool | ✅ | Палитровый (quantized) экспорт |
 | `png-palette-colors` | png | int `[2,256]` | ✅ | Максимум цветов палитры |
 | `png-palette-bit-depth` | png | int `[1,8]` | ✅ | Битность палитры (снап к 1/2/4/8) |
 | `png-dither` | png | float `[0,1]` | — | Дизеринг палитрового PNG (дефолт 1.0) |
-| `apng-compression-level` | apng | int `[1,9]` | ✅ | Уровень сжатия APNG |
-| `apng-interlace` | apng | bool | — | Чересстрочный APNG |
 | `gif-effort` | gif | int `[1,10]` | ✅ | Effort GIF (дефолт libvips 7) |
 | `gif-bit-depth` | gif | int `[1,8]` | — | Битность палитры GIF (дефолт 8) |
 | `gif-dither` | gif | float `[0,1]` | — | Дизеринг палитры GIF (дефолт 1.0) |
@@ -275,7 +273,7 @@ presets:
 Семантика:
 
 - **Explicit override отменяет автомаппинг**: заданный нативный ключ применяется как есть (с валидацией диапазона при старте — fail-fast); якорная формула от quality для этого параметра не вызывается.
-- **Per-format quality** (`webp-quality` и т.п.) — только для **lossy-форматов** (jpeg/webp/avif/heif/jxl): переопределяет скалярный `quality` именно для этого формата. Для **lossless-форматов** (png/apng/gif) задание quality-ключа формата (`png-quality` и т.п.) — **ошибка конфигурации**: их упаковка управляется только скалярным `quality`.
+- **Per-format quality** (`webp-quality` и т.п.) — только для **lossy-форматов** (jpeg/webp/avif/heif/jxl): переопределяет скалярный `quality` именно для этого формата. Для **lossless-форматов** (png/gif) задание quality-ключа формата (`png-quality` и т.п.) — **ошибка конфигурации**: их упаковка управляется только скалярным `quality`.
 - **Скалярный `quality`** (0–100): применяется к выходному качеству для всех lossy-форматов пресета; для lossless-форматов потерь не вводит — влияет только на усилие упаковки (compression-level/effort) и палитровую автоматику.
 - Все ключи сверяются с реестром `domain/encoding`: неизвестный ключ, ключ чужого формата или значение вне диапазона — ошибка старта.
 
@@ -385,7 +383,7 @@ policy:
 | `size` | string | `contain` | `contain\|cover\|"200px 50px"` |
 | `opacity` | int | `100` | Прозрачность водяного знака в процентах: `100` — непрозрачный, `0` — полностью прозрачный (невидимый). Значения вне диапазона [0,100] заменяются на `100` |
 
-Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
+Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
 Приоритет применения водяного знака: пресет/custom (по имени из `policy.presets.<name>.watermark` / `policy.path-policies.*.customs.*.watermark`) → `processing.default-watermark`.
 
@@ -403,7 +401,7 @@ watermarks:
 
 | Ключ | Тип | По умолчанию | Описание |
 |------|-----|--------------|----------|
-| `default-loop` | bool* | `true` | Зацикливание анимаций GIF/WebP/APNG/HEIF по умолчанию |
+| `default-loop` | bool* | `true` | Зацикливание анимаций GIF/WebP/HEIF по умолчанию |
 | `default-watermark` | string | пусто | Водяной знак по умолчанию (имя из `watermarks`) |
 | `default-auto-orient` | bool* | `true` | Автоповорот по EXIF Orientation |
 | `default-rotate` | string | `""` | Фиксированный поворот: `""`/`none`/`90`/`180`/`270` |
@@ -424,7 +422,7 @@ watermarks:
 
 Единая **top-level** секция настроек кодирования. Живёт в `server.yaml`; переопределения возможны через `*-local.yaml` и более специализированные слои (deep merge).
 
-Структура: `default-quality` + именованные группы форматов (`jpeg`, `webp`, `avif`, `heif`, `jxl`, `png`, `apng`, `gif`) с нативными параметрами реестра `domain/encoding`. Эффективные параметры **каждого экспорта** разрешаются через `domain/encoding.Resolve` на каждый экспорт по строгому приоритету:
+Структура: `default-quality` + именованные группы форматов (`jpeg`, `webp`, `avif`, `heif`, `jxl`, `png`, `gif`) с нативными параметрами реестра `domain/encoding`. Эффективные параметры **каждого экспорта** разрешаются через `domain/encoding.Resolve` на каждый экспорт по строгому приоритету:
 
 > **preset override (плоские нативные ключи) > `encoders` YAML > якорный автомаппинг от quality > реестровый дефолт**
 
@@ -461,8 +459,6 @@ watermarks:
 | `png.palette-colors` | int `[2,256]` | `256` | ✅ | Максимум цветов палитры. Якорь q85→256 |
 | `png.palette-bit-depth` | int `[1,8]` | `8` | ✅ | Битность палитры (снап к 1/2/4/8), из числа цветов |
 | `png.dither` | float `[0,1]` | `1.0` | — | Дизеринг палитрового PNG (значим при palette=true) |
-| `apng.compression-level` | int `[1,9]` | `6` | ✅ | Уровень сжатия APNG |
-| `apng.interlace` | bool | `false` | — | Чересстрочный APNG |
 | `gif.effort` | int `[1,10]` | `7` (libvips) | ✅ | Effort GIF. Якорь q75→7 |
 | `gif.bit-depth` | int `[1,8]` | `8` | — | Битность палитры GIF |
 | `gif.dither` | float `[0,1]` | `1.0` | — | Дизеринг палитры GIF |
@@ -479,7 +475,7 @@ watermarks:
 | avif `speed` | `[0,9]` | q80→6, q100→0, q0→9 | **инверсия**: меньше число = медленнее, лучше сжатие |
 | jxl `effort` | `[3,9]` | q75→7, q100→9, q0→3 | линейно, монотонно |
 | gif `effort` | `[1,10]` | q75→7, q100→10, q0→1 | линейно, монотонно |
-| png/apng `compression-level` | `[1,9]` | q85→6, q100→9, q0→1 | кусочно-линейно: `q≤85`: `1+round(5q/85)`; `q>85`: `6+round((q-85)/5)` |
+| png `compression-level` | `[1,9]` | q85→6, q100→9, q0→1 | кусочно-линейно: `q≤85`: `1+round(5q/85)`; `q>85`: `6+round((q-85)/5)` |
 | png `palette` | bool | q<90 → ON, q≥90 → OFF | при высоком качестве палитра выключается (защита градиентов) |
 | png `palette-colors` | `[2,256]` | q85→256, q0→2 | `clamp(round(2+(q/85)·254), 2, 256)` |
 | png `palette-bit-depth` | `[1,8]` | colors=256→8 | из `palette-colors`: ≤2→1, ≤4→2, ≤16→4, иначе 8 |
@@ -514,9 +510,6 @@ encoders:
     palette-colors: 256
     palette-bit-depth: 8
     dither: null
-  apng:
-    compression-level: 6
-    interlace: false
   gif:
     effort: 7
     bit-depth: 8
@@ -645,7 +638,7 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 
 - **Лимит кадров анимации** (`frames` в пресетах/лимитах) применяется на этапе загрузки (`NumPages`), что дешевле пост-обрезки стека кадров.
 - **Sequential access** выставляется при загрузке для операций с одним линейным проходом по пикселям (resize/crop/smart-crop без trim).
-- **Premultiply**: перед resize изображений с альфа-каналом (PNG/WebP/GIF/APNG с прозрачностью) выполняется Premultiply → resize → Unpremultiply — исключает тёмные ореолы на полупрозрачных краях. Для анимаций операция применяется ко всему стеку кадров с сохранением delay/loop.
+- **Premultiply**: перед resize изображений с альфа-каналом (PNG/WebP/GIF с прозрачностью) выполняется Premultiply → resize → Unpremultiply — исключает тёмные ореолы на полупрозрачных краях. Для анимаций операция применяется ко всему стеку кадров с сохранением delay/loop.
 
 ## detection
 
