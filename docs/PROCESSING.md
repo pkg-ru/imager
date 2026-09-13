@@ -172,7 +172,6 @@ detection:
 - ограничение длительности (`duration`, мс);
 - зацикливание (`loop`: nil = `processing.default-loop`, true = бесконечно, false = однопроходно).
 
-APNG кодируется как multi-page PNG (libvips ≥ 8.13).
 
 ## Качество и сжатие
 

@@ -193,9 +193,13 @@ func (b *libvipsBackend) process(ctx context.Context, data []byte, plan *process
 		return nil, err
 	}
 
-	detections, detail, err := b.applyOperation(ctx, img, plan, detectionsReady, boxes, slot)
+	opImg, detections, detail, err := b.applyOperation(ctx, img, plan, detectionsReady, boxes, slot)
 	if err != nil {
 		return nil, err
+	}
+	if opImg != img {
+		img.Close()
+		img = opImg
 	}
 
 	// Ватермарка (nil = не применяется): накладывается ПОСЛЕ операции
@@ -415,6 +419,37 @@ func premultiplyResize(img *vips.ImageRef, fn func() error) error {
 	return nil
 }
 
+// thumbnailCropFrames выполняет thumbnail с кропом (SizeBoth + crop) с
+// корректной обработкой анимаций. Регрессия: vips_thumbnail_image с
+// crop != none схлопывает page-height вертикального стека кадров до высоты
+// ОДНОГО кадра результата (n-pages формально сохраняется, но высота стека
+// становится равной page-height), из-за чего экспортёры (gifsave и др.)
+// записывают только первый кадр — анимация молча теряется. Для анимаций
+// операция применяется покадрово через withFrames (каждый кадр — одиночное
+// изображение, для него thumbnail с кропом корректен); для одиночных
+// изображений — напрямую (прежнее поведение). Возвращает ImageRef-результат:
+// для анимации это НОВОЕ изображение (вызывающий закрывает старое).
+func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*vips.ImageRef, error) {
+	ph := img.PageHeight()
+	if !(img.Pages() > 1 && ph > 0 && img.Height() > ph) {
+		if err := premultiplyResize(img, func() error {
+			return img.ThumbnailWithSize(w, h, crop, vips.SizeBoth)
+		}); err != nil {
+			return nil, err
+		}
+		return img, nil
+	}
+	n := img.Pages()
+	return withFrames(img, func(f *vips.ImageRef, i int) error {
+		if err := premultiplyResize(f, func() error {
+			return f.ThumbnailWithSize(w, h, crop, vips.SizeBoth)
+		}); err != nil {
+			return fmt.Errorf("frame %d/%d: %w", i+1, n, err)
+		}
+		return nil
+	})
+}
+
 // tryPassthrough проверяет применимость fast-path и возвращает исходные
 // байты как есть (без decode/encode). Заголовок читается лёгкой загрузкой
 // libvips (пиксели декодируются лениво, поэтому это дёшево).
@@ -624,11 +659,31 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 		}
 	}
 	// Метаданные анимации: page-height обязателен (иначе стек читается как
-	// один высокий кадр), delay/loop переносятся вручную.
-	if err := base.SetPageHeight(ph); err != nil {
+	// один высокий кадр), n-pages/delay/loop переносятся вручную. Регрессия:
+	// arrayjoin не переносит n-pages — без восстановления экспортёры
+	// (gifsave/pngsave) пишут только первый кадр. Порядок ВАЖЕН: SetPages/
+	// SetPageDelay/ SetLoop создают копию через vips_copy; финальный
+	// SetPageHeight должен идти ПЕРВЫМ (n-pages восстанавливается в конце,
+	// т.к. vips_copy не переносит n-pages при page-height < высоты стека).
+	//
+	// page-height результата НЕ копируется из исходного изображения: колбэк
+	// может изменить высоту кадров (например OpCrop — покадровый thumbnail
+	// 32→16). page-height = высота одного кадра = Height(stack)/n. Если
+	// оставить старый ph, стек 16×32 с ph=32 даёт n_pages = 32/32 = 1 —
+	// экспортёр (gifsave/pngsave) молча запишет только первый кадр.
+	newPH := base.Height() / n
+	if newPH <= 0 || newPH > base.Height() {
+		newPH = ph
+	}
+	if err := base.SetPageHeight(newPH); err != nil {
 		base.Close()
 		closeFrames(false)
 		return nil, fmt.Errorf("restore page height: %w", err)
+	}
+	if err := base.SetPages(n); err != nil {
+		base.Close()
+		closeFrames(false)
+		return nil, fmt.Errorf("restore n-pages: %w", err)
 	}
 	if len(delay) > 0 {
 		if err := base.SetPageDelay(delay); err != nil {
@@ -658,22 +713,25 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 // операций (fc/oc/fct/oct); для прочих операций — nil. detail —
 // детализированные результаты self-detection (nil для недетекторных
 // операций и для DetectionsReady=true).
-func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
+// Возвращает актуальный ImageRef: для кроп-операций на анимации это НОВОЕ
+// изображение (старый закрывает вызывающий в process), в остальных случаях —
+// тот же img.
+func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) (*vips.ImageRef, []filemeta.PixelBox, *processor.DetectionsDetail, error) {
 	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
+		return img, nil, nil, ctx.Err()
 	}
 
 	// Trim-first: независимый фильтр обрезки однотонных полей применяется
 	// до основной операции (кропа/ресайза).
 	if plan.Trim {
 		if err := applyTrim(img, plan.TrimSpec); err != nil {
-			return nil, nil, err
+			return img, nil, nil, err
 		}
 	}
 
 	// Size.Original (size=x): размер не меняем (после trim).
 	if plan.Size.Original {
-		return nil, nil, nil
+		return img, nil, nil, nil
 	}
 
 	// Размеры кадра: для анимации — высота ОДНОГО кадра (page-height),
@@ -700,7 +758,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 			return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
 		})
 		if err != nil {
-			return nil, nil, fmt.Errorf("libvips: resize: %w", err)
+			return img, nil, nil, fmt.Errorf("libvips: resize: %w", err)
 		}
 	case processing.OpCrop:
 		// Центрированная обрезка до точного размера (с premultiply для
@@ -708,24 +766,23 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// уменьшение/увеличение до заполнения целевого размера с
 		// последующей обрезкой до ТОЧНОГО WxH. SizeForce здесь нельзя:
 		// он растягивает изображение до WxH, игнорируя пропорции
-		// (сплющивание).
-		err := premultiplyResize(img, func() error {
-			return img.ThumbnailWithSize(w, h, vips.InterestingCentre, vips.SizeBoth)
-		})
+		// (сплющивание). Для анимации — покадрово (см. thumbnailCropFrames:
+		// thumbnail с кропом на стеке кадров схлопывает page-height).
+		out, err := thumbnailCropFrames(img, w, h, vips.InterestingCentre)
 		if err != nil {
-			return nil, nil, fmt.Errorf("libvips: crop: %w", err)
+			return img, nil, nil, fmt.Errorf("libvips: crop: %w", err)
 		}
+		img = out
 	case processing.OpSmartCrop:
 		// Умная обрезка: внимание (attention) libvips — центр тяжести
 		// изображения; масштаб и кроп до точного размера одним проходом
 		// (с premultiply для альфы — см. OpResize). SizeBoth (не Force):
-		// см. комментарий OpCrop.
-		err := premultiplyResize(img, func() error {
-			return img.ThumbnailWithSize(w, h, vips.InterestingAttention, vips.SizeBoth)
-		})
+		// см. комментарий OpCrop. Для анимации — покадрово.
+		out, err := thumbnailCropFrames(img, w, h, vips.InterestingAttention)
 		if err != nil {
-			return nil, nil, fmt.Errorf("libvips: smart-crop: %w", err)
+			return img, nil, nil, fmt.Errorf("libvips: smart-crop: %w", err)
 		}
+		img = out
 	case processing.OpFaceCrop:
 		fallthrough
 	case processing.OpObjectCrop:
@@ -736,11 +793,12 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера.
-		return b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot)
+		boxes, detail, err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot)
+		return img, boxes, detail, err
 	default:
-		return nil, nil, fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
+		return img, nil, nil, fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
 	}
-	return nil, nil, nil
+	return img, nil, nil, nil
 }
 
 // applyTrim выполняет обрезку однотонных/пустых краёв изображения по контенту
@@ -1274,6 +1332,24 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		// PNG quantization НЕ применяется к APNG: палитровый экспорт
 		// анимации не поддерживается pngsave (палитра на каждый кадр
 		// несовместима с APNG-чанками) — обычный PNG-экспорт с interlace.
+		//
+		// Регрессия: stripAllMetadata (RemoveMetadata) сохраняет n-pages/
+		// page-height/delay/loop, но pngsave при strip=true НЕ переносит
+		// метаданные анимации в выходной файл — APNG читается как статичный
+		// PNG (1 страница). Обход: перед экспортом пересчитываем n-pages из
+		// геометрии стека (H / page-height) и восстанавливаем page-height,
+		// если они рассинхронизированы; pngsave пишет acTL/fcTL/fdAT по
+		// page-height/n-pages входного изображения.
+		ph := img.PageHeight()
+		H := img.Height()
+		if ph > 0 && H > ph {
+			n := H / ph
+			if img.Pages() != n {
+				if err := img.SetPages(n); err != nil {
+					return nil, fmt.Errorf("libvips: apng restore n-pages: %w", err)
+				}
+			}
+		}
 		p := vips.NewPngExportParams()
 		p.StripMetadata = true
 		p.Compression = resolved.CompressionLevel
