@@ -28,8 +28,9 @@ type AppOptions struct {
 	// HTTP — конфигурация HTTP-адаптера.
 	HTTP httpapi.Config
 	// ConfigDir — каталог конфигурации (для learning-mode Recorder:
-	// generate-local.yaml пишется в этот каталог). Пусто = learning-mode
-	// Recorder не создаётся (флаг всё равно работает из конфига).
+	// generate-local.yaml пишется в этот каталог). Recorder создаётся только
+	// при включённом policy.learning-mode (пустой ConfigDir тоже отключает
+	// Recorder — писать некуда).
 	ConfigDir string
 
 	// SourceDir — каталог исходников (используется при FS fallback).
@@ -103,9 +104,10 @@ type App struct {
 	// AdminHandler — HTTP-обработчик /admin/* (nil, если admin выключен).
 	AdminHandler http.Handler
 
-	// Learning — фасад learning-mode (nil, если learning-mode недоступен:
-	// ConfigDir не задан). Требует Stop() при shutdown (drain + финальная
-	// запись generate-local.yaml).
+	// Learning — фасад learning-mode. Controller создаётся всегда, но
+	// Recorder (запись generate-local.yaml) — только при
+	// policy.learning-mode: true и заданном ConfigDir. Требует Stop() при
+	// shutdown (drain + финальная запись generate-local.yaml).
 	Learning *learning.Service
 }
 
@@ -187,16 +189,20 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 	})
 
 	// Learning-mode: runtime-флаг (Controller) + сборщик наблюдений
-	// (Recorder). Controller создаётся всегда (generatev2 bypass); Recorder
-	// — только если задан каталог конфигурации (generate-local.yaml пишется
-	// в него). Начальное состояние флага — policy.learning-mode из
-	// конфигурации.
+	// (Recorder). Вся цепочка обучения (Recorder с записью
+	// generate-local.yaml, middleware Observe, флаг generatev2) подключается
+	// ТОЛЬКО при policy.learning-mode: true. При false Recorder не
+	// создаётся — generate-local.yaml не читается и не пишется (никакой
+	// записи/update-модификации, даже если файл существует на диске),
+	// middleware отслеживания не регистрируется (PolicyRecorder = nil),
+	// в generatev2 флаг не передаётся (Learning = nil). Начальное состояние
+	// флага — policy.learning-mode из конфигурации.
 	learningCtrl := learning.NewController()
 	if compiled.LearningMode {
 		learningCtrl.Enable()
 	}
 	var learningRec *learning.Recorder
-	if opt.ConfigDir != "" {
+	if compiled.LearningMode && opt.ConfigDir != "" {
 		// Имена пресетов из конфигурации: сегмент, совпадающий с пресетом
 		// (например face-fix), наблюдается как пресет и попадает в presets
 		// path-policy в generate-local.yaml.
@@ -215,6 +221,12 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		}
 	}
 	learningSvc := learning.NewService(learningCtrl, learningRec)
+	// Флаг для generatev2: подключается только при включённом learning-mode
+	// (nil = функционал learning в generatev2 полностью отключён).
+	var learningFlag generatev2.LearningController
+	if compiled.LearningMode {
+		learningFlag = learningCtrl
+	}
 
 	// Use case.
 	// Асинхронная публикация результата в кэш. В production включена по
@@ -248,7 +260,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		DefaultVideoMinContrast:  compiled.DefaultVideoMinContrast,
 		DefaultVideoFrameStep:    compiled.DefaultVideoFrameStep,
 		DefaultVideoAttempts:     compiled.DefaultVideoAttempts,
-		Learning:                 learningCtrl,
+		Learning:                 learningFlag,
 		PublishQueue:             publishQueue,
 	})
 	if err != nil {
@@ -257,8 +269,13 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 
 	// HTTP handler. Пробрасываем хранилище исходников в конфиг для source
 	// fallback (nil = фича недоступна), а learning-mode — для Observe.
+	// PolicyRecorder (middleware отслеживания запросов) регистрируется
+	// ТОЛЬКО при включённом learning-mode; при false — nil (отслеживание
+	// полностью отключено).
 	opt.HTTP.Sources = sources
-	opt.HTTP.PolicyRecorder = learningSvc
+	if compiled.LearningMode {
+		opt.HTTP.PolicyRecorder = learningSvc
+	}
 	h, err := httpapi.New(svc, opt.HTTP)
 	if err != nil {
 		return nil, fmt.Errorf("composition: build: handler: %w", err)

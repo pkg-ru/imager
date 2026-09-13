@@ -150,6 +150,88 @@ func TestIntegrationLearningModeResetOnStop(t *testing.T) {
 	}
 }
 
+// TestIntegrationLearningModeOffNoLocalFileWrites — при learning-mode: false
+// и заданном ConfigDir вся цепочка обучения отключена:
+//   - Recorder не создаётся → generate-local.yaml НЕ читается и НЕ пишется:
+//     пред-существующий файл остаётся байт-в-байт неизменным, отсутствующий
+//     файл не создаётся (даже после Learning.Stop() при shutdown);
+//   - отслеживание запросов не подключено (запросы не порождают наблюдений,
+//     запрещённый путь остаётся 403 — bypass admission не активен).
+func TestIntegrationLearningModeOffNoLocalFileWrites(t *testing.T) {
+	cfgDir := t.TempDir()
+	localFile := filepath.Join(cfgDir, "generate-local.yaml")
+	// Пред-существующий generate-local.yaml (как после прошлого запуска в
+	// learning-режиме): при learning-mode: false он должен остаться нетронутым.
+	initial := "policy:\n  learning-mode: false\n  path-policies:\n    \"/\":\n      presets: [thumb]\n"
+	if err := os.WriteFile(localFile, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	app, srcDir, _ := buildFSApp(t, func(o *AppOptions) {
+		o.ConfigDir = cfgDir
+	})
+	seedSource(t, srcDir, "forbidden/img.png", []byte("RAWIMAGE"))
+	if app.Learning == nil {
+		t.Fatal("app.Learning == nil: expected learning service (controller only)")
+	}
+	if app.Learning.Enabled() {
+		t.Fatal("learning-mode should be disabled (policy.learning-mode: false)")
+	}
+
+	// Запросы к запрещённому пути: отслеживание отключено, наблюдений нет,
+	// bypass admission не активен → 403.
+	for _, u := range []string{"/forbidden/img-png/120x60.webp", "/forbidden/img-png/x.webp"} {
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		rec := httptest.NewRecorder()
+		app.Handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: status = %d, want 403 (learning disabled)", u, rec.Code)
+		}
+	}
+
+	// Stop() — то, что выполняется при graceful shutdown (learningCloser):
+	// не должен ни читать, ни перезаписывать generate-local.yaml.
+	app.Learning.Stop()
+	if app.Learning.Enabled() {
+		t.Error("learning-mode must be disabled after Stop")
+	}
+
+	data, err := os.ReadFile(localFile)
+	if err != nil {
+		t.Fatalf("read %s: %v", localFile, err)
+	}
+	if string(data) != initial {
+		t.Errorf("generate-local.yaml was modified with learning-mode: false:\n--- want ---\n%s\n--- got ---\n%s", initial, string(data))
+	}
+}
+
+// TestIntegrationLearningModeOffNoLocalFileCreated — при learning-mode: false
+// отсутствующий generate-local.yaml не должен создаваться ни при запросах,
+// ни при Learning.Stop() (shutdown).
+func TestIntegrationLearningModeOffNoLocalFileCreated(t *testing.T) {
+	cfgDir := t.TempDir()
+	app, srcDir, _ := buildFSApp(t, func(o *AppOptions) {
+		o.ConfigDir = cfgDir
+	})
+	seedSource(t, srcDir, "forbidden/img.png", []byte("RAWIMAGE"))
+	if app.Learning.Enabled() {
+		t.Fatal("learning-mode should be disabled (policy.learning-mode: false)")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/forbidden/img-png/120x60.webp", nil)
+	rec := httptest.NewRecorder()
+	app.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (learning disabled)", rec.Code)
+	}
+
+	app.Learning.Stop()
+	localFile := filepath.Join(cfgDir, "generate-local.yaml")
+	if _, err := os.Stat(localFile); !os.IsNotExist(err) {
+		t.Errorf("generate-local.yaml must not be created with learning-mode: false (stat err: %v)", err)
+	}
+}
+
 // TestIntegrationLearningModeOffStillForbidden — regression: без learning-mode
 // (флаг выключен) запрещённый путь остаётся 403.
 func TestIntegrationLearningModeOffStillForbidden(t *testing.T) {
