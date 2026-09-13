@@ -158,6 +158,58 @@ docker-up:
 docker-down:
 	docker compose down
 
+# --- CI-образ: тесты в Docker (без установки libvips/onnx на хост) ---------
+
+# Единый предварительно собранный CI-образ (Go 1.27 + libvips + onnxruntime +
+# ffmpeg + gofmt + govulncheck + предзагруженный GOMODCACHE + ONNX-модели) —
+# см. .gitverse/docker/imager-ci/. Тесты выполняются ВНУТРИ этого контейнера:
+# исходники монтируются в /src, модули не скачиваются (GOMODCACHE уже
+# предзагружен в образ), модели находятся в /etc/imager/models
+# (IMAGER_MODELS_DIR задан в образе). Хост-установка libvips/onnx не нужна.
+CI_IMAGE ?= gitverse.ru/pkg-ru/imager-ci:v1
+
+# Общий запуск команды в CI-образе: CGO_LDFLAGS="-no-pie" отключает PIE
+# (gcc 15/musl не применяет DT_TEXTREL в read-only .go.func -> segfault
+# тестов cgo-пакетов без -no-pie), GOMODCACHE — предзагруженный каталог образа.
+CI_RUN = docker run --rm \
+	-v "$$(pwd)":/src \
+	-w /src \
+	-e CGO_ENABLED=1 \
+	-e GOMODCACHE=/gomodcache \
+	-e "CGO_LDFLAGS=-no-pie" \
+	$(CI_IMAGE)
+
+.PHONY: docker-test
+docker-test:
+	$(CI_RUN) sh -c 'go test -tags "libvips onnx" ./... -count=1'
+
+.PHONY: docker-test-race
+docker-test-race:
+	$(CI_RUN) sh -c 'go test -race -tags "libvips onnx" ./... -count=1'
+
+.PHONY: docker-vet
+docker-vet:
+	$(CI_RUN) sh -c 'go vet ./...'
+
+# Проверка всех комбинаций build tags (как локальный tags-check, но внутри
+# CI-образа — не требует libvips/onnxruntime на хосте).
+.PHONY: docker-tags-check
+docker-tags-check:
+	$(CI_RUN) sh -c 'go build ./... && go vet ./... && go build -tags onnx ./... && go vet -tags onnx ./... && go build -tags "libvips onnx" ./... && go vet -tags "libvips onnx" ./...'
+
+.PHONY: docker-fmt-check
+docker-fmt-check:
+	$(CI_RUN) sh -c 'unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "Unformatted files:"; echo "$$unformatted"; exit 1; fi'
+
+# govulncheck предустановлен в CI-образе (см. .gitverse/docker/imager-ci/).
+.PHONY: docker-govulncheck
+docker-govulncheck:
+	$(CI_RUN) sh -c 'govulncheck ./...'
+
+# Полный прогон в CI-образе, эквивалентный CI-пайплайну (без fuzz).
+.PHONY: docker-check
+docker-check: docker-fmt-check docker-test docker-test-race docker-govulncheck
+
 # Полный локальный прогон, эквивалентный CI (без fuzz).
 .PHONY: check
 check: fmt-check vet test race

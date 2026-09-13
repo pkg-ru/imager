@@ -87,8 +87,9 @@ detection:
 // при полностью пустой секции (модели не заданы).
 func TestParseRuntimeConfigDetectionDefaults(t *testing.T) {
 	// Изолируем тест от окружения: IMAGER_MODELS_DIR (fallback-каталог
-	// моделей) может быть задан в среде (например, в Dockerfile.test), и
-	// тогда build() подставил бы пути моделей по умолчанию.
+	// моделей) может быть задан в среде (например, в CI-образе
+	// .gitverse/docker/imager-ci), и тогда build() подставил бы пути
+	// моделей по умолчанию.
 	t.Setenv(ModelsDirEnv, "")
 	rc, err := ParseRuntimeConfig([]byte(`
 version: "1"

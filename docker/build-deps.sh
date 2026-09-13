@@ -1,7 +1,8 @@
 #!/bin/sh
 # build-deps.sh - single source of truth for Alpine apk package lists.
 #
-# Used by Dockerfile (builder/runtime stages) and Dockerfile.test.
+# Used by Dockerfile (builder/runtime stages) and the CI image
+# (.gitverse/docker/imager-ci/Dockerfile).
 #
 # Usage:
 #   docker/build-deps.sh install-builder      # builder-stage (dev packages)

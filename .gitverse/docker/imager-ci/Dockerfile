@@ -48,7 +48,7 @@ ENV CGO_ENABLED=1 \
 # на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —
 # единый источник: docker/build-deps.sh (pinned версии сохранены).
 # Дополнительно: ffmpeg/ffprobe (интеграционные тесты видеокадров),
-# curl (download-models.sh), tzdata/ca-certificates (как в Dockerfile.test).
+# curl (download-models.sh), tzdata/ca-certificates.
 #
 # ВАЖНО (GitVerse Container Registry): лимит на размер одного слоя (blob) —
 # ~300MB (ошибка 413 Request Entity Too Large при push; слой 324MB не прошёл,
@@ -78,7 +78,7 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/reposit
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories
 # onnxruntime в 3.24 доступен в стабильном community; edge-фиксы CVE
 # (ffmpeg/libraw/libde265/libass/nghttp2) — как в production build-deps.sh.
-# (edge-пакеты не тянут апгрейд gcc: проверено сборкой Dockerfile.test.)
+# (edge-пакеты не тянут апгрейд gcc: проверено при сборке этого образа.)
 RUN apk add --no-cache --upgrade onnxruntime ffmpeg libraw libde265 libass nghttp2
 
 # --- GOMODCACHE: предзагруженные модули из go.sum ---------------------------

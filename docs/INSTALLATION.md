@@ -248,6 +248,44 @@ docker compose up -d --build
 
 Для упрощённой локальной разработки используйте цели [`Makefile`](../Makefile) (`make install`, `make build`, `make run`, `make stop`, `make restart`). Для production используйте Docker/Compose или прямую сборку `go build -tags libvips ./cmd/imager`.
 
+### Тесты без установки libvips/onnxruntime (CI-образ)
+
+Тесты с production build tags (`libvips,onnx`) выполняются в предварительно
+собранном CI-образе [`gitverse.ru/pkg-ru/imager-ci`](../.gitverse/docker/imager-ci/README.md)
+(Go 1.27 + libvips + ONNX Runtime + ffmpeg + gofmt + govulncheck +
+предзагруженный `GOMODCACHE` + ONNX-модели). Хост-установка C-зависимостей
+не нужна — достаточно Docker:
+
+```bash
+make docker-test        # go test -tags "libvips onnx" ./... -count=1
+make docker-test-race   # go test -race -tags "libvips onnx" ./... -count=1
+make docker-vet         # go vet ./...
+make docker-tags-check  # все комбинации build tags
+make docker-fmt-check   # gofmt (без изменений)
+make docker-govulncheck # govulncheck ./...
+make docker-check       # fmt-check + test + race + govulncheck (как CI)
+```
+
+### Windows
+
+На Windows используйте PowerShell-раннер [`make.ps1`](../make.ps1) — аналог
+Makefile (те же цели: `install`, `build`, `test`, `race`, `vet`, `fmt`,
+`check`, `docker-*`):
+
+```powershell
+.\make.ps1 install       # go mod download + tidy
+.\make.ps1 build         # сборка imager.exe (default-теги)
+.\make.ps1 test          # go test ./... -count=1
+.\make.ps1 docker-test   # go test (libvips,onnx) в CI-образе (Docker Desktop)
+.\make.ps1 check         # fmt-check + vet + test + race
+.\make.ps1 help          # список всех целей
+```
+
+На Windows доступны build tags `default` и `onnx` (libvips-теги — только на
+Linux); прогон `libvips,onnx` выполняется через `docker-test*` в CI-образе.
+C-зависимости (libvips DLL, onnxruntime.dll, ffmpeg) устанавливаются скриптом
+[`docker/install-deps-windows.ps1`](../docker/install-deps-windows.ps1).
+
 ## Проверка установки
 
 ```bash

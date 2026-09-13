@@ -220,6 +220,18 @@ C-зависимостей компилируются заглушки, поэт
 
 ## Разработка
 
+На Linux/macOS (без установки libvips/onnxruntime на хост — через
+предварительно собранный CI-образ [`.gitverse/docker/imager-ci`](.gitverse/docker/imager-ci/README.md)):
+
+```bash
+make docker-test        # go test -tags "libvips onnx" ./...
+make docker-test-race   # go test -race -tags "libvips onnx" ./...
+make docker-check       # fmt-check + test + race + govulncheck (как CI)
+make docker-govulncheck # govulncheck ./...
+```
+
+Локально (требуются libvips + ONNX Runtime на хосте):
+
 ```bash
 make install   # download and tidy modules
 make test      # run all tests
@@ -228,6 +240,16 @@ make vet       # go vet
 make fmt       # gofmt
 make check     # fmt + vet + test + race
 make fuzz      # fuzz smoke tests
+```
+
+На Windows — PowerShell-раннер [`make.ps1`](make.ps1) (аналог Makefile):
+
+```powershell
+.\make.ps1 install       # go mod download + tidy
+.\make.ps1 test          # go test ./...
+.\make.ps1 docker-test   # go test (libvips,onnx) в CI-образе (Docker Desktop)
+.\make.ps1 check         # fmt-check + vet + test + race
+.\make.ps1 help          # список всех целей
 ```
 
 CI ([.gitverse/workflows/ci.yml](.gitverse/workflows/ci.yml)) собирает и тестирует
