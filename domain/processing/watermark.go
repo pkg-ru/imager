@@ -137,6 +137,24 @@ type WatermarkSpec struct {
 	// WidthPx / HeightPx — фиксированный размер (только для SizePixels).
 	WidthPx  int
 	HeightPx int
+	// Opacity — прозрачность ватермарки в процентах: 100 = полностью
+	// непрозрачный знак (как раньше), 0 = полностью прозрачный (невидимый).
+	// Значения вне [0,100] или неустановленное поле трактуются как 100.
+	Opacity int
+}
+
+// DefaultWatermarkOpacity — прозрачность ватермарки по умолчанию:
+// знак полностью непрозрачный (совместимо с существующим поведением).
+const DefaultWatermarkOpacity = 100
+
+// NormalizeWatermarkOpacity приводит значение прозрачности к валидному:
+// значения в [0,100] возвращаются как есть (в т.ч. 0 = невидимый знак),
+// неустановленное/некорректное значение (<0 или >100) — дефолт 100.
+func NormalizeWatermarkOpacity(opacity int) int {
+	if opacity < 0 || opacity > DefaultWatermarkOpacity {
+		return DefaultWatermarkOpacity
+	}
+	return opacity
 }
 
 // NewWatermarkSpec создаёт WatermarkSpec с валидацией всех полей.
@@ -171,6 +189,7 @@ func NewWatermarkSpec(name, path string, position WatermarkPosition, repeat Wate
 		SizeKind: kind,
 		WidthPx:  w,
 		HeightPx: h,
+		Opacity:  DefaultWatermarkOpacity,
 	}, nil
 }
 

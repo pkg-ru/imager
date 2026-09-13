@@ -383,6 +383,7 @@ policy:
 | `position` | string | `center` | `top\|bottom\|left\|right\|center` |
 | `repeat` | string | `no-repeat` | `no-repeat\|repeat\|repeat-x\|repeat-y\|round\|space` |
 | `size` | string | `contain` | `contain\|cover\|"200px 50px"` |
+| `opacity` | int | `100` | Прозрачность водяного знака в процентах: `100` — непрозрачный, `0` — полностью прозрачный (невидимый). Значения вне диапазона [0,100] заменяются на `100` |
 
 Ограничения движков: libvips поддерживает position/repeat/size полностью, включая покадровое наложение на анимированные выходы (GIF/WebP/APNG) с сохранением delay/loop. Все копии repeat/tile-раскладки накладываются одним composite-вызовом.
 
@@ -395,6 +396,7 @@ watermarks:
     position: bottom-right   # см. допустимые значения выше
     repeat: no-repeat
     size: contain
+    opacity: 100             # 0-100; 100 = непрозрачный, 0 = невидимый
 ```
 
 ## processing

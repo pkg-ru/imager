@@ -38,6 +38,40 @@ func TestParseWatermarkSize(t *testing.T) {
 	}
 }
 
+func TestNormalizeWatermarkOpacity(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{0, 0},      // 0 валиден: полностью прозрачный знак
+		{1, 1},      // нижняя граница+
+		{50, 50},    // середина диапазона
+		{99, 99},    // верхняя граница-
+		{100, 100},  // 100 = непрозрачный знак
+		{-1, 100},   // вне диапазона снизу → дефолт
+		{-100, 100}, // вне диапазона снизу → дефолт
+		{101, 100},  // вне диапазона сверху → дефолт
+		{1000, 100}, // вне диапазона сверху → дефолт
+	}
+	for _, tc := range cases {
+		if got := NormalizeWatermarkOpacity(tc.in); got != tc.want {
+			t.Errorf("NormalizeWatermarkOpacity(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNewWatermarkSpecOpacityDefault(t *testing.T) {
+	// Дефолт: opacity = 100 (полностью непрозрачный знак) — совместимо
+	// с существующим поведением пользователей без параметра opacity.
+	wm, err := NewWatermarkSpec("logo", "/w/logo.png", WatermarkPositionCenter, "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wm.Opacity != DefaultWatermarkOpacity {
+		t.Errorf("opacity default = %d, want %d", wm.Opacity, DefaultWatermarkOpacity)
+	}
+}
+
 func TestNewWatermarkSpecValidation(t *testing.T) {
 	// Валидная спецификация.
 	wm, err := NewWatermarkSpec("logo", "/w/logo.png", "bottom-right-nope", "", "")

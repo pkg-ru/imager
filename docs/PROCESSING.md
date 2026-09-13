@@ -124,9 +124,12 @@ watermarks:
     position: center        # top | bottom | left | right | center
     repeat: no-repeat       # no-repeat | repeat | repeat-x | repeat-y | round | space
     size: contain           # contain | cover | "200px 50px"
+    opacity: 100            # 0-100; 100 = непрозрачный (по умолчанию), 0 = полностью прозрачный
 ```
 
 Семантика полей соответствует CSS `background-position` / `background-repeat` / `background-size`.
+
+Прозрачность задаётся полем `opacity` в процентах: `100` — знак непрозрачный (по умолчанию, если поле не указано), `0` — полностью прозрачный (невидимый). Значения вне диапазона [0,100] заменяются на `100`. Прозрачность реализуется умножением альфа-канала знака на множитель `opacity/100` перед композитом; цветовые каналы не затрагиваются.
 
 Поведение:
 

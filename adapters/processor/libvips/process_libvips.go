@@ -1379,6 +1379,11 @@ func (b *libvipsBackend) loadWatermark(path string) ([]byte, error) {
 //   - repeat no-repeat/repeat/repeat-x/repeat-y/round/space — раскладка
 //     копий (см. WatermarkSpec.Layout); round дополнительно масштабирует
 //     копию до шага сетки (RoundStep), чтобы копии точно укладывались.
+//   - opacity 0-100 — прозрачность знака (100 = непрозрачный, дефолт;
+//     0 = полностью прозрачный/невидимый). Реализуется умножением
+//     альфа-канала копии на множитель opacity/100 (vips_linear по
+//     альфа-каналу) ДО композиции: при 100 множитель = 1 и изображение
+//     ватермарки не изменяется (нулевые накладные расходы).
 //
 // Для анимированных выходов (GIF/WebP/HEIF; кадры хранятся libvips как один
 // вертикально сшитый холст с page-height) ватермарка накладывается на КАЖДЫЙ
@@ -1424,6 +1429,12 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		return nil, fmt.Errorf("libvips: watermark %q: resize to %dx%d: %w", wm.Name, tw, th, err)
 	}
 
+	// Прозрачность: умножаем альфа-канал копии на opacity/100 до композита.
+	// При 100 (дефолт) операция пропускается — поведение идентично прежнему.
+	if err := applyWatermarkOpacity(wmImg, wm.Opacity); err != nil {
+		return nil, fmt.Errorf("libvips: watermark %q: opacity %d: %w", wm.Name, wm.Opacity, err)
+	}
+
 	// Проверяем число тайлов ДО материализации среза точек: Layout строит
 	// срез всех позиций, что при патологическом тайлинге (крошечный файл +
 	// repeat на большом холсте) аллоцирует до ~1.6 ГБ. LayoutCount — чистая
@@ -1460,6 +1471,34 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 // AddAlpha. BlendModeOver консистентен с premultiply-семантикой Фазы 2
 // (composite выполняет смешивание в premultiplied пространстве внутри
 // операции).
+// applyWatermarkOpacity умножает альфа-канал ватермарки на множитель
+// opacity/100 (vips_linear только по альфа-полосе): 100 = без изменений,
+// 0 = знак полностью прозрачен (не влияет на результат композита).
+// Значения вне [0,100] нормализуются к дефолту (100) — та же семантика,
+// что и при компиляции конфига.
+func applyWatermarkOpacity(wmImg *vips.ImageRef, opacity int) error {
+	opacity = processing.NormalizeWatermarkOpacity(opacity)
+	if opacity >= processing.DefaultWatermarkOpacity {
+		return nil
+	}
+	if !wmImg.HasAlpha() {
+		// Знак без альфы: добавляем полностью непрозрачный альфа-канал,
+		// затем масштабируем его — цветовые полосы не затрагиваются.
+		if err := wmImg.AddAlpha(); err != nil {
+			return fmt.Errorf("add alpha: %w", err)
+		}
+	}
+	bands := wmImg.Bands()
+	a := make([]float64, bands)
+	b := make([]float64, bands)
+	for i := 0; i < bands; i++ {
+		a[i] = 1
+		b[i] = 0
+	}
+	a[bands-1] = float64(opacity) / float64(processing.DefaultWatermarkOpacity)
+	return wmImg.Linear(a, b)
+}
+
 func compositeWatermarkOnce(target *vips.ImageRef, tile *vips.ImageRef, pts []processing.Point) error {
 	if len(pts) == 0 {
 		return nil

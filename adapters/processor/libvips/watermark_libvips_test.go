@@ -147,6 +147,82 @@ func TestWatermarkAppliedToEveryFrame(t *testing.T) {
 	}
 }
 
+// TestWatermarkOpacity проверяет применение прозрачности ватермарки:
+//   - opacity 0 — знак полностью прозрачен (пиксель центра = фон кадра);
+//   - opacity 50 — знак полупрозрачен (смешение зелёного с фоном);
+//   - opacity 100 (дефолт) — знак непрозрачен (как раньше).
+func TestWatermarkOpacity(t *testing.T) {
+	wmPath := filepath.Join(t.TempDir(), "wm.png")
+	if err := os.WriteFile(wmPath, makePng(t), 0o644); err != nil {
+		t.Fatalf("write wm: %v", err)
+	}
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		opacity int
+		check   func(t *testing.T, r, g, bl uint8)
+	}{
+		{
+			name:    "opacity 0 invisible",
+			opacity: 0,
+			check: func(t *testing.T, r, g, bl uint8) {
+				if !(r > 200 && g < 50 && bl < 50) {
+					t.Errorf("center = (%d,%d,%d), want red background (wm invisible)", r, g, bl)
+				}
+			},
+		},
+		{
+			name:    "opacity 50 blend",
+			opacity: 50,
+			check: func(t *testing.T, r, g, bl uint8) {
+				// Полусмешение зелёного (0,255,0) с красным (255,0,0):
+				// ~ (128,128,0); допускаем погрешность квантования.
+				if !(g > 80 && g < 200 && r > 80 && r < 200 && bl < 50) {
+					t.Errorf("center = (%d,%d,%d), want red/green blend", r, g, bl)
+				}
+			},
+		},
+		{
+			name:    "opacity 100 opaque",
+			opacity: 100,
+			check: func(t *testing.T, r, g, bl uint8) {
+				if !(g > 200 && r < 50 && bl < 50) {
+					t.Errorf("center = (%d,%d,%d), want green (opaque wm)", r, g, bl)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wm, err := processing.NewWatermarkSpec("wm", wmPath, processing.WatermarkPositionCenter, processing.WatermarkRepeatNoRepeat, "8px 8px")
+			if err != nil {
+				t.Fatalf("NewWatermarkSpec: %v", err)
+			}
+			wm.Opacity = tc.opacity
+			p := *plan
+			p.Watermark = wm
+			res, err := b.process(context.Background(), makeGif(t), &p, false, nil, nil)
+			if err != nil {
+				t.Fatalf("process: %v", err)
+			}
+			r, g, bl, _ := pixelAt(t, res.data, 0, 16, 16)
+			tc.check(t, r, g, bl)
+		})
+	}
+}
+
 func TestWatermarkNoWatermark(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,

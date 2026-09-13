@@ -32,6 +32,7 @@ func TestCompileWatermarks(t *testing.T) {
 				Position: dynamic.String("bottom"),
 				Repeat:   dynamic.String("repeat-x"),
 				Size:     dynamic.String("200px 50px"),
+				Opacity:  dynamic.NewNullable(dynamic.Int64(60)),
 			},
 		},
 		Policy: policyConfigForTest(),
@@ -50,6 +51,9 @@ func TestCompileWatermarks(t *testing.T) {
 	if wm.Path != "/w/logo.png" || wm.Position != "bottom" || wm.Repeat != "repeat-x" || wm.WidthPx != 200 || wm.HeightPx != 50 {
 		t.Errorf("spec mismatch: %+v", wm)
 	}
+	if wm.Opacity != 60 {
+		t.Errorf("opacity = %d, want 60", wm.Opacity)
+	}
 	preset, err := compiled.Presets.Resolve(mustPresetReq(t))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -63,6 +67,69 @@ func TestCompileWatermarks(t *testing.T) {
 	}
 	if compiled.DefaultWatermark == nil || compiled.DefaultWatermark.Name != "logo" {
 		t.Errorf("default watermark not resolved")
+	}
+}
+
+// TestCompileWatermarksOpacityDefault проверяет дефолт прозрачности: без
+// поля opacity (и при некорректных значениях вне [0,100]) знак компилируется
+// с opacity = 100 (полностью непрозрачный — прежнее поведение).
+func TestCompileWatermarksOpacityDefault(t *testing.T) {
+	cases := []struct {
+		name    string
+		opacity dynamic.Nullable[dynamic.Int64]
+		want    int
+	}{
+		{"unset", dynamic.Nullable[dynamic.Int64]{}, 100},
+		{"explicit 100", dynamic.NewNullable(dynamic.Int64(100)), 100},
+		{"explicit 0", dynamic.NewNullable(dynamic.Int64(0)), 0},
+		{"explicit 50", dynamic.NewNullable(dynamic.Int64(50)), 50},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Version: dynamic.String(SupportedVersion),
+				Watermarks: map[string]WatermarkConfig{
+					"logo": {
+						Path:     dynamic.String("/w/logo.png"),
+						Position: dynamic.String("center"),
+						Opacity:  tc.opacity,
+					},
+				},
+				Policy: policyConfigForTest(),
+			}
+			compiled, err := cfg.Compile()
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			wm, ok := compiled.Watermarks["logo"]
+			if !ok {
+				t.Fatal("watermark logo not in registry")
+			}
+			if wm.Opacity != tc.want {
+				t.Errorf("opacity = %d, want %d", wm.Opacity, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateWatermarkOpacityOutOfRange проверяет fail-fast валидацию
+// некорректных значений opacity в конфигурации.
+func TestValidateWatermarkOpacityOutOfRange(t *testing.T) {
+	for _, o := range []dynamic.Int64{dynamic.Int64(-1), dynamic.Int64(101), dynamic.Int64(1000)} {
+		cfg := &Config{
+			Version: dynamic.String(SupportedVersion),
+			Watermarks: map[string]WatermarkConfig{
+				"logo": {
+					Path:     dynamic.String("/w/logo.png"),
+					Position: dynamic.String("center"),
+					Opacity:  dynamic.NewNullable(o),
+				},
+			},
+			Policy: policyConfigForTest(),
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("expected error for opacity %d", o)
+		}
 	}
 }
 

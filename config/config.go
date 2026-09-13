@@ -57,6 +57,9 @@ type WatermarkConfig struct {
 	// Size — размер копии: contain | cover | "{width}px {height}px"
 	// (CSS background-size). Пусто = contain.
 	Size dynamic.String `yaml:"size"`
+	// Opacity — прозрачность знака в процентах: 100 = полностью
+	// непрозрачный (дефолт), 0 = полностью прозрачный. nil = дефолт (100).
+	Opacity dynamic.Nullable[dynamic.Int64] `yaml:"opacity"`
 }
 
 // ProcessingConfig — конфигурация обработки.
@@ -146,6 +149,11 @@ func (c *Config) Validate() error {
 			processing.WatermarkRepeat(w.Repeat.Unwrap()), w.Size.Unwrap()); err != nil {
 			return fmt.Errorf("config: watermarks.%s: %w", name, err)
 		}
+		if w.Opacity.Set {
+			if o := w.Opacity.Value.Unwrap(); o < 0 || o > 100 {
+				return fmt.Errorf("config: watermarks.%s: opacity must be in [0,100], got %d", name, o)
+			}
+		}
 	}
 	// Ссылки на ватермарки: default-watermark, пресеты, customs.
 	checkRef := func(name, what string) error {
@@ -190,6 +198,9 @@ func (c *Config) watermarkRegistry() map[string]*processing.WatermarkSpec {
 		if err != nil {
 			// Не должно случиться после Validate.
 			continue
+		}
+		if w.Opacity.Set {
+			spec.Opacity = processing.NormalizeWatermarkOpacity(int(w.Opacity.Value.Unwrap()))
 		}
 		reg[spec.Name] = spec
 	}
