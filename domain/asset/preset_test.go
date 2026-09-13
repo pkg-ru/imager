@@ -438,3 +438,62 @@ func TestPresetEncodingOverridesPropagation(t *testing.T) {
 		t.Error("Preset.EncodingOverrides() mutated by external map modification")
 	}
 }
+
+// TestPresetNameSpecialChars проверяет, что в имени пресета (сегмента)
+// разрешены символы "-", "_", "!", ".", ",", а также что ранее разрешённые
+// символы (буквы/цифры/@) остались допустимыми; имена с явно недопустимыми
+// символами (пробел, слэш) остаются невалидными.
+func TestPresetNameSpecialChars(t *testing.T) {
+	valid := []string{
+		"my-preset_1!.,2",  // все новые символы вместе
+		"my-preset",        // дефис (был разрешён ранее)
+		"my_preset",        // подчёркивание
+		"preset!",          // восклицательный знак
+		"preset.v2",        // точка
+		"preset,v2",        // запятая
+		"banner@2",         // @dpr-суффикс (был разрешён ранее)
+		"ABCxyz0123456789", // буквы и цифры (были разрешены ранее)
+	}
+	for _, s := range valid {
+		if _, err := NewSegmentName(s); err != nil {
+			t.Errorf("NewSegmentName(%q) error: %v, want nil", s, err)
+		}
+	}
+	invalid := []string{
+		"my preset",  // пробел
+		"my/preset",  // слэш
+		"my\\preset", // обратный слэш
+		"my:preset",  // двоеточие
+		"my?preset",  // вопросительный знак
+	}
+	for _, s := range invalid {
+		if _, err := NewSegmentName(s); err == nil {
+			t.Errorf("NewSegmentName(%q) = nil error, want error", s)
+		}
+	}
+}
+
+// TestParsePresetNameSpecialChars проверяет полный цикл: URL с именем
+// пресета, содержащим новые символы, разбирается и разрешается в пресет.
+func TestParsePresetNameSpecialChars(t *testing.T) {
+	set, err := NewPresetSet([]*Preset{
+		mustNewPreset(t, "my-preset_1!.,2", CropCenter, "120x80", "webp"),
+	})
+	if err != nil {
+		t.Fatalf("NewPresetSet: %v", err)
+	}
+	req, err := Parse("/photos/photo-1-jpg/my-preset_1!.,2.webp")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if req.SegmentName().String() != "my-preset_1!.,2" {
+		t.Errorf("SegmentName = %q, want my-preset_1!.,2", req.SegmentName())
+	}
+	resolved, err := set.Resolve(req)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := resolved.Size().String(); got != "120x80" {
+		t.Errorf("resolved Size = %q, want 120x80", got)
+	}
+}

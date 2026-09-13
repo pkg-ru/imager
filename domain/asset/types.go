@@ -61,7 +61,7 @@ const (
 	// как размер-грамматика с префиксом ("120x80") или как
 	// "имя-валидный-формат" ("my-png") — иначе однозначное отделение
 	// {source_name}-{source_format} от сегмента в URL нарушается.
-	segmentNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.-"
+	segmentNameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@.-!,"
 	// formatChars — символы, допустимые в формате.
 	formatChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
