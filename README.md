@@ -36,6 +36,13 @@ GET /photos/city-skyline-jpg/300x@2.webp
   ограниченные тела запросов, admission control, защищённые от symlink операции
   с файлами.
 
+## Демо и клиентская часть
+
+- **Онлайн-демо** — <https://altuh.ru/demo/imager>: пример работы сервиса
+  Imager и клиентской части.
+- **Клиентская часть** — <https://gitverse.ru/pkg-ru/imager-client>: клиент
+  для формирования asset URL и работы с сервисом.
+
 ## Быстрый старт
 
 ### Готовый образ (Docker Hub)
@@ -209,8 +216,10 @@ C-зависимостей компилируются заглушки, поэт
 
 ## Документация
 
-| Документ | Содержимое |
+| Ресурс | Содержимое |
 |----------|------------|
+| [Демо](https://altuh.ru/demo/imager) | Онлайн-пример работы сервиса Imager и клиентской части |
+| [imager-client](https://gitverse.ru/pkg-ru/imager-client) | Клиентская часть для работы с сервисом |
 | [docs/API.md](docs/API.md) | Формат URL изображений, эндпоинты, преобразования |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Полный справочник конфигурации |
 | [docs/INSTALLATION.md](docs/INSTALLATION.md) | Зависимости и инструкции по сборке |
