@@ -65,8 +65,7 @@ type Capability struct {
 	Name string
 }
 
-// Processor — маршрутизатор к процессору.
-var _ processor.RGBPreparer = (*Processor)(nil)
+var _ processor.RGBPreparer = (*Processor)(nil) // Processor реализует RGBPreparer.
 
 // Processor обрабатывает операции на единственном движке. Форматы вне
 // покрытия primary вызывают ErrEngineUnavailable.

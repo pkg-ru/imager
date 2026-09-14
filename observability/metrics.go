@@ -182,9 +182,10 @@ func (h *histogram) observe(d time.Duration) {
 
 // StdMetrics — production реализация Metrics на stdlib expvar.
 //
-// Все счётчики и гистограммы экспортируются через /debug/vars (expvar) и
-// агрегируются в текстовом /metrics endpoint. Кардинальность ограничена
-// фиксированными enum-ами.
+// Все счётчики и гистограммы хранятся в глобальном expvar-реестре и
+// агрегируются в текстовом /metrics endpoint (Prometheus exposition format).
+// Отдельный /debug/vars endpoint сервисом не регистрируется. Кардинальность
+// ограничена фиксированными enum-ами.
 type StdMetrics struct {
 	requests    *expvar.Map // class -> counter
 	requestDur  *histogram

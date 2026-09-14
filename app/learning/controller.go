@@ -8,9 +8,11 @@
 // policy.path-policies в setting/generate-local.yaml на основе наблюдаемых
 // URL (путь + размер + формат).
 //
-// Этот пакет НЕ интегрирован с generatev2/httpapi/composition — только
-// фундамент: Controller (runtime-флаг), чистые функции слияния (merge.go),
-// writer (writer.go) и Recorder (recorder.go/service.go).
+// Пакет интегрирован с composition (composition/app.go): при включённом
+// policy.learning-mode создаётся Service (Controller + Recorder), в который
+// generatev2/httpapi отправляют наблюдения. Здесь — фундамент: Controller
+// (runtime-флаг), чистые функции слияния (merge.go), writer (writer.go) и
+// Recorder (recorder.go/service.go).
 package learning
 
 import "sync/atomic"

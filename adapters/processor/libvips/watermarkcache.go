@@ -137,8 +137,12 @@ type watermarkCache struct {
 	now      func() time.Time // инъекция времени для тестов
 }
 
-// Ошибки кэша (внутренние; наружу не пробрасываются — при любой проблеме
-// вызывающий выполняет fallback на прямое чтение).
+// Ошибки кэша. ВАЖНО: не все ошибки кэша остаются внутренними — часть
+// пробрасывается наружу через loadWatermark → applyWatermark и завершает
+// запрос ошибкой (ватермарка обязательна для запроса). К ним относятся:
+// ошибка loader'а (чтение с диска) и таймаут ожидания singleflight-загрузки
+// (waiter получает errWatermarkCacheDisabled). Внутренний fallback есть
+// только для выключенного кэша (enabled() == false → прямой вызов loader).
 var errWatermarkCacheDisabled = errors.New("watermark cache disabled")
 
 // newWatermarkCache создаёт кэш с нормализованными настройками. opts.Enabled
@@ -187,6 +191,10 @@ func (c *watermarkCache) getOrLoad(path string, modTime time.Time, size int64, l
 		c.removeLocked(path, el)
 	}
 	// Singleflight: присоединяемся к выполняющейся загрузке, если есть.
+	// Ожидание ограничено time.After(c.ttl) — TTL используется как верхняя
+	// граница ожидания; при превышении waiter получает errWatermarkCacheDisabled
+	// (ошибка пробрасывается выше и завершает запрос; загрузка владельца при
+	// этом продолжается и может наполнить кэш для следующих запросов).
 	if call, ok := c.inflight[path]; ok {
 		c.mu.Unlock()
 		select {

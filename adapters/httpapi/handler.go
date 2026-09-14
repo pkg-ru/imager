@@ -55,7 +55,6 @@ type Handler struct {
 }
 
 // New создаёт Handler. Конфигурация валидируется и нормализуется.
-// New создаёт Handler. Конфигурация валидируется и нормализуется.
 func New(gen Generator, cfg Config) (*Handler, error) {
 	if gen == nil {
 		return nil, fmt.Errorf("httpapi: nil generator")

@@ -44,7 +44,8 @@ const DefaultDetectionConcurrencyFactor = 2
 
 // DefaultDetectionMaxWait — дефолтный бюджет ожидания detection-слота.
 // Инференс короткий (десятки мс на CPU), поэтому длительное ожидание сигнализирует
-// о перегрузке — быстрее отдать клиенту 503, чем копить хвост задержки.
+// о перегрузке — быстрее деградировать к fallback-фокусировке (center-crop),
+// чем копить хвост задержки.
 const DefaultDetectionMaxWait = 5 * time.Second
 
 // ErrTooManyDetectionConcurrency — сигнал переполнения очереди ожидания

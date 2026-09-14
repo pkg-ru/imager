@@ -1,19 +1,22 @@
 # API
 
-Сервис отдаёт изображения по каноническим (custom) и preset URL. Тела запросов не принимает (кроме админ-эндпоинтов); используются только методы `GET`, `HEAD`, `OPTIONS`.
+Сервис отдаёт изображения по каноническим (custom) и preset URL. Тела запросов не принимает (кроме админ-эндпоинтов, лимит 1 МБ); лимит тела обычных запросов — `server.max-body-bytes` (по умолчанию 4 KiB, превышение → `413`). Используются только методы `GET`, `HEAD`, `OPTIONS`.
 
 ## Эндпоинты
 
 | Путь | Методы | Назначение |
 |------|--------|------------|
 | `/` (любой путь) | GET, HEAD, OPTIONS | Генерация и отдача ассета по asset URL |
-| `/healthz` | GET | Liveness: `200 {"status":"alive"}` / `503 {"status":"dead"}` |
-| `/readyz` | GET | Readiness: `200 {"status":"ready"}` / `503 {"status":"not_ready"}` |
-| `/metrics` | GET | Метрики в Prometheus exposition format (может быть защищён токеном/IP — см. [DEPLOYMENT.md](DEPLOYMENT.md)) |
+| `/favicon.ico` | GET, HEAD | Встроенная иконка: `200`, `Content-Type: image/x-icon`, `Cache-Control: public, max-age=86400` |
+| `/healthz` | GET, HEAD | Liveness: `200 {"status":"alive"}` / `503 {"status":"dead"}`; `Content-Type: application/json; charset=utf-8`, `Cache-Control: no-store` |
+| `/readyz` | GET, HEAD | Readiness: `200 {"status":"ready"}` / `503 {"status":"not_ready"}`; те же заголовки |
+| `/metrics` | GET | Метрики в Prometheus exposition format (может быть защищён токеном/IP — см. ниже и [DEPLOYMENT.md](DEPLOYMENT.md)) |
 | `/admin/assets/generate` | POST | Фоновая генерация ассетов (только при `admin.enabled: true`) |
 | `/admin/assets/delete` | DELETE | Удаление ассетов (только при `admin.enabled: true`) |
 
 `/debug/vars` не регистрируется; все expvar-метрики доступны через `/metrics`.
+
+`/metrics` отдаёт `Content-Type: text/plain; version=0.0.4; charset=utf-8` и `Cache-Control: no-store`. При настройке `server.metrics-auth` требуется заголовок `X-Metrics-Token` (constant-time сравнение SHA-256) и/или разрешённый IP (`allowed-ips`: точные адреса или CIDR); иначе — `403` с текстовым телом `forbidden` (не JSON envelope).
 
 ## Формат asset URL
 
@@ -28,12 +31,12 @@
 
 | Компонент | Описание |
 |-----------|----------|
-| `path` | Логический путь исходника в хранилище; запрещены `..`, `%2f`, control-символы |
+| `path` | Логический путь исходника в хранилище (до 512 символов); запрещены `..`, `\`, `%2f`, encoded- и control-символы |
 | `source_name` | Имя исходного файла без расширения; до 128 символов; любые Unicode-символы кроме `/`, `\`, `..`, control-символов |
 | `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl`, а также видео `mp4\|webm\|mov\|mkv\|avi\|m4v` (ассеты из видео строятся из кадра — см. [PROCESSING.md](PROCESSING.md)). APNG-вход читается как анимированный PNG |
-| `segment` | Имя пресета (≤64 символа, без дефисов; буквы, цифры, `_`, `.`, `@`) или custom-имя: `120x80`, `x400`, `300x`, `x` (исходный размер) |
+| `segment` | Имя пресета или custom-имя (≤64 символа; буквы, цифры, `_`, `.`, `@`, `-`, `!`, `,`). Дефисы допустимы, кроме имён, конфликтующих с грамматикой URL: `префикс-размер` (`sc-120x80`) и `имя-формат` (`my-png`) запрещены, обычные дефисы (`face-fix`) разрешены. Custom-имя — размер-грамматика: `120x80`, `x400`, `300x`, `x` (исходный размер) |
 | `dpr` | Device pixel ratio; отсутствие = 1; явно допустимы только `2` и `3` (`@1`/`@0` — ошибка) |
-| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|jxl`. APNG-выход не поддерживается (запись требует libvips с libspng) |
+| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|jxl`. APNG-выход не поддерживается (запись требует libvips с libspng). Запрос выхода, совпадающего с исходным форматом (включая видео `mp4`/`webm`/… и `svg`), на сегменте `x` отдаётся как passthrough без обработки |
 
 Разрешение сегмента описано в [CONFIGURATION.md](CONFIGURATION.md#policy) (path-policies, deny-by-default).
 
@@ -90,9 +93,14 @@ curl -I -H "If-None-Match: \"etag-from-first-response\"" http://localhost:8080/t
 | `Cache-Control` | Из `http.cache-control` (по умолчанию immutable на год) |
 | `ETag` | Из метаданных хранилища либо SHA-256 от identity (canonical URL + size); кэшируется LRU |
 | `Vary: Origin` | При наличии заголовка `Origin` в запросе |
-| `X-Content-Type-Options: nosniff`, `Referrer-Policy` | Security headers |
+| `X-Content-Type-Options: nosniff`, `Referrer-Policy` (по умолчанию `no-referrer`), `Content-Security-Policy` (если задан `http.csp`) | Security headers |
+| `X-Request-Id` | Request ID: пробрасывается из одноимённого заголовка запроса или генерируется (16 байт hex) |
 
 Поддерживаются условные запросы: `If-None-Match` со списком ETag или `*` → `304 Not Modified` без тела.
+
+### Сжатие gzip
+
+Gzip применяется только к JSON-ответам (error envelope, health) при `Accept-Encoding: gzip` (учитывается `q=0` как явный запрет). Изображения не сжимаются. При сжатии добавляются `Content-Encoding: gzip` и `Vary: Accept-Encoding`, `Content-Length` удаляется.
 
 ## Ошибки
 
@@ -108,11 +116,14 @@ curl -I -H "If-None-Match: \"etag-from-first-response\"" http://localhost:8080/t
 | `403` | `forbidden` | Запрос запрещён политикой или превышен лимит `application.limits` |
 | `404` | `not_found` | Источник/результат не найден; применяется not-found fallback (`pixel`/`image`/`page`/`redirect`) |
 | `405` | `method_not_allowed` | Метод отличен от GET/HEAD/OPTIONS (заголовок `Allow`) |
+| `413` | — | Тело запроса больше `server.max-body-bytes` (текстовое тело, не JSON) |
 | `414` | `invalid` | URL длиннее `http.max-url-len` |
-| `431` | — | Заголовки больше `server.max-header-bytes` |
+| `431` | — | Заголовки больше `server.max-header-bytes` (текстовое тело, не JSON) |
 | `500` | `processing` | Внутренняя ошибка обработки |
+| `500` | `internal` | Паника в не-asset ветке (admin/health/metrics/static), перехваченная recover-middleware |
 | `501` | `unsupported_format` | Формат/движок недоступен (например, fc/oc без ONNX) |
-| `503` | `overloaded` / `unavailable` | Перегрузка процессоров/admission control (`Retry-After: 1`) или хранилище недоступно |
+| `503` | `overloaded` / `unavailable` | Перегрузка процессоров (`Retry-After` из `http.retry-after`, по умолчанию `1`) или хранилище/координатор недоступны |
+| `503` | — | Admission control (`http.max-concurrent-requests`): текстовое тело `too many requests` (не JSON) и динамический `Retry-After` (число занятых слотов, минимум 1) |
 | `504` | `canceled` | Таймаут генерации (`http.generate-timeout`) или отмена клиента |
 | `507` | `quota` | Превышена квота хранилища или лимит выходного файла |
 
@@ -122,21 +133,35 @@ Fallback-ответы и ошибки используют `Cache-Control` из 
 
 При ошибке ассета, когда **исходный файл существует**, сервис может отдать исходный файл. Включается секцией `http.source-fallback`; применяется к ошибкам: неканонический URL, несуществующий пресет, недопустимый план, запрещённая политика. `OutcomeNotFound` не покрывается. Статус и заголовки ответа — [CONFIGURATION.md](CONFIGURATION.md#httpsource-fallback).
 
+Ответ source fallback содержит `Content-Type` (из метаданных хранилища или по расширению), `Content-Length`, `Content-Disposition: inline; filename="..."` (имя санитизируется до `[A-Za-z0-9._-]`), `Cache-Control` из `source-fallback.cache-control` и `ETag` из метаданных (если валиден).
+
+### Serve original
+
+Отдельная фича `http.serve-original` (не связана с source-fallback): «простые» URL вида `/path/name.ext` (без дефиса `name-format` в последнем сегменте) отдаются как прямые пути к исходнику со статусом `200` и `Cache-Control` из `serve-original.cache-control` (по умолчанию `no-store`). Выключена по умолчанию; при выключении такие URL дают `400 invalid`.
+
+### Служебные пути (noise)
+
+Запросы `favicon.ico`, `robots.txt`, `sitemap.xml`, `ads.txt`, `404.html`, `index.html`, `.well-known/*`, `.git/*` и т.п., не являющиеся валидными asset URL, обрабатываются тихо: лог на уровне DEBUG, без инкремента метрик ошибок и top-paths. `/favicon.ico` отдаётся встроенной иконкой (см. таблицу эндпоинтов).
+
+### Admission control
+
+`http.max-concurrent-requests` ограничивает число одновременно обрабатываемых asset-запросов (fallback — `application.limits.concurrency`). При переполнении — `503` с динамическим `Retry-After` (число занятых слотов, минимум 1). Health/metrics/admin не ограничиваются. Запрос, который может присоединиться к уже идущей singleflight-генерации того же ассета, пропускается в обход семафора (bypass) вместо `503`.
+
 ### Observability ошибок asset URL
 
 Ошибки канонических URL/пресетов фиксируются при `observability.asset-errors.enabled: true` (по умолчанию включено):
 
 - **структурные логи** с полями `kind` (`parse` | `preset_not_found` | `invalid_plan` | `policy_denied`), `url`, `preset`, `reason` на уровне `observability.asset-errors.log-level` (по умолчанию `warn`);
 - **счётчик** `imager_asset_errors` — по категории `kind` (например `imager_asset_errors_parse`, `imager_asset_errors_preset_not_found`);
-- **top bad paths** — при `observability.asset-errors.top-paths.enabled: true` bounded LRU-реестр проблемных путей (до `max-entries`, по умолчанию 1024) с отчётом топ-`report-top` (по умолчанию 20) путей. Ключ — путь исходника (`key-mode: source`) или sha256-хэш первых 16 байт URL (`key-mode: hash`).
+- **top bad paths** — при `observability.asset-errors.top-paths.enabled: true` bounded LRU-реестр проблемных путей (до `max-entries`, по умолчанию 1024). Ключ — путь исходника (`key-mode: source`) или sha256-хэш первых 16 байт URL (`key-mode: hash`). Реестр живёт в памяти процесса и в `/metrics` НЕ экспортируется (параметр `report-top`, по умолчанию 20, зарезервирован для программного отчёта).
 
-Все счётчики и отчёты доступны в `/metrics` (expvar-реестр). Параметры секции — [CONFIGURATION.md](CONFIGURATION.md#observabilityasset-errors).
+Счётчики `imager_asset_errors_*` доступны в `/metrics` (expvar-реестр). Параметры секции — [CONFIGURATION.md](CONFIGURATION.md#observabilityasset-errors).
 
 Метрики не содержат raw user input в unbounded виде: `url` — путь запроса без query, `preset` — имя пресета, `reason` — категория причины.
 
 ## CORS
 
-Deny-by-default: cross-origin ответы получают CORS-заголовки только для origin из `http.allowed-origins`. `OPTIONS` возвращает `204` c `Allow: GET, HEAD, OPTIONS`; при разрешённом origin отражаются `Access-Control-Allow-Origin` и (при `allow-credentials: true`) `Access-Control-Allow-Credentials`. Комбинация `"*"` + credentials запрещена конфигурацией.
+Deny-by-default: cross-origin ответы получают CORS-заголовки только для origin из `http.allowed-origins`. `OPTIONS` возвращает `204` c `Allow: GET, HEAD, OPTIONS` и `Access-Control-Allow-Methods: GET, HEAD, OPTIONS`; при разрешённом origin отражаются `Access-Control-Allow-Origin`, (при `allow-credentials: true`) `Access-Control-Allow-Credentials` и (при наличии `Access-Control-Request-Headers`) отражённый `Access-Control-Allow-Headers`. Комбинация `"*"` + credentials запрещена конфигурацией.
 
 ## Админ-эндпоинты
 
@@ -216,15 +241,18 @@ Authorization: Bearer <token>
 | `skipped` | int | Число уже существующих ассетов, пропущенных без перегенерации (sync) |
 | `failed` | list | Список неудавшихся ассетов: `url`, `code`, `message` (sync) |
 
+Коды в `failed[].code` — категории исхода генерации (`invalid`, `forbidden`, `not-found`, `quota`, `unavailable`, `overloaded`, `processing`, `canceled`), а также `storage` (ошибка хранилища) и `error` (не классифицировано).
+
 #### Коды ответов
 
 | HTTP | code | Когда возникает |
 |------|------|-----------------|
 | `200` | — | Синхронный режим (`wait: true`), генерация завершена |
 | `202` | — | Асинхронный режим, задача поставлена в очередь |
-| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL, `cannot-enumerate` (хранилище не поддерживает перечисление) |
+| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL, политика не разрешает ни одного ассета для исходника (режим A) |
 | `403` | `forbidden` | Неверный/отсутствующий bearer-токен |
 | `404` | `not_found` | Исходник не существует (режим A) |
+| `405` | `method_not_allowed` | Метод отличен от `POST` (заголовок `Allow: POST, DELETE`) |
 | `503` | `overloaded` | Очередь задач переполнена (`admin.queue-size`) |
 | `504` | `timeout` | Превышен таймаут режима `wait=true` (`admin.wait-timeout`) |
 
@@ -258,7 +286,7 @@ curl -X POST http://localhost:8080/admin/assets/generate \
 {"source": "thumbs/photo.jpg"}
 ```
 
-Используется пакетное `DeleteByPrefix` (PrefixDeleter), при его отсутствии — fallback на `List` + одиночный `Delete`. Если хранилище не поддерживает ни то, ни другое — `501`.
+Стратегия удаления (по приоритету): пакетное `DeleteByPrefix` (PrefixDeleter) → `List` + одиночный `Delete` (Lister) → «слепое» удаление по ключам, сформированным из политик и пресетов (без перечисления содержимого хранилища). `501` возможен, только если result-хранилище не задано вовсе.
 
 **Режим B** — удалить перечисленные ассеты (канонические URL):
 
@@ -289,10 +317,10 @@ curl -X POST http://localhost:8080/admin/assets/generate \
 | HTTP | code | Когда возникает |
 |------|------|-----------------|
 | `200` | — | Удаление выполнено |
-| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL |
+| `400` | `invalid` | Некорректный JSON, заданы оба/ни одного из `source`/`assets`, невалидный asset URL или source-путь |
 | `403` | `forbidden` | Неверный/отсутствующий bearer-токен |
 | `413` | `too_large` | Тело запроса превышает 1 МБ |
-| `501` | `not_implemented` | Result-хранилище не поддерживает ни `DeleteByPrefix`, ни `list` (режим A) |
+| `501` | `not_implemented` | Result-хранилище не задано (режим A) |
 | `500` | `internal` | Внутренняя ошибка |
 
 #### Примеры curl

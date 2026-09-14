@@ -53,7 +53,7 @@ func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && path == "/assets/delete":
 		a.handleDelete(w, r)
 	default:
-		w.Header().Set("Allow", "POST, DELETE, GET")
+		w.Header().Set("Allow", "POST, DELETE")
 		a.writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }

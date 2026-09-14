@@ -9,9 +9,9 @@
 //
 // Адаптер реализует порт processor.Processor (ports/
 // processor). Используется как primary-движок в routing.Processor. libvips
-// (≥ 8.13) поддерживает все форматы. Чтение APNG-входов работает (как
-// multi-page PNG); запись APNG требует libvips, собранного с libspng, и
-// маршрутизатором не заявляется.
+// (≥ 8.16; в Alpine-сборке пинится 8.18) поддерживает все форматы. Чтение
+// APNG-входов работает (как multi-page PNG); запись APNG требует libvips,
+// собранного с libspng, и маршрутизатором не заявляется.
 package libvips
 
 import (
@@ -99,7 +99,8 @@ type Limits struct {
 	// обработки (bounded очередь слотов). 0 = default (16).
 	Concurrency int
 	// Threads — число потоков libvips (vips_concurrency_set). 0 = default
-	// govps (1) — для многопроцессных движений лучше задать число CPU.
+	// govips (число CPU) — для контейнеризованных развёртываний лучше задать
+	// явное значение.
 	Threads int
 	// MaxCacheMem — максимум памяти кэша libvips в байтах.
 	MaxCacheMem int
@@ -288,12 +289,12 @@ var _ processor.RGBPreparer = (*Processor)(nil)
 const DefaultSourceBytes int64 = 10 * 1024 * 1024
 
 // ErrNotCompiled — ошибка, которую возвращает stub-движок, если пакет
-// собран без тэка "libvips".
+// собран без тэга "libvips".
 var ErrNotCompiled = errors.New("libvips support not compiled in (build with -tags libvips)")
 
 // New создаёт Processor. Запускает libvips (startup) при наличии движка.
 // Возвращает ошибку только при некорректной конфигурации; отсутствие
-// скомпилированной поддержки libvps не является ошибкой здесь — ошибка
+// скомпилированной поддержки libvips не является ошибкой здесь — ошибка
 // возвращается при первом Process.
 func New(opts Options) (*Processor, error) {
 	conc := opts.Limits.Concurrency
@@ -333,7 +334,7 @@ func (p *Processor) Close() error {
 // Гарантии:
 //   - bounded очередь слотов конкурентности: при переполнении очереди
 //     ожидания — быстрый отказ ErrTooManyConcurrency;
-//   - context deadline (Timeout) применяется к libvps-обработке и маппится в
+//   - context deadline (Timeout) применяется к libvips-обработке и маппится в
 //     LimitError{LimitTime};
 //   - OutputBytes применяется через boundedWriter при записи в out и маппится
 //     в LimitError{LimitOutput};

@@ -120,9 +120,10 @@ docker pull altrap/imager:1.0.0
 
 Образ `altrap/imager` берётся с Docker Hub (учётка `altrap`, не репозиторий
 кода) и собирается из релизов (`Dockerfile`, target `from-release`):
-бинарь `imager` скачивается fetcher-стадией с `gitverse.ru/pkg-ru/imager`
-(основной; fallback — теги зеркала `github.com/pkg-ru/imager`)
-(`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)).
+бинарь `imager` скачивается fetcher-стадией с GitHub releases
+`github.com/pkg-ru/imager` (основной; GitVerse `gitverse.ru/pkg-ru/imager`
+используется только как fallback при резолве версии `latest` через
+`git ls-remote`) (`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)).
 Теги публикуются через `make docker-release IMAGER_VERSION=<tag>` или
 автоматически при релизе (GitHub Actions, workflow
 [`.github/workflows/docker-release.yml`](../.github/workflows/docker-release.yml);
@@ -137,7 +138,7 @@ GitVerse — зеркало, см. [CI](#ci)).
 docker compose up -d --build
 ```
 
-Конфигурация монтируется из `./setting` в `/etc/imager/setting` read-only, каталог моделей `./models` — в `/etc/imager/models` **read-write**. Модели **не входят в образ** и **не требуют ручного размещения**: при старте контейнера entrypoint (`docker/entrypoint.sh`) скачивает их в смонтированный каталог (`docker/download-models.sh`, источники — OpenCV Zoo и ONNX Model Zoo по умолчанию) и сохраняет на хосте в `./models`, так что при перезапуске скачивание не повторяется. Если скачивание не удалось (нет сети/зеркала) — контейнер продолжает запуск с предупреждением: детекция опциональна, операции `fc`/`oc` просто недоступны (см. [CONFIGURATION.md](CONFIGURATION.md#detection)).
+Конфигурация монтируется из `./setting` в `/etc/imager/setting` **read-write** (entrypoint копирует туда отсутствующие базовые конфиги и создаёт `*-local.yaml` из шаблонов), каталог моделей `./models` — в `/etc/imager/models` **read-write**. Модели **не входят в образ** и **не требуют ручного размещения**: при старте контейнера entrypoint (`docker/entrypoint.sh`) скачивает их в смонтированный каталог (`docker/download-models.sh`, источники — OpenCV Zoo и ONNX Model Zoo по умолчанию) и сохраняет на хосте в `./models`, так что при перезапуске скачивание не повторяется. Если скачивание не удалось (нет сети/зеркала) — контейнер продолжает запуск с предупреждением: детекция опциональна, операции `fc`/`oc` просто недоступны (см. [CONFIGURATION.md](CONFIGURATION.md#detection)).
 
 > **Права на каталог.** Контейнер работает от non-root `imager` (uid 10001). Чтобы entrypoint мог скачивать модели, сделайте хост-каталог `./models` доступным на запись этому uid: `chmod -R a+rwX ./models` (либо `chown 10001:10001 ./models`).
 
@@ -173,15 +174,17 @@ docker run -d \
 | Dropped capabilities | `cap_drop: ALL`, `cap_add: []` |
 | no-new-privileges | `security_opt: no-new-privileges:true` |
 | tmpfs | `/tmp`: `rw,noexec,nosuid,size=64m` |
-| Права доступа | Бинарь `0755`, конфиг `0640`, каталоги данных `0750` |
-| Pinned образы | `golang:1.27.0-alpine3.24` / `alpine:3.24`, pinned версии пакетов |
-| Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s |
+| Права доступа | Бинарь `0755`, конфиг `0640` (root:imager), каталоги данных `0750` |
+| Pinned образы | `golang:1.27.0-alpine3.24` / `alpine:3.24`, pinned версии пакетов (`~=`), принудительное обновление `openssl` |
+| Healthcheck | `wget http://127.0.0.1:8080/healthz` каждые 30s (timeout 3s, start-period 10s, retries 3) |
+| PID 1 / сигналы | `ENTRYPOINT` exec'ает бинарь — корректная сигнальная семантика graceful shutdown |
+| VOLUME | `/data/source`, `/data/result`, `/etc/imager/models` — mountpoint'ы для bind-mounts |
 
-**`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` и `/etc/imager/setting` монтируются `:ro`.
+**`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` монтируется `:ro`. `/etc/imager/setting` в `docker-compose.yaml` монтируется `:rw` (entrypoint копирует туда отсутствующие базовые конфиги и создаёт `*-local.yaml` из шаблонов); при ручном `docker run` допустимо `:ro` — entrypoint тогда пропустит создание файлов с warning, а конфиги должны быть подготовлены заранее.
 
 ## Ресурсы
 
-Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 512M`; reservations: `cpus: 0.25`, `memory: 128M`.
+Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 2G`; reservations: `cpus: 0.25`, `memory: 128M`.
 
 Подбирайте под нагрузку:
 
@@ -194,7 +197,7 @@ Compose-лимиты (`deploy.resources.limits`): `cpus: 2.0`, `memory: 512M`; r
 По SIGINT/SIGTERM сервис:
 
 1. прекращает принимать новые соединения;
-2. дожидается активных запросов до `server.shutdown-timeout` (по умолчанию 15s);
+2. дожидается активных запросов до `server.shutdown-timeout` (дефолт в коде 15s; в shipped-конфиге `setting/server.yaml` задано 30s);
 3. дренирует очередь асинхронной публикации (см. [PROCESSING.md](PROCESSING.md#асинхронная-публикация)), закрывает хранилища, процессоры и пул буферов, останавливает janitor.
 
 Compose использует `stop_signal: INT` и `stop_grace_period: 15s`.
@@ -279,16 +282,17 @@ metadata:
 
 libvips:
   limits:
-    concurrency: 4
-    threads: 4
+    concurrency: 8
+    threads: 2
     timeout: "30s"
-    output-bytes: 10485760
+    source-bytes: 20971520
+    output-bytes: 20971520
 
 application:
   buffer-max-bytes: 524288000
   limits:
-    source-bytes: 10485760
-    output-bytes: 10485760
+    source-bytes: 20971520
+    output-bytes: 20971520
 
 observability:
   log-level: "warn"

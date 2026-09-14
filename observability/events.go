@@ -6,7 +6,7 @@ package observability
 // (без query), preset — имя пресета (если есть), reason — категория причины.
 // Используется для структурного логирования ошибок asset URL.
 type AssetErrorEvent struct {
-	// Kind — категория ошибки: parse | preset_not_found | policy_forbidden |
+	// Kind — категория ошибки: parse | preset_not_found | policy_denied |
 	// invalid_plan.
 	Kind string
 	// URL — путь запроса (без query).

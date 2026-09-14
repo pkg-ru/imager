@@ -5,7 +5,7 @@
 | Компонент | Назначение | Обязательность |
 |-----------|------------|----------------|
 | Go ≥ 1.27 | Сборка из исходников | Да (для локальной сборки) |
-| libvips ≥ 8.13 + заголовки (`vips-dev`) | Основной движок обработки, все форматы | Рекомендуется |
+| libvips ≥ 8.16 + заголовки (`vips-dev`) | Основной движок обработки, все форматы | Рекомендуется |
 | C-компилятор (`gcc`/`build-base`), `pkgconf`, `musl-dev` | cgo-сборка govips | Нужны при сборке с `-tags libvips` |
 | Кодеки: `libheif`, `libde265`, `libjxl`, `librsvg`, `poppler`, `libraw` | HEIF/AVIF, JPEG XL, SVG, PDF, RAW в libvips | Для соответствующих форматов |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов для `face`/`object`-кропов | Опциональна; сборка с `-tags onnx` |
@@ -242,7 +242,7 @@ make docker-build-from-source                    # сборка из исход�
 docker compose up -d --build
 ```
 
-[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./setting` → `/etc/imager/setting:ro`, `./models` → `/etc/imager/models:rw` (entrypoint скачивает модели при старте), `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. Подробности hardening — [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening).
+[`docker-compose.yaml`](../docker-compose.yaml) реализует production-hardening (tmpfs для `/tmp`, `cap_drop: ALL`, `no-new-privileges:true`, лимиты ресурсов, health-check по `/healthz`) и bind-mounts: `./setting` → `/etc/imager/setting:rw` (entrypoint копирует туда отсутствующие базовые конфиги и создаёт `*-local.yaml` из шаблонов), `./models` → `/etc/imager/models:rw` (entrypoint скачивает модели при старте), `./data/source` → `/data/source:ro`, `./data/result` → `/data/result:rw`. Подробности hardening — [DEPLOYMENT.md](DEPLOYMENT.md#укрепление-контейнера-hardening).
 
 ## Локальная разработка
 

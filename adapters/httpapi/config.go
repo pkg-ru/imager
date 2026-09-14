@@ -202,7 +202,8 @@ type Config struct {
 
 	// MaxConcurrentRequests — максимальное число одновременно обрабатываемых
 	// HTTP-запросов (admission control). 0 = без ограничения. При превышении
-	// лимита возвращается HTTP 503 + Retry-After: 1.
+	// лимита возвращается HTTP 503 + динамический Retry-After (зависит от
+	// текущей загрузки, минимум 1s; см. admissionControl.retryAfter).
 	MaxConcurrentRequests int
 
 	// RetryAfter — значение Retry-After (в секундах) для HTTP 503 при

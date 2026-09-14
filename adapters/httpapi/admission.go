@@ -37,7 +37,8 @@ func NewAdmissionControl(maxConcurrent int) *admissionControl {
 // о соответствующей задержке. Минимум 1s (отказоустойчивый быстрый retry для
 // маленьких семафоров).
 //
-// Поведение задокументировано в docs/CONFIGURATION.md (раздел про лимиты).
+// Поведение задокументировано в docs/CONFIGURATION.md (раздел
+// «Лимиты и admission control»).
 func (a *admissionControl) retryAfter() int {
 	if a.sem == nil {
 		return 1

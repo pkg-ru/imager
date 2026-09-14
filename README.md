@@ -152,7 +152,7 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 | Компонент | Назначение | Обязательность |
 |-----------|------------|----------------|
 | Go ≥ 1.27 | Сборка из исходников | Да (для локальных сборок) |
-| libvips ≥ 8.13 + заголовки | Основной движок обработки (все форматы) | Рекомендуется |
+| libvips ≥ 8.16 + заголовки | Основной движок обработки (все форматы) | Рекомендуется |
 | C-компилятор, `pkg-config` | CGO-сборка govips (`-tags libvips`) | При `-tags libvips` |
 | Кодеки: libheif, libde265, libjxl, librsvg, poppler, libraw | HEIF/AVIF, JPEG XL, SVG, PDF, RAW | Для соответствующих форматов |
 | ONNX Runtime (`libonnxruntime`) | Детекция лиц/объектов (преобразования `fc`/`oc`) | Опционально (`-tags onnx`) |
@@ -161,7 +161,9 @@ go build -tags "libvips,onnx" -trimpath -ldflags="-s -w" -o imager ./cmd/imager
 ## Конфигурация
 
 Все настройки задаются в YAML; CLI-флагов у приложения нет. Переменные
-окружения: `IMAGER_CONFIG_DIR` (каталог с файлами конфигурации) и
+окружения: `IMAGER_CONFIG_DIR` (каталог с файлами конфигурации),
+`IMAGER_MODELS_DIR` (каталог ONNX-моделей; fallback для путей
+`detection.face-model`/`detection.object-model`) и
 `IMAGER_S3_ACCESS_KEY`/`IMAGER_S3_SECRET_KEY` (S3-credentials; значение из YAML
 приоритетнее). Конфигурация
 разделена на три слоя, каждый переопределяется файлом `-local.yaml`,

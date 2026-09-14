@@ -258,7 +258,7 @@ type ProcessingPlan struct {
 	Watermark *WatermarkSpec
 	// Orientation — спецификация ориентационных операций (EXIF auto-orient,
 	// поворот, отражение). nil = поведение по умолчанию. Заполняется
-	// из конфигурации (прет → processing.default-*); НЕ является частью
+	// из конфигурации (пресет → processing.default-*); НЕ является частью
 	// URL-грамматики. Применяется процессорами СТРОГО до кропа.
 	Orientation *OrientationSpec
 	// EncodingOverrides — native-параметры кодирования по форматам
