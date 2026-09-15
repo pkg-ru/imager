@@ -912,11 +912,16 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	// до основной операции (кропа/ресайза). Для анимаций trim пересобирает
 	// стек кадров (withFrames) и возвращает НОВОЕ изображение — старое
 	// закрываем здесь (вызывающий process закрывает актуальный img).
+	// trimOffset — смещение кадра после trim (left, top) в координатах
+	// оригинала: нужно для трансляции готовых боксов детекции (sidecar)
+	// из координат оригинала в координаты подрезанного кадра.
+	var trimOffsetX, trimOffsetY int
 	if plan.Trim {
-		trimmed, err := applyTrim(img, plan.TrimSpec)
+		trimmed, ox, oy, err := applyTrim(img, plan.TrimSpec)
 		if err != nil {
 			return img, nil, nil, err
 		}
+		trimOffsetX, trimOffsetY = ox, oy
 		if trimmed != img {
 			img.Close()
 			img = trimmed
@@ -1002,8 +1007,9 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	case processing.OpObjectFixCrop:
 		// Детекторная обрезка (лица/объекты): находится область интереса
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
-		// размера.
-		boxes, detail, err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot)
+		// размера. trimOffset передаётся для трансляции готовых боксов
+		// (sidecar, координаты оригинала) в координаты подрезанного кадра.
+		boxes, detail, err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot, trimOffsetX, trimOffsetY)
 		return img, boxes, detail, err
 	default:
 		return img, nil, nil, fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
@@ -1015,6 +1021,11 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 // (vips_find_trim + ExtractArea). spec — настройки trim (режим auto/color +
 // tolerance); nil = по умолчанию ({auto, 0}). Возвращает ошибку, если область
 // трима пуста.
+//
+// Возвращает также trim-offset (left, top) — смещение подрезанного кадра
+// относительно оригинала. Оно необходимо вызывающему для трансляции готовых
+// боксов детекции (sidecar, координаты оригинала) в координаты подрезанного
+// кадра (см. translateBoxes).
 //
 // Для анимированных изображений (многостраничный вертикальный стек кадров)
 // trim выполняется ПОКАДРОВО: bounding box вычисляется по первому кадру
@@ -1032,17 +1043,17 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 // поэтому непрозрачная цветная рамка (отличающаяся по альфе от контента или
 // шумящая в альфе) не распознавалась как фон. Координаты RGB-копии совпадают
 // с оригиналом, ExtractArea выполняется на оригинале.
-func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, error) {
+func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, int, int, error) {
 	if spec == nil {
 		spec = processing.DefaultTrimSpec()
 	}
 
 	left, top, tw, th, err := trimRegion(img, spec)
 	if err != nil {
-		return img, err
+		return img, 0, 0, err
 	}
 	if tw <= 0 || th <= 0 {
-		return img, fmt.Errorf("libvips: trim: empty trim area (%dx%d)", tw, th)
+		return img, 0, 0, fmt.Errorf("libvips: trim: empty trim area (%dx%d)", tw, th)
 	}
 
 	// Многостраничное изображение: применяем trim-область к каждому кадру.
@@ -1057,16 +1068,16 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, e
 			return nil
 		})
 		if err != nil {
-			return img, err
+			return img, 0, 0, err
 		}
-		return out, nil
+		return out, left, top, nil
 	}
 
 	// Одиночное изображение: вырезаем область на месте (прежнее поведение).
 	if err := img.ExtractArea(left, top, tw, th); err != nil {
-		return img, fmt.Errorf("libvips: trim: %w", err)
+		return img, 0, 0, fmt.Errorf("libvips: trim: %w", err)
 	}
-	return img, nil
+	return img, left, top, nil
 }
 
 // trimRegion вычисляет trim-область (left, top, width, height) для одного
@@ -1230,7 +1241,7 @@ func hexToColor(hex string) *vips.Color {
 // self-detection (faces/objects с реальной уверенностью и label).
 // detail заполняется ТОЛЬКО в режиме self-detection (модель вызывалась
 // внутри процессора); при DetectionsReady=true — nil.
-func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
+func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot, trimOffsetX, trimOffsetY int) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
 	if ctx.Err() != nil {
 		return nil, nil, ctx.Err()
 	}
@@ -1254,7 +1265,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	// ветке, и ниже (reacquireVips).
 	var degraded bool
 	if detectionsReady {
-		detBoxes = translateBoxes(boxes, W, H)
+		detBoxes = translateBoxes(boxes, W, H, trimOffsetX, trimOffsetY)
 	} else {
 		// Self-detection: модель вызывается здесь.
 		det := b.opts.Detector
@@ -1424,15 +1435,16 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 }
 
 // translateBoxes транслирует боксы из координат ОРИГИНАЛА в координаты
-// текущего кадра (после trim). Без trim кадр совпадает с оригиналом —
-// боксы используются как есть. С trim кадр уже подрезан (applyTrim
-// выполнен), поэтому боксы сдвигаются на trim-offset и зажимаются в кадр
-// (clamp идентичен fitRect из detection.box.go).
-func translateBoxes(boxes []filemeta.PixelBox, W, H int) []detection.Box {
+// текущего кадра (после trim). Без trim (offset = 0,0) кадр совпадает с
+// оригиналом — боксы используются как есть. С trim кадр уже подрезан
+// (applyTrim выполнен), поэтому из координат боксов вычитается trim-offset
+// (left, top) и результат зажимается в кадр [0,W)x[0,H) (clamp идентичен
+// fitRect из detection.box.go).
+func translateBoxes(boxes []filemeta.PixelBox, W, H, offsetX, offsetY int) []detection.Box {
 	out := make([]detection.Box, 0, len(boxes))
 	for _, b := range boxes {
-		x := b.X
-		y := b.Y
+		x := b.X - offsetX
+		y := b.Y - offsetY
 		w := b.Width
 		h := b.Height
 		// Clamp в кадр [0,W)x[0,H).

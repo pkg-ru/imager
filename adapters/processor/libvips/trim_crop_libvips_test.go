@@ -64,6 +64,34 @@ func decodePngSize(t *testing.T, data []byte) (int, int) {
 	return img.Bounds().Dx(), img.Bounds().Dy()
 }
 
+// makeTrimPngTwoColor генерирует PNG WxH: белый фон, красный прямоугольник
+// [rx0,ry0)x[rx1,ry1) и синий прямоугольник [bx0,by0)x[bx1,by1). После
+// find_trim (threshold 0.0) область трима = bounding box обоих цветных
+// прямоугольников (контент), белая рамка обрезается.
+func makeTrimPngTwoColor(t *testing.T, W, H, rx0, ry0, rx1, ry1, bx0, by0, bx1, by1 int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, W, H))
+	white := color.RGBA{255, 255, 255, 255}
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if x >= rx0 && x < rx1 && y >= ry0 && y < ry1 {
+				img.SetRGBA(x, y, red)
+			} else if x >= bx0 && x < bx1 && y >= by0 && y < by1 {
+				img.SetRGBA(x, y, blue)
+			} else {
+				img.SetRGBA(x, y, white)
+			}
+		}
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	return out.Bytes()
+}
+
 // hasRedPixel проверяет, что в декодированном изображении есть заметный
 // красный пиксель (контент не был обрезан полностью).
 func hasRedPixel(t *testing.T, data []byte) bool {
@@ -518,5 +546,61 @@ func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
 	}
 	if !hasRedPixel(t, out) {
 		t.Error("output lost the red content after trim+face-crop with ready boxes")
+	}
+}
+
+// TestOpObjectCropTrimReadyBoxesPosition проверяет, что при trim + готовых
+// боксах (DetectionsReady=true) кроп-окно позиционируется ПРАВИЛЬНО, т.е.
+// боксы из sidecar (координаты ОРИГИНАЛА) транслируются на trim-offset.
+//
+// Сценарий: холст 120x80, белая рамка. Контент — ДВА цветных прямоугольника:
+// красный (объект/лицо) [20,20)x[50,40) и синий (фон) [50,20)x[100,60).
+// Trim (auto, белый фон) обрезает рамку до bounding box контента
+// [20,20)x[100,60) → кадр 80x40, где красный теперь [0,0)x[30,20), а синий
+// [30,0)x[80,40). Бокс из sidecar задан в координатах ОРИГИНАЛА:
+// {X:20, Y:20, W:30, H:20} (красный объект). Цель кропа = ровно размер
+// объекта (30x20).
+//
+// Регрессия: translateBoxes НЕ вычитал trim-offset (20,20), бокс оставался
+// [20,20)x[50,40), и SelectCrop вырезал регион [20,20)x[50,40) — это СИНИЙ
+// фон (объект вне кропа). Итог 30x20 синий, красного нет вовсе.
+// С фиксом бокс транслируется в [0,0)x[30,20) — кроп попадает ровно на
+// красный объект, итог 30x20 красный.
+func TestOpObjectCropTrimReadyBoxesPosition(t *testing.T) {
+	det := &fakeDetector{}
+	plan, err := processing.NewProcessingPlan(
+		processing.OpObjectCrop, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Width: 30, Height: 20}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+	plan.Trim = true
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}, Detector: det, DetectorMargin: 0})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	// Бокс в координатах ОРИГИНАЛА: красный объект [20,20)x[50,40).
+	boxes := []filemeta.PixelBox{{X: 20, Y: 20, Width: 30, Height: 20}}
+	res, err := b.process(context.Background(),
+		makeTrimPngTwoColor(t, 120, 80, 20, 20, 50, 40, 50, 20, 100, 60),
+		plan, true, boxes, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	out := res.data
+	if det.calls != 0 {
+		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
+	}
+	w, h := decodePngSize(t, out)
+	if w != 30 || h != 20 {
+		t.Errorf("output size = %dx%d, want 30x20", w, h)
+	}
+	// Итог обязан содержать красный объект. При регрессии (offset не вычтен)
+	// кроп вырезает синий фон — красного нет вовсе.
+	if !hasRedPixel(t, out) {
+		t.Error("output lost the red object after trim+object-crop with ready boxes; trim-offset not applied to ready boxes")
 	}
 }
