@@ -263,7 +263,15 @@ func TestAsyncPublishQueueOverflowSyncFallback(t *testing.T) {
 	env.svc.publishQueueDepthGauge()
 	_ = r1.Close()
 
-	// Второй — в очередь (ёимость 1).
+	// Барьер: воркер ОБЯЗАН начать публикацию (и заблокироваться в slow
+	// store) ДО отправки второго запроса. Без этого барьера гонка:
+	// если воркер ещё не забрал задачу "a" из очереди, публикация "b"
+	// уходит в sync fallback (очередь полна) и навсегда блокируется в
+	// slowResultStore, а release закрывается только в конце теста —
+	// детерминированный дедлок (воспроизведено 200 прогонами).
+	res.waitStarted(t)
+
+	// Второй — в очередь (ёмкость 1).
 	r2, err := gen("b")
 	if err != nil {
 		t.Fatalf("Generate(b): %v", err)
