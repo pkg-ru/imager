@@ -708,6 +708,39 @@ func TestBuildPlanDPRMultiplication(t *testing.T) {
 	}
 }
 
+// TestBuildPlanResizeBackground проверяет, что buildPlan заполняет
+// plan.Background из deps.ResizeBackground (processing.default-resize-background).
+func TestBuildPlanResizeBackground(t *testing.T) {
+	env := newTestEnv(t, func(d *Deps) {
+		d.ResizeBackground = "#ff0000"
+	})
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Background != "#ff0000" {
+		t.Errorf("plan.Background = %q, want #ff0000", plan.Background)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Errorf("Validate error: %v", err)
+	}
+}
+
+// TestBuildPlanResizeBackgroundEmpty проверяет дефолт: без ResizeBackground
+// в deps план получает пустой Background (прозрачность, где возможна).
+func TestBuildPlanResizeBackgroundEmpty(t *testing.T) {
+	env := newTestEnv(t)
+	req := mustReq(t, "", "photo", "png", asset.CropCenter, false, "100x100", 1, "webp")
+	plan, err := env.svc.buildPlan(req)
+	if err != nil {
+		t.Fatalf("buildPlan error: %v", err)
+	}
+	if plan.Background != "" {
+		t.Errorf("plan.Background = %q, want empty", plan.Background)
+	}
+}
+
 // TestInFlightByPath проверяет, что InFlightByPath возвращает true, пока
 // идёт singleflight-генерация ассета по URL-пути, и false после её
 // завершения. Используется admission control для bypass.

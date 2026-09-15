@@ -251,6 +251,7 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		DefaultWatermark:         compiled.DefaultWatermark,
 		DefaultOrientation:       compiled.DefaultOrientation,
 		DefaultTrim:              compiled.DefaultTrim,
+		ResizeBackground:         compiled.DefaultResizeBackground,
 		Logger:                   opt.HTTP.Logger,
 		Metrics:                  opt.HTTP.Metrics,
 		Metadata:                 metaStore,

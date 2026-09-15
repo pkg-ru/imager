@@ -67,8 +67,8 @@ func TestParseFormat(t *testing.T) {
 }
 
 func TestFormatAnimated(t *testing.T) {
-	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatHEIF}
-	still := []Format{FormatJPEG, FormatPNG, FormatAVIF, FormatJPEGXL}
+	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatHEIF, FormatAVIF}
+	still := []Format{FormatJPEG, FormatPNG, FormatJPEGXL}
 	for _, f := range animated {
 		if !f.Animated() {
 			t.Errorf("%q should be animated", f)
@@ -78,6 +78,49 @@ func TestFormatAnimated(t *testing.T) {
 		if f.Animated() {
 			t.Errorf("%q should not be animated", f)
 		}
+	}
+}
+
+// TestFormatSupportsAlpha проверяет поддержку альфа-канала форматами:
+// JPEG — нет, остальные (PNG/APNG/WebP/GIF/AVIF/HEIF/JPEGXL) — да.
+func TestFormatSupportsAlpha(t *testing.T) {
+	noAlpha := []Format{FormatJPEG}
+	withAlpha := []Format{FormatPNG, FormatAPNG, FormatWebP, FormatGIF, FormatAVIF, FormatHEIF, FormatJPEGXL}
+	for _, f := range noAlpha {
+		if f.SupportsAlpha() {
+			t.Errorf("%q should not support alpha", f)
+		}
+	}
+	for _, f := range withAlpha {
+		if !f.SupportsAlpha() {
+			t.Errorf("%q should support alpha", f)
+		}
+	}
+}
+
+// TestProcessingPlanBackground проверяет поле Background: валидный hex
+// проходит Validate(), пустое значение допустимо (прозрачность, где
+// возможна), невалидный hex — ошибка.
+func TestProcessingPlanBackground(t *testing.T) {
+	plan, err := NewProcessingPlan(OpResize, FormatPNG, FormatPNG, Size{Width: 200, Height: 100}, 1, 80, nil, 0, 0)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan error: %v", err)
+	}
+	plan.Background = "#ff0000"
+	if err := plan.Validate(); err != nil {
+		t.Errorf("Validate(#ff0000) error: %v", err)
+	}
+	plan.Background = ""
+	if err := plan.Validate(); err != nil {
+		t.Errorf("Validate(empty) error: %v", err)
+	}
+	plan.Background = "white"
+	if err := plan.Validate(); err == nil {
+		t.Error("Validate(white) expected error")
+	}
+	plan.Background = "#ff00"
+	if err := plan.Validate(); err == nil {
+		t.Error("Validate(#ff00) expected error")
 	}
 }
 

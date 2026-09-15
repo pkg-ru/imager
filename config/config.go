@@ -55,7 +55,7 @@ type WatermarkConfig struct {
 	// repeat-y | round | space (CSS-подобно). Пусто = no-repeat.
 	Repeat dynamic.String `yaml:"repeat"`
 	// Size — размер копии: contain | cover | "{width}px {height}px"
-	// (CSS background-size). Пусто = contain.
+	// (CSS background-size). Пусто = natural (исходный размер).
 	Size dynamic.String `yaml:"size"`
 	// Opacity — прозрачность знака в процентах: 100 = полностью
 	// непрозрачный (дефолт), 0 = полностью прозрачный. nil = дефолт (100).
@@ -92,6 +92,12 @@ type ProcessingConfig struct {
 	// DefaultTrimTolerance — допуск сравнения пикселей с фоновым цветом
 	// для trim в диапазоне [0,1] (0 — точное совпадение). Дефолт: 0.
 	DefaultTrimTolerance dynamic.Float64 `yaml:"default-trim-tolerance"`
+	// DefaultResizeBackground — цвет фона letterbox/pillarbox при resize с
+	// ОБОИМИ заданными измерениями (hex "#RRGGBB"). Пусто = прозрачность,
+	// если она возможна (выходной формат поддерживает альфу или исходник
+	// имеет альфа-канал); для форматов без альфы (JPEG) при пустом значении
+	// используется белый "#ffffff". Дефолт: "".
+	DefaultResizeBackground dynamic.String `yaml:"default-resize-background"`
 	// DefaultVideoFramePercent — процент от длительности видео, на котором
 	// выбирается кадр (0-100). Дефолт: 0.
 	DefaultVideoFramePercent dynamic.Int64 `yaml:"default-video-frame-percent,omitempty"`
@@ -126,6 +132,11 @@ func (c *Config) Validate() error {
 	// допуск [0,1]. Валидируются через TrimSpec.
 	if err := c.compileDefaultTrim().Validate(); err != nil {
 		return fmt.Errorf("config: processing.default-trim: %w", err)
+	}
+	// Цвет фона letterbox/pillarbox: hex "#RRGGBB" или пусто (пусто =
+	// прозрачность, где возможна). Невалидный hex — ошибка старта.
+	if bg := c.Processing.DefaultResizeBackground.Unwrap(); bg != "" && !processing.IsHexColor(bg) {
+		return fmt.Errorf("config: processing.default-resize-background: %q must be in #RRGGBB form", bg)
 	}
 	// Глобальные настройки видео-превью. Поля опциональны: валидируются
 	// только заданные (ненулевые) значения.
@@ -240,6 +251,11 @@ type Compiled struct {
 	// (режим auto/color + tolerance из processing.default-trim-*). Никогда
 	// не nil: при отсутствии настроек содержит {Mode: auto, Tolerance: 0}.
 	DefaultTrim *processing.TrimSpec
+	// DefaultResizeBackground — цвет фона letterbox/pillarbox при resize с
+	// ОБОИМИ заданными измерениями (hex "#RRGGBB" или пусто). Пусто =
+	// прозрачность, где возможна; для форматов без альфы (JPEG) при пустом
+	// значении используется белый "#ffffff". Из processing.default-resize-background.
+	DefaultResizeBackground string
 	// DefaultVideoFramePercent — процент от длительности видео, на котором
 	// выбирается кадр (0-100).
 	DefaultVideoFramePercent int64
@@ -313,6 +329,7 @@ func (c *Config) Compile() (*Compiled, error) {
 		DefaultWatermark:         defWM,
 		DefaultOrientation:       defOr,
 		DefaultTrim:              c.compileDefaultTrim(),
+		DefaultResizeBackground:  c.Processing.DefaultResizeBackground.Unwrap(),
 		DefaultVideoFramePercent: c.Processing.DefaultVideoFramePercent.Unwrap(),
 		DefaultVideoMinContrast:  c.Processing.DefaultVideoMinContrast.Unwrap(),
 		DefaultVideoFrameStep:    c.Processing.DefaultVideoFrameStep.Unwrap(),

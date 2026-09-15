@@ -19,6 +19,7 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"testing"
 	"time"
@@ -318,6 +319,167 @@ func TestFaceCropDegradesToCenterCropOnDetectionOverload(t *testing.T) {
 	}
 	if res2 == nil || out2.Len() == 0 {
 		t.Fatal("second Process returned empty result")
+	}
+}
+
+// makeTrimGif собирает 2-кадровый GIF 32x32: белый фон (однотонная рамка) и
+// сплошной красный прямоугольник [8,8)x[24,24) в центре КАЖДОГО кадра.
+// Кадры одинакового размера и без смещений, чтобы libvips представил их как
+// вертикальный стек с page-height = 32.
+func makeTrimGif(t *testing.T) []byte {
+	t.Helper()
+	const w, h = 32, 32
+	pal := color.Palette{
+		color.RGBA{255, 255, 255, 255}, // фон-рамка
+		color.RGBA{255, 0, 0, 255},     // контент
+	}
+	frames := make([]*image.Paletted, 2)
+	for i := range frames {
+		f := image.NewPaletted(image.Rect(0, 0, w, h), pal)
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				if x >= 8 && x < 24 && y >= 8 && y < 24 {
+					f.SetColorIndex(x, y, 1)
+				} else {
+					f.SetColorIndex(x, y, 0)
+				}
+			}
+		}
+		frames[i] = f
+	}
+	var out bytes.Buffer
+	if err := gif.EncodeAll(&out, &gif.GIF{
+		Image: frames,
+		Delay: []int{10, 10},
+	}); err != nil {
+		t.Fatalf("gif encode: %v", err)
+	}
+	return out.Bytes()
+}
+
+// decodeGifFrameSize возвращает размеры кадра frame декодированного GIF.
+func decodeGifFrameSize(t *testing.T, data []byte, frame int) (int, int) {
+	t.Helper()
+	g, err := gif.DecodeAll(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("gif decode: %v", err)
+	}
+	if frame >= len(g.Image) {
+		t.Fatalf("gif has %d frames, want frame %d", len(g.Image), frame)
+	}
+	b := g.Image[frame].Bounds()
+	return b.Dx(), b.Dy()
+}
+
+// TestTrimAnimatedGifColorBorder проверяет trim на анимации с НЕ прозрачной,
+// а цветной (белой) рамкой: trim-region вычисляется по первому кадру
+// мультистраничного стека (FindTrim по всему стеку даёт top за пределами
+// кадра) и применяется покадрово. Ожидания:
+//   - анимация сохранена (2 кадра в выходе);
+//   - каждый кадр обрезан с 32x32 до trim-области 16x16;
+//   - контент обоих кадров сохранён.
+func TestTrimAnimatedGifColorBorder(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
+		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+	plan.Trim = true
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	res, err := b.process(context.Background(), makeTrimGif(t), plan, false, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	out := res.data
+
+	// Анимация сохранена: 2 кадра.
+	if n := countFrames(t, out); n != 2 {
+		t.Fatalf("output has %d frames, want 2", n)
+	}
+
+	// Каждый кадр обрезан до trim-области 16x16.
+	for frame := 0; frame < 2; frame++ {
+		w, h := decodeGifFrameSize(t, out, frame)
+		if w != 16 || h != 16 {
+			t.Errorf("frame %d size = %dx%d, want 16x16", frame, w, h)
+		}
+	}
+
+	// Контент сохранён: центр кадра 0 красный, угол белый (рамка осталась
+	// частично не должна — центр ровно красный прямоугольник).
+	r, g, bl, _ := pixelAt(t, out, 0, 8, 8)
+	if !(r > 200 && g < 50 && bl < 50) {
+		t.Errorf("frame 0 center = (%d,%d,%d), want red", r, g, bl)
+	}
+	r, g, bl, _ = pixelAt(t, out, 1, 8, 8)
+	if !(r > 200 && g < 50 && bl < 50) {
+		t.Errorf("frame 1 center = (%d,%d,%d), want red", r, g, bl)
+	}
+}
+
+// makeTrimPngAlpha генерирует PNG 60x40 с альфа-каналом: НЕ прозрачная
+// (непрозрачная белая) рамка и непрозрачный красный прямоугольник
+// [20,10)x[40,30) в центре. Изображение загружается в libvips с 4 бандами
+// (RGBA); раньше find_trim сравнивал все 4 канала и цветная рамка не
+// всегда распознавалась как фон — теперь FindTrim выполняется на RGB-копии
+// (ExtractBand(0,3)), а ExtractArea на оригинале.
+func makeTrimPngAlpha(t *testing.T, W, H, x0, y0, x1, y1 int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, W, H))
+	white := color.RGBA{255, 255, 255, 255}
+	red := color.RGBA{255, 0, 0, 255}
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			if x >= x0 && x < x1 && y >= y0 && y < y1 {
+				img.SetRGBA(x, y, red)
+			} else {
+				img.SetRGBA(x, y, white)
+			}
+		}
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		t.Fatalf("png encode: %v", err)
+	}
+	return out.Bytes()
+}
+
+// TestTrimPngWithAlphaColorBorder проверяет trim PNG с альфа-каналом и
+// цветной (белой) непрозрачной рамкой: рамка должна обрезаться, контент
+// (красный прямоугольник 20x20) — сохраниться.
+func TestTrimPngWithAlphaColorBorder(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+	plan.Trim = true
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	res, err := b.process(context.Background(), makeTrimPngAlpha(t, 60, 40, 20, 10, 40, 30), plan, false, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	out := res.data
+	w, h := decodePngSize(t, out)
+	if w != 20 || h != 20 {
+		t.Errorf("output size = %dx%d, want 20x20 (white border trimmed)", w, h)
+	}
+	if !hasRedPixel(t, out) {
+		t.Error("output lost the red content after trim")
 	}
 }
 

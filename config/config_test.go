@@ -133,6 +133,47 @@ func TestValidateWatermarkOpacityOutOfRange(t *testing.T) {
 	}
 }
 
+// TestCompileWatermarkSizeFormats проверяет компиляцию новых форматов size:
+// процент ("50%", "30"), одиночный px ("30px") и пустое значение (natural).
+func TestCompileWatermarkSizeFormats(t *testing.T) {
+	cases := []struct {
+		size string
+		kind processing.WatermarkSizeKind
+		w, h int
+	}{
+		{"", processing.WatermarkSizeNatural, 0, 0},
+		{"50%", processing.WatermarkSizePercent, 50, 0},
+		{"30", processing.WatermarkSizePercent, 30, 0},
+		{"30px", processing.WatermarkSizePixels, 30, 0},
+		{"200px 50px", processing.WatermarkSizePixels, 200, 50},
+	}
+	for _, tc := range cases {
+		cfg := &Config{
+			Version: dynamic.String(SupportedVersion),
+			Watermarks: map[string]WatermarkConfig{
+				"logo": {
+					Path:     dynamic.String("/w/logo.png"),
+					Position: dynamic.String("center"),
+					Size:     dynamic.String(tc.size),
+				},
+			},
+			Policy: policyConfigForTest(),
+		}
+		compiled, err := cfg.Compile()
+		if err != nil {
+			t.Fatalf("compile size %q: %v", tc.size, err)
+		}
+		wm, ok := compiled.Watermarks["logo"]
+		if !ok {
+			t.Fatalf("size %q: watermark logo not in registry", tc.size)
+		}
+		if wm.SizeKind != tc.kind || wm.WidthPx != tc.w || wm.HeightPx != tc.h {
+			t.Errorf("size %q: spec = (kind=%v, %dx%d), want (kind=%v, %dx%d)",
+				tc.size, wm.SizeKind, wm.WidthPx, wm.HeightPx, tc.kind, tc.w, tc.h)
+		}
+	}
+}
+
 func TestValidateWatermarkErrors(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -153,6 +194,33 @@ func TestValidateWatermarkErrors(t *testing.T) {
 				c.Watermarks = wmDecls("logo")
 				w := c.Watermarks["logo"]
 				w.Size = dynamic.String("huge")
+				c.Watermarks["logo"] = w
+			},
+		},
+		{
+			name: "zero percent size",
+			mutate: func(c *Config) {
+				c.Watermarks = wmDecls("logo")
+				w := c.Watermarks["logo"]
+				w.Size = dynamic.String("0%")
+				c.Watermarks["logo"] = w
+			},
+		},
+		{
+			name: "over hundred percent size",
+			mutate: func(c *Config) {
+				c.Watermarks = wmDecls("logo")
+				w := c.Watermarks["logo"]
+				w.Size = dynamic.String("150%")
+				c.Watermarks["logo"] = w
+			},
+		},
+		{
+			name: "zero px size",
+			mutate: func(c *Config) {
+				c.Watermarks = wmDecls("logo")
+				w := c.Watermarks["logo"]
+				w.Size = dynamic.String("0px")
 				c.Watermarks["logo"] = w
 			},
 		},
@@ -381,6 +449,55 @@ func TestValidateDefaultTrimErrors(t *testing.T) {
 				Processing: ProcessingConfig{},
 			}
 			tc.mutate(&cfg.Processing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+// TestCompileDefaultResizeBackground проверяет компиляцию
+// processing.default-resize-background: пустое значение (дефолт) и валидный
+// hex попадают в Compiled.DefaultResizeBackground.
+func TestCompileDefaultResizeBackground(t *testing.T) {
+	cases := []struct {
+		name string
+		bg   dynamic.String
+		want string
+	}{
+		{"empty", dynamic.String(""), ""},
+		{"hex", dynamic.String("#ff0000"), "#ff0000"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Version:    dynamic.String(SupportedVersion),
+				Watermarks: wmDecls("logo"),
+				Policy:     policyConfigForTest(),
+				Processing: ProcessingConfig{DefaultResizeBackground: tc.bg},
+			}
+			compiled, err := cfg.Compile()
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			if compiled.DefaultResizeBackground != tc.want {
+				t.Errorf("DefaultResizeBackground = %q, want %q", compiled.DefaultResizeBackground, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidateDefaultResizeBackgroundErrors проверяет fail-fast валидацию
+// невалидного hex в processing.default-resize-background.
+func TestValidateDefaultResizeBackgroundErrors(t *testing.T) {
+	for _, bg := range []string{"white", "#ff00", "#gggggg", "ff0000"} {
+		t.Run(bg, func(t *testing.T) {
+			cfg := &Config{
+				Version:    dynamic.String(SupportedVersion),
+				Watermarks: wmDecls("logo"),
+				Policy:     policyConfigForTest(),
+				Processing: ProcessingConfig{DefaultResizeBackground: dynamic.String(bg)},
+			}
 			if err := cfg.Validate(); err == nil {
 				t.Fatal("expected validation error")
 			}

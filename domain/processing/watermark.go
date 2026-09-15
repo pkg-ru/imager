@@ -68,40 +68,89 @@ const (
 	// чтобы ватермарка целиком поместилась в холст (CSS contain).
 	WatermarkSizeContain WatermarkSizeKind = iota
 	// WatermarkSizeCover — масштабировать так, чтобы ватермарка покрыла
-	// весь холст (CSS cover; излишек обрезается по центру).
+	// весь холст (CSS cover; излишек обрезается по позиции).
 	WatermarkSizeCover
-	// WatermarkSizePixels — фиксированный размер "{width}px {height}px".
+	// WatermarkSizePixels — фиксированный размер "{width}px {height}px"
+	// или "{width}px" (высота пропорциональна аспекту ватермарки).
 	WatermarkSizePixels
+	// WatermarkSizePercent — процент от ОБОИХ измерений холста "{n}%"
+	// (или "{n}"): ширина и высота копии = n% соответствующих измерений
+	// холста; аспект ватермарки игнорируется.
+	WatermarkSizePercent
+	// WatermarkSizeNatural — исходный (натуральный) размер ватермарки
+	// без масштабирования (пустое значение size).
+	WatermarkSizeNatural
 )
 
 // ParseWatermarkSize разбирает значение поля size ватермарки:
 //
+//	""           → (WatermarkSizeNatural, 0, 0, nil) — исходный размер
 //	"contain"    → (WatermarkSizeContain, 0, 0, nil)
 //	"cover"      → (WatermarkSizeCover, 0, 0, nil)
 //	"100px 50px" → (WatermarkSizePixels, 100, 50, nil)
+//	"30px"       → (WatermarkSizePixels, 30, 0, nil) — высота авто
+//	"50%"        → (WatermarkSizePercent, 50, 0, nil)
+//	"30"         → (WatermarkSizePercent, 30, 0, nil) — число без суффикса = процент
 func ParseWatermarkSize(s string) (WatermarkSizeKind, int, int, error) {
-	switch strings.TrimSpace(s) {
-	case "", "contain":
+	s = strings.TrimSpace(s)
+	switch s {
+	case "":
+		return WatermarkSizeNatural, 0, 0, nil
+	case "contain":
 		return WatermarkSizeContain, 0, 0, nil
 	case "cover":
 		return WatermarkSizeCover, 0, 0, nil
 	}
+	// Процент: "50%" или "30" (число без суффикса трактуется как процент).
+	if strings.HasSuffix(s, "%") {
+		v, err := strconv.Atoi(strings.TrimSuffix(s, "%"))
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
+		}
+		if v < 1 || v > 100 {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: percent must be in [1,100]", s)
+		}
+		return WatermarkSizePercent, v, 0, nil
+	}
 	parts := strings.Fields(s)
-	if len(parts) != 2 {
-		return 0, 0, 0, fmt.Errorf("invalid watermark size %q: must be \"contain\", \"cover\" or \"{width}px {height}px\"", s)
+	switch len(parts) {
+	case 1:
+		// Одиночное значение: "30px" → ширина фикс, высота пропорциональна
+		// аспекту ватермарки; "30" → процент (эквивалент "30%").
+		if strings.HasSuffix(parts[0], "px") {
+			w, err := parsePx(parts[0])
+			if err != nil {
+				return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
+			}
+			if w <= 0 {
+				return 0, 0, 0, fmt.Errorf("invalid watermark size %q: width must be positive", s)
+			}
+			return WatermarkSizePixels, w, 0, nil
+		}
+		v, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
+		}
+		if v < 1 || v > 100 {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: percent must be in [1,100]", s)
+		}
+		return WatermarkSizePercent, v, 0, nil
+	case 2:
+		w, err := parsePx(parts[0])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
+		}
+		h, err := parsePx(parts[1])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
+		}
+		if w <= 0 || h <= 0 {
+			return 0, 0, 0, fmt.Errorf("invalid watermark size %q: width and height must be positive", s)
+		}
+		return WatermarkSizePixels, w, h, nil
+	default:
+		return 0, 0, 0, fmt.Errorf("invalid watermark size %q: must be \"contain\", \"cover\", \"{n}%%\", \"{n}\", \"{w}px\" or \"{w}px {h}px\"", s)
 	}
-	w, err := parsePx(parts[0])
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
-	}
-	h, err := parsePx(parts[1])
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("invalid watermark size %q: %w", s, err)
-	}
-	if w <= 0 || h <= 0 {
-		return 0, 0, 0, fmt.Errorf("invalid watermark size %q: width and height must be positive", s)
-	}
-	return WatermarkSizePixels, w, h, nil
 }
 
 // parsePx разбирает строку вида "100px" (суффикс px обязателен).
@@ -132,9 +181,12 @@ type WatermarkSpec struct {
 	Position WatermarkPosition
 	// Repeat — режим заполнения копиями (CSS-подобный).
 	Repeat WatermarkRepeat
-	// SizeKind — способ задания размера (contain/cover/pixels).
+	// SizeKind — способ задания размера
+	// (contain/cover/pixels/percent/natural).
 	SizeKind WatermarkSizeKind
-	// WidthPx / HeightPx — фиксированный размер (только для SizePixels).
+	// WidthPx / HeightPx — размер копии: для SizePixels — фиксированный
+	// размер в px (HeightPx == 0 — высота пропорциональна аспекту);
+	// для SizePercent — процент (WidthPx, HeightPx не используется).
 	WidthPx  int
 	HeightPx int
 	// Opacity — прозрачность ватермарки в процентах: 100 = полностью
@@ -174,9 +226,6 @@ func NewWatermarkSpec(name, path string, position WatermarkPosition, repeat Wate
 	if !ValidWatermarkRepeat(repeat) {
 		return nil, fmt.Errorf("watermark %q: invalid repeat %q (must be no-repeat|repeat|repeat-x|repeat-y|round|space)", name, repeat)
 	}
-	if size == "" {
-		size = "contain"
-	}
 	kind, w, h, err := ParseWatermarkSize(size)
 	if err != nil {
 		return nil, fmt.Errorf("watermark %q: %w", name, err)
@@ -198,23 +247,62 @@ func NewWatermarkSpec(name, path string, position WatermarkPosition, repeat Wate
 //
 //	contain — вписать в холст с сохранением пропорций;
 //	cover   — покрыть холст с сохранением пропорций;
-//	pixels  — фиксированный размер (натуральный размер не важен).
+//	pixels  — фиксированный размер; при HeightPx == 0 высота вычисляется
+//	          пропорционально аспекту ватермарки (round(WidthPx * wmH / wmW));
+//	percent — n% от ОБОИХ измерений холста (аспект ватермарки игнорируется);
+//	natural — исходный размер ватермарки (wmW x wmH).
 func (s *WatermarkSpec) TargetSize(canvasW, canvasH, wmW, wmH int) (int, int) {
 	if canvasW <= 0 || canvasH <= 0 || wmW <= 0 || wmH <= 0 {
 		return 1, 1
 	}
 	switch s.SizeKind {
 	case WatermarkSizePixels:
-		return s.WidthPx, s.HeightPx
+		if s.HeightPx > 0 {
+			return s.WidthPx, s.HeightPx
+		}
+		// Одиночное px-значение: высота пропорциональна аспекту ватермарки.
+		return s.WidthPx, clampDim(int(math.Round(float64(s.WidthPx) * float64(wmH) / float64(wmW))))
+	case WatermarkSizePercent:
+		return clampDim(int(math.Round(float64(canvasW) * float64(s.WidthPx) / 100))),
+			clampDim(int(math.Round(float64(canvasH) * float64(s.WidthPx) / 100)))
 	case WatermarkSizeContain:
 		scale := math.Min(float64(canvasW)/float64(wmW), float64(canvasH)/float64(wmH))
 		return clampDim(int(math.Round(float64(wmW) * scale))), clampDim(int(math.Round(float64(wmH) * scale)))
 	case WatermarkSizeCover:
 		scale := math.Max(float64(canvasW)/float64(wmW), float64(canvasH)/float64(wmH))
 		return clampDim(int(math.Round(float64(wmW) * scale))), clampDim(int(math.Round(float64(wmH) * scale)))
-	default:
+	default: // WatermarkSizeNatural
 		return wmW, wmH
 	}
+}
+
+// CoverOffset вычисляет смещение (левый верхний угол) копии размером
+// tw x th на холсте canvasW x canvasH согласно позиции — БЕЗ clamp'а в >= 0.
+// Для cover-размера копия может быть БОЛЬШЕ холста, и тогда смещение
+// отрицательное: видимая часть копии определяется пересечением с холстом.
+//
+//	X: left → 0, right → canvasW-tw, center → (canvasW-tw)/2;
+//	Y: top → 0, bottom → canvasH-th, center → (canvasH-th)/2.
+func (s *WatermarkSpec) CoverOffset(canvasW, canvasH, tw, th int) (int, int) {
+	dx := 0
+	switch s.Position {
+	case WatermarkPositionLeft:
+		dx = 0
+	case WatermarkPositionRight:
+		dx = canvasW - tw
+	default: // top/bottom/center — вторая ось по X = центр
+		dx = (canvasW - tw) / 2
+	}
+	dy := 0
+	switch s.Position {
+	case WatermarkPositionTop:
+		dy = 0
+	case WatermarkPositionBottom:
+		dy = canvasH - th
+	default: // left/right/center — вторая ось по Y = центр
+		dy = (canvasH - th) / 2
+	}
+	return dx, dy
 }
 
 // anchorX возвращает X-координату размещения копии шириной ww на холсте W

@@ -84,6 +84,13 @@ func passthroughEligible(plan *processing.ProcessingPlan, src sourceInfo, colorM
 	if plan.Trim || plan.Watermark != nil {
 		return false
 	}
+	// Background (цвет letterbox/pillarbox) задан: при точном совпадении
+	// размеров letterbox не нужен, но политика passthrough консервативна
+	// (любое сомнение → false) — запрещаем fast-path, чтобы не расходиться
+	// с полным конвейером при изменении семантики.
+	if plan.Background != "" {
+		return false
+	}
 	// Детекторные операции (face-crop/object-crop) всегда перекраивают кадр.
 	switch plan.Operation {
 	case processing.OpResize, processing.OpCrop, processing.OpSmartCrop:

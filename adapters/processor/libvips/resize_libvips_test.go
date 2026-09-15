@@ -28,6 +28,7 @@ import (
 
 	"bytes"
 
+	"github.com/davidbyttow/govips/v2/vips"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
 
@@ -155,5 +156,127 @@ func TestOpResizeBothDimensions(t *testing.T) {
 	w, h := decodePngSize(t, res.data)
 	if w != 200 || h != 100 {
 		t.Errorf("output size = %dx%d, want 200x100", w, h)
+	}
+}
+
+// pngPixelAt возвращает RGBA пикселя декодированного PNG.
+func pngPixelAt(t *testing.T, data []byte, x, y int) (uint8, uint8, uint8, uint8) {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("png decode: %v", err)
+	}
+	r, g, b, a := img.At(x, y).RGBA()
+	return uint8(r / 257), uint8(g / 257), uint8(b / 257), uint8(a / 257)
+}
+
+// TestOpResizeLetterboxTransparent проверяет letterbox/pillarbox для PNG:
+// исходник 100x100, план 200x100 → thumbnail вписывает в 100x100, Embed
+// добавляет прозрачные поля слева/справа (pillarbox) до ТОЧНОГО 200x100.
+func TestOpResizeLetterboxTransparent(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	res, err := b.process(context.Background(), makeSolidPng(t, 100, 100, color.RGBA{255, 0, 0, 255}), plan, false, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	w, h := decodePngSize(t, res.data)
+	if w != 200 || h != 100 {
+		t.Errorf("output size = %dx%d, want 200x100", w, h)
+	}
+	// Поле слева (x=10) — прозрачное (alpha=0); контент в центре (x=100) —
+	// красный непрозрачный.
+	_, _, _, a := pngPixelAt(t, res.data, 10, 50)
+	if a != 0 {
+		t.Errorf("left margin alpha = %d, want 0 (transparent)", a)
+	}
+	r, g, bl, a := pngPixelAt(t, res.data, 100, 50)
+	if !(r > 200 && g < 50 && bl < 50 && a > 200) {
+		t.Errorf("center pixel = (%d,%d,%d,%d), want red opaque", r, g, bl, a)
+	}
+}
+
+// TestOpResizeLetterboxJpegBackground проверяет letterbox для JPEG-выхода:
+// исходник 100x100, план 200x100, Background "#ff0000" → поля красные
+// (JPEG альфу не поддерживает, используется цвет из конфига).
+func TestOpResizeLetterboxJpegBackground(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatPNG, processing.FormatJPEG,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+	plan.Background = "#ff0000"
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	res, err := b.process(context.Background(), makeSolidPng(t, 100, 100, color.RGBA{0, 0, 255, 255}), plan, false, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	// JPEG-выход: декодируем через libvips (image/png не читает JPEG).
+	img, err := vips.LoadImageFromBuffer(res.data, vips.NewImportParams())
+	if err != nil {
+		t.Fatalf("jpeg load: %v", err)
+	}
+	defer img.Close()
+	if img.Width() != 200 || img.Height() != 100 {
+		t.Errorf("output size = %dx%d, want 200x100", img.Width(), img.Height())
+	}
+	// Поле слева (x=10) — красное (Background); контент в центре (x=100) —
+	// синий.
+	r, g, bl, _ := vipsPixelAt(t, img, 0, 10, 50)
+	if !(r > 200 && g < 50 && bl < 50) {
+		t.Errorf("left margin = (%d,%d,%d), want red", r, g, bl)
+	}
+	r, g, bl, _ = vipsPixelAt(t, img, 0, 100, 50)
+	if !(bl > 200 && r < 50 && g < 50) {
+		t.Errorf("center pixel = (%d,%d,%d), want blue", r, g, bl)
+	}
+}
+
+// TestOpResizeLetterboxJpegDefaultWhite проверяет дефолт для JPEG-выхода:
+// Background пуст → белые поля (#ffffff).
+func TestOpResizeLetterboxJpegDefaultWhite(t *testing.T) {
+	plan, err := processing.NewProcessingPlan(
+		processing.OpResize, processing.FormatPNG, processing.FormatJPEG,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+	)
+	if err != nil {
+		t.Fatalf("NewProcessingPlan: %v", err)
+	}
+
+	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
+	if err != nil {
+		t.Fatalf("newLibvipsBackend: %v", err)
+	}
+
+	res, err := b.process(context.Background(), makeSolidPng(t, 100, 100, color.RGBA{0, 0, 255, 255}), plan, false, nil, nil)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	img, err := vips.LoadImageFromBuffer(res.data, vips.NewImportParams())
+	if err != nil {
+		t.Fatalf("jpeg load: %v", err)
+	}
+	defer img.Close()
+	r, g, bl, _ := vipsPixelAt(t, img, 0, 10, 50)
+	if !(r > 200 && g > 200 && bl > 200) {
+		t.Errorf("left margin = (%d,%d,%d), want white", r, g, bl)
 	}
 }

@@ -113,12 +113,33 @@ func ParseFormat(s string) (Format, error) {
 }
 
 // Animated сообщает, поддерживает ли формат анимацию.
+//
+// AVIF поддерживает анимацию через HEIF-контейнер (multi-page изображения
+// кодируются libvips heifsave как последовательность кадров, libvips 8.12+).
+// Включение FormatAVIF означает: анимированный AVIF-вход загружается со
+// ВСЕМИ кадрами (NumPages=-1), а для AVIF-выхода multi-page изображение
+// записывается как анимация.
 func (f Format) Animated() bool {
 	switch f {
-	case FormatGIF, FormatWebP, FormatAPNG, FormatHEIF:
+	case FormatGIF, FormatWebP, FormatAPNG, FormatHEIF, FormatAVIF:
 		return true
 	default:
 		return false
+	}
+}
+
+// SupportsAlpha сообщает, поддерживает ли формат альфа-канал (прозрачность).
+//
+// JPEG альфу не поддерживает; PNG/APNG/WebP/GIF/AVIF/HEIF/JPEGXL — да.
+// Используется процессорами для выбора фона letterbox/pillarbox при resize
+// с обоими заданными измерениями: если альфа возможна — прозрачное
+// заполнение, иначе — цвет из конфига (processing.default-resize-background).
+func (f Format) SupportsAlpha() bool {
+	switch f {
+	case FormatJPEG:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -220,6 +241,11 @@ func isHexColor(s string) bool {
 	return true
 }
 
+// IsHexColor — публичная обёртка isHexColor для валидации hex-цветов
+// "#RRGGBB" вне пакета (например, в config при компиляции
+// processing.default-resize-background).
+func IsHexColor(s string) bool { return isHexColor(s) }
+
 // ProcessingPlan — immutable валидируемый план обработки.
 //
 // План не содержит движок-специфичных аргументов: только доменные операции,
@@ -267,6 +293,13 @@ type ProcessingPlan struct {
 	// передаётся процессору для Resolve; валидируется в Validate
 	// (инвариант: значения уже проверены при компиляции конфигурации).
 	EncodingOverrides map[string]map[string]any
+	// Background — цвет фона для letterbox/pillarbox при resize с ОБОИМИ
+	// заданными измерениями (hex "#RRGGBB" или пусто). Пусто = прозрачность,
+	// если она возможна (выходной формат поддерживает альфу или исходник
+	// имеет альфа-канал); для форматов без альфы (JPEG) при пустом значении
+	// используется белый "#ffffff". Задаётся из доверенного конфига
+	// (processing.default-resize-background), НЕ из URL.
+	Background string
 }
 
 // NewProcessingPlan создаёт ProcessingPlan с валидацией.
@@ -371,6 +404,12 @@ func (p *ProcessingPlan) Validate() error {
 		if err := encoding.ValidateOverrides(format, params); err != nil {
 			return fmt.Errorf("processing plan: encoding overrides for %q: %w", format, err)
 		}
+	}
+	// Background: hex "#RRGGBB" или пусто (пусто = прозрачность, где
+	// возможна). Значение приходит из доверенного конфига, но валидируем
+	// defense-in-depth и для программных построений плана.
+	if p.Background != "" && !isHexColor(p.Background) {
+		return fmt.Errorf("processing plan: background %q must be in #RRGGBB form", p.Background)
 	}
 	return nil
 }

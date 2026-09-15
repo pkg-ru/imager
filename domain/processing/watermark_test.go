@@ -14,13 +14,21 @@ func TestParseWatermarkSize(t *testing.T) {
 	}{
 		{"contain", WatermarkSizeContain, 0, 0, true},
 		{"  cover ", WatermarkSizeCover, 0, 0, true},
-		{"", WatermarkSizeContain, 0, 0, true}, // пусто = contain
+		{"", WatermarkSizeNatural, 0, 0, true}, // пусто = исходный размер
 		{"100px 50px", WatermarkSizePixels, 100, 50, true},
-		{"100 50", 0, 0, 0, false},           // без px
-		{"100px", 0, 0, 0, false},            // одно значение
-		{"0px 50px", 0, 0, 0, false},         // нулевая ширина
-		{"abcpx 50px", 0, 0, 0, false},       // не число
-		{"100px 50px extra", 0, 0, 0, false}, // лишнее поле
+		{"30px", WatermarkSizePixels, 30, 0, true}, // одно значение: высота авто
+		{"50%", WatermarkSizePercent, 50, 0, true},
+		{"30", WatermarkSizePercent, 30, 0, true}, // число без суффикса = процент
+		{"100 50", 0, 0, 0, false},                // два числа без px
+		{"0px 50px", 0, 0, 0, false},              // нулевая ширина
+		{"0px", 0, 0, 0, false},                   // нулевая ширина (одиночное)
+		{"0%", 0, 0, 0, false},                    // процент 0 — ошибка
+		{"150%", 0, 0, 0, false},                  // процент > 100 — ошибка
+		{"0", 0, 0, 0, false},                     // число 0 = процент 0 — ошибка
+		{"150", 0, 0, 0, false},                   // число > 100 = процент > 100 — ошибка
+		{"abcpx 50px", 0, 0, 0, false},            // не число
+		{"100px 50px extra", 0, 0, 0, false},      // лишнее поле
+		{"abc", 0, 0, 0, false},                   // не число и не px
 	}
 	for _, tc := range cases {
 		kind, w, h, err := ParseWatermarkSize(tc.in)
@@ -89,8 +97,8 @@ func TestNewWatermarkSpecValidation(t *testing.T) {
 	if wm.Repeat != WatermarkRepeatNoRepeat {
 		t.Errorf("repeat default = %q, want no-repeat", wm.Repeat)
 	}
-	if wm.SizeKind != WatermarkSizeContain {
-		t.Errorf("size default = %v, want contain", wm.SizeKind)
+	if wm.SizeKind != WatermarkSizeNatural {
+		t.Errorf("size default = %v, want natural", wm.SizeKind)
 	}
 	if _, err := NewWatermarkSpec("", "/w.png", "center", "no-repeat", "contain"); err == nil {
 		t.Error("expected error for empty name")
@@ -110,6 +118,9 @@ func TestWatermarkTargetSize(t *testing.T) {
 	contain, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "contain")
 	cover, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "cover")
 	px, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "200px 100px")
+	pxAuto, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "200px")
+	natural, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "")
+	pct, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "50%")
 	// Холст 1000x500, ватермарка 500x250.
 	if w, h := contain.TargetSize(1000, 500, 500, 250); w != 1000 || h != 500 {
 		t.Errorf("contain = %dx%d, want 1000x500", w, h)
@@ -125,6 +136,65 @@ func TestWatermarkTargetSize(t *testing.T) {
 	// Pixels: точный размер независимо от натурального.
 	if w, h := px.TargetSize(400, 400, 500, 250); w != 200 || h != 100 {
 		t.Errorf("pixels = %dx%d, want 200x100", w, h)
+	}
+	// Pixels (одиночное значение): высота пропорциональна аспекту ватермарки.
+	if w, h := pxAuto.TargetSize(400, 400, 500, 250); w != 200 || h != 100 {
+		t.Errorf("pixels auto = %dx%d, want 200x100", w, h)
+	}
+	if w, h := pxAuto.TargetSize(400, 400, 300, 200); w != 200 || h != 133 {
+		t.Errorf("pixels auto = %dx%d, want 200x133", w, h)
+	}
+	// Natural: исходный размер ватермарки.
+	if w, h := natural.TargetSize(400, 400, 500, 250); w != 500 || h != 250 {
+		t.Errorf("natural = %dx%d, want 500x250", w, h)
+	}
+	// Percent: n% от ОБОИХ измерений холста (аспект ватермарки игнорируется).
+	if w, h := pct.TargetSize(1000, 500, 500, 250); w != 500 || h != 250 {
+		t.Errorf("percent = %dx%d, want 500x250", w, h)
+	}
+	if w, h := pct.TargetSize(1000, 500, 300, 200); w != 500 || h != 250 {
+		t.Errorf("percent = %dx%d, want 500x250 (аспект игнорируется)", w, h)
+	}
+	// Percent: минимум 1 пиксель на крошечном холсте.
+	pct1, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "1%")
+	if w, h := pct1.TargetSize(10, 10, 500, 250); w != 1 || h != 1 {
+		t.Errorf("percent 1%% = %dx%d, want 1x1", w, h)
+	}
+}
+
+func TestWatermarkCoverOffset(t *testing.T) {
+	center, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "cover")
+	left, _ := NewWatermarkSpec("a", "/a.png", "left", "no-repeat", "cover")
+	right, _ := NewWatermarkSpec("a", "/a.png", "right", "no-repeat", "cover")
+	top, _ := NewWatermarkSpec("a", "/a.png", "top", "no-repeat", "cover")
+	bottom, _ := NewWatermarkSpec("a", "/a.png", "bottom", "no-repeat", "cover")
+	// Холст 400x400, копия 800x400 (cover): центр → (-200, 0).
+	if dx, dy := center.CoverOffset(400, 400, 800, 400); dx != -200 || dy != 0 {
+		t.Errorf("center cover offset = (%d,%d), want (-200,0)", dx, dy)
+	}
+	// Left: X = 0, Y = центр.
+	if dx, dy := left.CoverOffset(400, 400, 800, 400); dx != 0 || dy != 0 {
+		t.Errorf("left cover offset = (%d,%d), want (0,0)", dx, dy)
+	}
+	// Right: X = 400-800 = -400, Y = центр.
+	if dx, dy := right.CoverOffset(400, 400, 800, 400); dx != -400 || dy != 0 {
+		t.Errorf("right cover offset = (%d,%d), want (-400,0)", dx, dy)
+	}
+	// Top: X = центр, Y = 0.
+	if dx, dy := top.CoverOffset(400, 400, 800, 400); dx != -200 || dy != 0 {
+		t.Errorf("top cover offset = (%d,%d), want (-200,0)", dx, dy)
+	}
+	// Bottom: X = центр, Y = 400-400 = 0.
+	if dx, dy := bottom.CoverOffset(400, 400, 800, 400); dx != -200 || dy != 0 {
+		t.Errorf("bottom cover offset = (%d,%d), want (-200,0)", dx, dy)
+	}
+	// Копия меньше холста: смещения неотрицательные (как anchor).
+	if dx, dy := center.CoverOffset(1000, 800, 300, 150); dx != 350 || dy != 325 {
+		t.Errorf("center small cover offset = (%d,%d), want (350,325)", dx, dy)
+	}
+	// Right + Bottom при копии больше холста по обеим осям.
+	if dx, dy := right.CoverOffset(400, 400, 800, 800); dx != -400 || dy != -200 {
+		t.Errorf("right cover offset = (%d,%d), want (-400,-200)", dx, dy)
 	}
 }
 

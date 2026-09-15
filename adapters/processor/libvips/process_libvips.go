@@ -420,15 +420,36 @@ func premultiplyResize(img *vips.ImageRef, fn func() error) error {
 }
 
 // thumbnailCropFrames выполняет thumbnail с кропом (SizeBoth + crop) с
-// корректной обработкой анимаций. Регрессия: vips_thumbnail_image с
-// crop != none схлопывает page-height вертикального стека кадров до высоты
-// ОДНОГО кадра результата (n-pages формально сохраняется, но высота стека
-// становится равной page-height), из-за чего экспортёры (gifsave и др.)
-// записывают только первый кадр — анимация молча теряется. Для анимаций
-// операция применяется покадрово через withFrames (каждый кадр — одиночное
-// изображение, для него thumbnail с кропом корректен); для одиночных
-// изображений — напрямую (прежнее поведение). Возвращает ImageRef-результат:
-// для анимации это НОВОЕ изображение (вызывающий закрывает старое).
+// корректной обработкой анимаций.
+//
+// Регрессия 1: vips_thumbnail_image с crop != none схлопывает page-height
+// вертикального стека кадров до высоты ОДНОГО кадра результата (n-pages
+// формально сохраняется, но высота стека становится равной page-height),
+// из-за чего экспортёры (gifsave и др.) записывают только первый кадр —
+// анимация молча теряется.
+//
+// Регрессия 2 (съезжание «как прокрутка плёнки»): на кадре-копии из
+// withFrames метаданные анимации (n-pages/page-height) наследуются от
+// стека; premultiplyResize (Premultiply → thumbnail → Unpremultiply) внутри
+// колбэка мутирует f и vips_thumbnail_image на изображении с
+// нестандартной парой (n-pages, page-height) даёт непредсказуемую
+// геометрию страницы (GLib critical / молча неверный размер кадра).
+// Дополнительно vips_thumbnail_image наследует (не пересчитывает)
+// page-height/n-pages входа, поэтому при округлении масштаба кадры могли
+// бы отличаться по высоте — withFrames не проверял это и собирал
+// рассинхронизированный стек.
+//
+// Исправление: для многостраничных изображений каждый кадр обрабатывается
+// ИЗОЛИРОВАННО как одиночное изображение (механика withFrames: Copy +
+// SetPageHeight(H) + ExtractArea), затем на кадре сбрасываются
+// анимационные метаданные (page-height = высота кадра, n-pages = 1), и
+// только после этого выполняется thumbnail. Гарантия SizeBoth + crop=не
+// none: результат ТОЧНО w x h для одиночного изображения. После сборки
+// проверяется целостность стека: Height % n == 0 и высота кадра == h;
+// при рассинхронизации возвращается понятная ошибка вместо молча битого
+// выхода. Для одиночных изображений — напрямую (прежнее поведение).
+// Возвращает ImageRef-результат: для анимации это НОВОЕ изображение
+// (вызывающий закрывает старое).
 func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*vips.ImageRef, error) {
 	ph := img.PageHeight()
 	if !(img.Pages() > 1 && ph > 0 && img.Height() > ph) {
@@ -440,14 +461,180 @@ func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*
 		return img, nil
 	}
 	n := img.Pages()
-	return withFrames(img, func(f *vips.ImageRef, i int) error {
+	base, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+		// Кадр из withFrames — одиночное изображение высотой ph, но с
+		// унаследованными анимационными метаданными стека (n-pages > 1,
+		// page-height == ph). Выравниваем метаданные под одиночное
+		// изображение ДО thumbnail: vips_thumbnail_image наследует
+		// n-pages/page-height, и их несоответствие реальной геометрии
+		// фрейма даёт непредсказуемый результат (регрессия 2).
+		if f.Pages() != 1 {
+			if err := f.SetPages(1); err != nil {
+				return fmt.Errorf("frame %d/%d: reset n-pages: %w", i+1, n, err)
+			}
+		}
+		if f.PageHeight() != f.Height() {
+			if err := f.SetPageHeight(f.Height()); err != nil {
+				return fmt.Errorf("frame %d/%d: reset page-height: %w", i+1, n, err)
+			}
+		}
+		// premultiplyResize на одиночном кадре безопасен: Premultiply/
+		// Unpremultiply не меняют геометрию, а thumbnail с crop != none
+		// и SizeBoth гарантирует точный w x h.
 		if err := premultiplyResize(f, func() error {
 			return f.ThumbnailWithSize(w, h, crop, vips.SizeBoth)
 		}); err != nil {
 			return fmt.Errorf("frame %d/%d: %w", i+1, n, err)
 		}
+		// Защита на каждый кадр: thumbnail с crop != none обязан дать
+		// ТОЧНО w x h; отклонение (например, изменение реализации
+		// vips_thumbnail_image или конфликт метаданных) фиксируем сразу —
+		// иначе стек рассинхронизируется молча.
+		if fw, fh := f.Width(), f.Height(); fw != w || fh != h {
+			return fmt.Errorf("frame %d/%d: thumbnail with crop produced %dx%d, want %dx%d", i+1, n, fw, fh, w, h)
+		}
+		// Нормализация метаданных кадра: thumbnail мог унаследовать
+		// отличающийся page-height (регрессия 2) — приводим к одиночному
+		// изображению, чтобы ArrayJoin собрал стек с корректной геометрией.
+		if f.PageHeight() != h {
+			if err := f.SetPageHeight(h); err != nil {
+				return fmt.Errorf("frame %d/%d: normalize page-height: %w", i+1, n, err)
+			}
+		}
+		if f.Pages() != 1 {
+			if err := f.SetPages(1); err != nil {
+				return fmt.Errorf("frame %d/%d: normalize n-pages: %w", i+1, n, err)
+			}
+		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Финальная защита целостности стека: withFrames вычисляет page-height
+	// как Height(stack)/n; если кадры после обработки имеют разную высоту
+	// (округление/наследование метаданных), стек читался бы как биты
+	// разных кадров — вместо молча битого выхода возвращаем ошибку.
+	if H := base.Height(); H%n != 0 {
+		base.Close()
+		return nil, fmt.Errorf("libvips: crop: inconsistent frame stack: height %d is not divisible by %d frames", H, n)
+	}
+	if got := base.Height() / n; got != h {
+		base.Close()
+		return nil, fmt.Errorf("libvips: crop: inconsistent frame stack: frame height %d, want %d", got, h)
+	}
+	return base, nil
+}
+
+// resizeEmbedFrames выполняет resize с letterbox/pillarbox (ОБА измерения
+// заданы): thumbnail вписывает изображение пропорционально в бокс w x h
+// (InterestingNone + SizeBoth), затем Embed заполняет недостающие края до
+// ТОЧНОГО w x h. Для анимаций — покадрово (механика withFrames), для
+// одиночных изображений — напрямую.
+//
+// Фон заполнения:
+//   - если альфа возможна (выходной формат поддерживает альфу ИЛИ исходник
+//     имеет альфа-канал) — прозрачный (EmbedBackgroundRGBA с RGBA{0,0,0,0});
+//   - иначе (формат без альфы, например JPEG) — цвет из plan.Background
+//     (hex "#RRGGBB"); при пустом значении — белый "#ffffff".
+//
+// Возвращает ImageRef-результат: для анимации это НОВОЕ изображение
+// (вызывающий закрывает старое).
+func resizeEmbedFrames(img *vips.ImageRef, w, h int, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
+	ph := img.PageHeight()
+	if !(img.Pages() > 1 && ph > 0 && img.Height() > ph) {
+		if err := resizeEmbedFrame(img, w, h, plan); err != nil {
+			return nil, err
+		}
+		return img, nil
+	}
+	n := img.Pages()
+	base, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+		// Кадр из withFrames — одиночное изображение высотой ph, но с
+		// унаследованными анимационными метаданными стека (n-pages > 1,
+		// page-height == ph). Выравниваем метаданные под одиночное
+		// изображение ДО thumbnail (см. thumbnailCropFrames: регрессия 2).
+		if f.Pages() != 1 {
+			if err := f.SetPages(1); err != nil {
+				return fmt.Errorf("frame %d/%d: reset n-pages: %w", i+1, n, err)
+			}
+		}
+		if f.PageHeight() != f.Height() {
+			if err := f.SetPageHeight(f.Height()); err != nil {
+				return fmt.Errorf("frame %d/%d: reset page-height: %w", i+1, n, err)
+			}
+		}
+		if err := resizeEmbedFrame(f, w, h, plan); err != nil {
+			return fmt.Errorf("frame %d/%d: %w", i+1, n, err)
+		}
+		// Защита на каждый кадр: thumbnail + embed обязаны дать ТОЧНО w x h.
+		if fw, fh := f.Width(), f.Height(); fw != w || fh != h {
+			return fmt.Errorf("frame %d/%d: resize+embed produced %dx%d, want %dx%d", i+1, n, fw, fh, w, h)
+		}
+		// Нормализация метаданных кадра: приводим к одиночному изображению,
+		// чтобы ArrayJoin собрал стек с корректной геометрией.
+		if f.PageHeight() != h {
+			if err := f.SetPageHeight(h); err != nil {
+				return fmt.Errorf("frame %d/%d: normalize page-height: %w", i+1, n, err)
+			}
+		}
+		if f.Pages() != 1 {
+			if err := f.SetPages(1); err != nil {
+				return fmt.Errorf("frame %d/%d: normalize n-pages: %w", i+1, n, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Финальная защита целостности стека (см. thumbnailCropFrames).
+	if H := base.Height(); H%n != 0 {
+		base.Close()
+		return nil, fmt.Errorf("libvips: resize: inconsistent frame stack: height %d is not divisible by %d frames", H, n)
+	}
+	if got := base.Height() / n; got != h {
+		base.Close()
+		return nil, fmt.Errorf("libvips: resize: inconsistent frame stack: frame height %d, want %d", got, h)
+	}
+	return base, nil
+}
+
+// resizeEmbedFrame выполняет resize + letterbox/pillarbox для ОДНОГО кадра
+// (или одиночного изображения): thumbnail вписывает пропорционально в бокс
+// w x h, затем Embed заполняет края до ТОЧНОГО w x h. Фон — прозрачный, если
+// альфа возможна, иначе цвет из plan.Background (пусто = белый).
+func resizeEmbedFrame(img *vips.ImageRef, w, h int, plan *processing.ProcessingPlan) error {
+	if err := premultiplyResize(img, func() error {
+		return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
+	}); err != nil {
+		return err
+	}
+	// Embed до ТОЧНОГО w x h. Центрирование: left/top = (цель - факт)/2.
+	// ThumbnailWithSize с InterestingNone + SizeBoth гарантирует, что
+	// результат ≤ w x h (одна ось точно w или h), поэтому left/top ≥ 0.
+	left := (w - img.Width()) / 2
+	top := (h - img.Height()) / 2
+	if left < 0 || top < 0 {
+		return fmt.Errorf("resize+embed: thumbnail produced %dx%d, larger than target %dx%d", img.Width(), img.Height(), w, h)
+	}
+	// Альфа возможна, если выходной формат поддерживает альфу ИЛИ исходник
+	// имеет альфа-канал (тогда EmbedBackgroundRGBA добавит/сохранит альфу).
+	if plan.OutputFormats.SupportsAlpha() || img.HasAlpha() {
+		if err := img.EmbedBackgroundRGBA(left, top, w, h, &vips.ColorRGBA{R: 0, G: 0, B: 0, A: 0}); err != nil {
+			return fmt.Errorf("embed (transparent): %w", err)
+		}
+		return nil
+	}
+	// Формат без альфы (JPEG): цвет из конфига, пусто = белый.
+	bg := plan.Background
+	if bg == "" {
+		bg = "#ffffff"
+	}
+	if err := img.EmbedBackground(left, top, w, h, hexToColor(bg)); err != nil {
+		return fmt.Errorf("embed (background %s): %w", bg, err)
+	}
+	return nil
 }
 
 // tryPassthrough проверяет применимость fast-path и возвращает исходные
@@ -722,10 +909,17 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	}
 
 	// Trim-first: независимый фильтр обрезки однотонных полей применяется
-	// до основной операции (кропа/ресайза).
+	// до основной операции (кропа/ресайза). Для анимаций trim пересобирает
+	// стек кадров (withFrames) и возвращает НОВОЕ изображение — старое
+	// закрываем здесь (вызывающий process закрывает актуальный img).
 	if plan.Trim {
-		if err := applyTrim(img, plan.TrimSpec); err != nil {
+		trimmed, err := applyTrim(img, plan.TrimSpec)
+		if err != nil {
 			return img, nil, nil, err
+		}
+		if trimmed != img {
+			img.Close()
+			img = trimmed
 		}
 	}
 
@@ -747,18 +941,34 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// с альфой — Premultiply → resize → Unpremultiply (без тёмных
 		// ореолов на полупрозрачных краях).
 		//
+		// ОБА измерения заданы (w > 0 && h > 0): letterbox/pillarbox —
+		// thumbnail вписывает изображение пропорционально в бокс w x h
+		// (InterestingNone + SizeBoth: одна ось точно w или h, вторая ≤),
+		// затем Embed заполняет недостающие края до ТОЧНОГО w x h
+		// (прозрачным фоном, где альфа возможна, иначе — цветом из
+		// plan.Background; см. resizeEmbedFrames). Для анимаций — покадрово.
+		//
 		// Размер-грамматика с ОДНОЙ осью даёт план с нулём в другой оси:
 		// vips_thumbnail_image требует ЯВНЫЕ ОБА измерения — width=0 →
 		// ошибка "parameter width not set"; height=0 → GLib critical
 		// "property 'height'" + fallback на дефолт свойства (молча неверный
 		// box-fit). Поэтому недостающая ось вычисляется из пропорций кадра
-		// (см. resolveResizeSize): "x200" → ширина, "200x" → высота.
-		w, h = resolveResizeSize(frameW, frameH, w, h)
-		err := premultiplyResize(img, func() error {
-			return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
-		})
-		if err != nil {
-			return img, nil, nil, fmt.Errorf("libvips: resize: %w", err)
+		// (см. resolveResizeSize): "x200" → ширина, "200x" → высота. Здесь
+		// letterbox не нужен: холст = результат thumbnail (пропорциональный).
+		if w > 0 && h > 0 {
+			out, err := resizeEmbedFrames(img, w, h, plan)
+			if err != nil {
+				return img, nil, nil, fmt.Errorf("libvips: resize: %w", err)
+			}
+			img = out
+		} else {
+			w, h = resolveResizeSize(frameW, frameH, w, h)
+			err := premultiplyResize(img, func() error {
+				return img.ThumbnailWithSize(w, h, vips.InterestingNone, vips.SizeBoth)
+			})
+			if err != nil {
+				return img, nil, nil, fmt.Errorf("libvips: resize: %w", err)
+			}
 		}
 	case processing.OpCrop:
 		// Центрированная обрезка до точного размера (с premultiply для
@@ -805,10 +1015,72 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 // (vips_find_trim + ExtractArea). spec — настройки trim (режим auto/color +
 // tolerance); nil = по умолчанию ({auto, 0}). Возвращает ошибку, если область
 // трима пуста.
-func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) error {
+//
+// Для анимированных изображений (многостраничный вертикальный стек кадров)
+// trim выполняется ПОКАДРОВО: bounding box вычисляется по первому кадру
+// (vips_find_trim на всём стеке считает область по высоте n*page-height,
+// из-за чего top улетает за пределы одного кадра, а ExtractArea на стеке
+// вырезает область из КАЖДОГО кадра по отдельности с ошибочным/съехавшим
+// результатом). Найденная область применяется к каждому кадру через
+// withFrames (page-height/delay/loop восстанавливаются там же). В этом
+// случае возвращается НОВОЕ изображение (старое остаётся на совести
+// вызывающего); для одиночных изображений правится img на месте и
+// возвращается img.
+//
+// Для изображений с альфа-каналом FindTrim выполняется на RGB-копии
+// (ExtractBand(0,3)): vips_find_trim сравнивает ВСЕ каналы, включая альфу,
+// поэтому непрозрачная цветная рамка (отличающаяся по альфе от контента или
+// шумящая в альфе) не распознавалась как фон. Координаты RGB-копии совпадают
+// с оригиналом, ExtractArea выполняется на оригинале.
+func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, error) {
 	if spec == nil {
 		spec = processing.DefaultTrimSpec()
 	}
+
+	left, top, tw, th, err := trimRegion(img, spec)
+	if err != nil {
+		return img, err
+	}
+	if tw <= 0 || th <= 0 {
+		return img, fmt.Errorf("libvips: trim: empty trim area (%dx%d)", tw, th)
+	}
+
+	// Многостраничное изображение: применяем trim-область к каждому кадру.
+	// Краевой случай "область = весь кадр" не обрабатываем отдельно: extract
+	// кадра без изменений корректен, а withFrames гарантированно
+	// восстанавливает метаданные анимации.
+	if img.Pages() > 1 && img.Height() > img.PageHeight() && img.PageHeight() > 0 {
+		out, err := withFrames(img, func(f *vips.ImageRef, _ int) error {
+			if err := f.ExtractArea(left, top, tw, th); err != nil {
+				return fmt.Errorf("libvips: trim: frame extract: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return img, err
+		}
+		return out, nil
+	}
+
+	// Одиночное изображение: вырезаем область на месте (прежнее поведение).
+	if err := img.ExtractArea(left, top, tw, th); err != nil {
+		return img, fmt.Errorf("libvips: trim: %w", err)
+	}
+	return img, nil
+}
+
+// trimRegion вычисляет trim-область (left, top, width, height) для одного
+// кадра. Для многостраничных изображений область считается по ПЕРВОМУ кадру:
+// копия стека с page-height = высоте всего стека становится одиночным
+// изображением, первый кадр — строки [0, ph) — вырезается ExtractArea, и
+// FindTrim на нём возвращает координаты валидные и для остальных кадров.
+func trimRegion(img *vips.ImageRef, spec *processing.TrimSpec) (int, int, int, int, error) {
+	probe, closeProbe, err := trimProbe(img)
+	if err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("libvips: trim: probe: %w", err)
+	}
+	defer closeProbe()
+
 	// Режим color: фиксированный цвет фона. Режим auto: цвет фона берётся из
 	// углового пикселя (0,0) — govips v2.18.0 не поддерживает nil-фон (см.
 	// edgeBackgroundColor), поэтому явно передаём не-nil *vips.Color.
@@ -817,23 +1089,61 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) error {
 	case processing.TrimModeColor:
 		bg = hexToColor(spec.Color)
 	default:
-		var err error
-		bg, err = edgeBackgroundColor(img)
+		bg, err = edgeBackgroundColor(probe)
 		if err != nil {
-			return fmt.Errorf("libvips: trim: edge background: %w", err)
+			return 0, 0, 0, 0, fmt.Errorf("libvips: trim: edge background: %w", err)
 		}
 	}
-	left, top, tw, th, err := img.FindTrim(spec.Tolerance, bg)
+	left, top, tw, th, err := probe.FindTrim(spec.Tolerance, bg)
 	if err != nil {
-		return fmt.Errorf("libvips: trim: find-trim: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("libvips: trim: find-trim: %w", err)
 	}
-	if tw <= 0 || th <= 0 {
-		return fmt.Errorf("libvips: trim: empty trim area (%dx%d)", tw, th)
+	return left, top, tw, th, nil
+}
+
+// trimProbe готовит изображение для FindTrim:
+//   - многостраничное (анимация) — копия ПЕРВОГО кадра как одиночное
+//     изображение (механика withFrames: Copy + SetPageHeight(H) +
+//     ExtractArea(0,0,W,ph)); без этого vips_find_trim считает bounding box
+//     по высоте всего стека (n*ph) и top улетает за пределы кадра;
+//   - с альфа-каналом — RGB-копия (ExtractBand(0,3)): find_trim сравнивает
+//     все каналы, включая альфу, из-за чего непрозрачная цветная рамка не
+//     распознавалась как фон.
+//
+// Возвращает probe-изображение и функцию его освобождения (nil, no-op, если
+// модификация не потребовалась — тогда FindTrim можно звать прямо на img).
+func trimProbe(img *vips.ImageRef) (*vips.ImageRef, func(), error) {
+	noop := func() {}
+
+	multipage := img.Pages() > 1 && img.Height() > img.PageHeight() && img.PageHeight() > 0
+	if !multipage && !img.HasAlpha() {
+		return img, noop, nil
 	}
-	if err := img.ExtractArea(left, top, tw, th); err != nil {
-		return fmt.Errorf("libvips: trim: %w", err)
+
+	probe, err := img.Copy()
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil
+	closeProbe := func() { probe.Close() }
+
+	if multipage {
+		W, H, ph := img.Width(), img.Height(), img.PageHeight()
+		if err := probe.SetPageHeight(H); err != nil {
+			probe.Close()
+			return nil, nil, fmt.Errorf("set page height: %w", err)
+		}
+		if err := probe.ExtractArea(0, 0, W, ph); err != nil {
+			probe.Close()
+			return nil, nil, fmt.Errorf("extract first frame: %w", err)
+		}
+	}
+	if probe.Bands() > 3 {
+		if err := probe.ExtractBand(0, 3); err != nil {
+			probe.Close()
+			return nil, nil, fmt.Errorf("extract rgb bands: %w", err)
+		}
+	}
+	return probe, closeProbe, nil
 }
 
 // edgeBackgroundColor возвращает цвет фона для авто-trim, считывая угловой
@@ -1147,7 +1457,7 @@ func translateBoxes(boxes []filemeta.PixelBox, W, H int) []detection.Box {
 }
 
 // applyAnimation применяет настройки анимации (loop) для анимированных
-// выходных форматов (GIF, WebP).
+// выходных форматов (GIF, WebP, HEIF, APNG, AVIF).
 //
 // TODO(libvips-animation): ограничение plan.Frames (максимальное число
 // кадров) и plan.Duration (максимальная длительность) требует обрезки
@@ -1292,6 +1602,29 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportGIF(p)
 		return out, err
 	case processing.FormatAVIF:
+		// AVIF — HEIF-контейнер с AV1-компрессией: heifsave (foreign.c,
+		// AVIF идёт через heifsave_buffer) пишет анимацию для multi-page
+		// изображений (libvips 8.12+). Кадры загружены с NumPages=-1,
+		// page-height < высоты стека.
+		//
+		// Регрессия: как и pngsave при strip=true (см. ветку FormatAPNG),
+		// heifsave при strip не переносит метаданные анимации в выходной
+		// файл — AVIF читается как статичный кадр. Обход: перед экспортом
+		// пересчитываем n-pages из геометрии стека (H / page-height) и
+		// восстанавливаем рассинхронизированные значения; heifsave пишет
+		// последовательность кадров по page-height/n-pages входного
+		// изображения. Для одиночного изображения результат — статичный
+		// AVIF (валидный).
+		ph := img.PageHeight()
+		H := img.Height()
+		if ph > 0 && H > ph {
+			n := H / ph
+			if img.Pages() != n {
+				if err := img.SetPages(n); err != nil {
+					return nil, fmt.Errorf("libvips: avif restore n-pages: %w", err)
+				}
+			}
+		}
 		p := vips.NewAvifExportParams()
 		p.Quality = resolved.Quality
 		p.StripMetadata = true
@@ -1448,10 +1781,13 @@ func (b *libvipsBackend) loadWatermark(path string) ([]byte, error) {
 // applyWatermark накладывает ватермарку из плана на изображение.
 //
 // Семантика CSS:
-//   - size contain/cover/{w}px {h}px — масштабирование одной копии
-//     относительно ЦЕЛЕВОГО холста;
+//   - size contain/cover/natural/{w}px {h}px/{w}px/{n}%/{n} —
+//     масштабирование одной копии относительно ЦЕЛЕВОГО холста
+//     (natural = исходный размер; {n}% = n% от обоих измерений холста);
 //   - position top/bottom/left/right/center — якорь одиночной копии
-//     (вторая ось — центр);
+//     (вторая ось — центр); для cover-размера копия может быть БОЛЬШЕ
+//     холста, и тогда видимый фрагмент вырезается по позиции (излишек
+//     обрезается с нужной стороны, а не всегда с правого/нижнего края);
 //   - repeat no-repeat/repeat/repeat-x/repeat-y/round/space — раскладка
 //     копий (см. WatermarkSpec.Layout); round дополнительно масштабирует
 //     копию до шага сетки (RoundStep), чтобы копии точно укладывались.
@@ -1460,6 +1796,11 @@ func (b *libvipsBackend) loadWatermark(path string) ([]byte, error) {
 //     альфа-канала копии на множитель opacity/100 (vips_linear по
 //     альфа-каналу) ДО композиции: при 100 множитель = 1 и изображение
 //     ватермарки не изменяется (нулевые накладные расходы).
+//
+// DPR: холст уже dpr-кратный (buildPlan умножает целевой размер на dpr).
+// Чтобы ватермарка выглядела одинаково при любом dpr, фиксированные
+// (px) и натуральные размеры копии масштабируются на dpr; contain/cover/
+// percent зависят от холста и масштабируются автоматически.
 //
 // Для анимированных выходов (GIF/WebP/HEIF; кадры хранятся libvips как один
 // вертикально сшитый холст с page-height) ватермарка накладывается на КАЖДЫЙ
@@ -1496,6 +1837,18 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		canvasH = ph
 	}
 	tw, th := wm.TargetSize(W, canvasH, wmImg.Width(), wmImg.Height())
+	// DPR: холст уже dpr-кратный (buildPlan умножает целевой размер на dpr).
+	// Фиксированные (px) и натуральные размеры копии масштабируются на dpr,
+	// чтобы ватермарка выглядела одинаково при любом dpr; contain/cover/
+	// percent зависят от холста и масштабируются автоматически.
+	dpr := plan.DPR
+	if dpr <= 0 {
+		dpr = 1
+	}
+	switch wm.SizeKind {
+	case processing.WatermarkSizePixels, processing.WatermarkSizeNatural:
+		tw, th = tw*dpr, th*dpr
+	}
 	// Режим round: копия масштабируется до шага сетки, чтобы целое число
 	// копий точно укладывалось по осям холста.
 	if wm.RoundScale() {
@@ -1511,14 +1864,54 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 		return nil, fmt.Errorf("libvips: watermark %q: opacity %d: %w", wm.Name, wm.Opacity, err)
 	}
 
-	// Проверяем число тайлов ДО материализации среза точек: Layout строит
-	// срез всех позиций, что при патологическом тайлинге (крошечный файл +
-	// repeat на большом холсте) аллоцирует до ~1.6 ГБ. LayoutCount — чистая
-	// арифметика без аллокаций.
-	if n := wm.LayoutCount(W, canvasH, tw, th); n > maxWatermarkTiles {
-		return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, n, maxWatermarkTiles)
+	// Cover + no-repeat: копия может быть БОЛЬШЕ холста. CompositeMulti не
+	// умеет отрицательные координаты, поэтому видимый фрагмент вырезается
+	// из копии по позиции (CoverOffset) и композитится в (max(dx,0), max(dy,0)).
+	// Для repeat-режимов при oversized-копии остаётся прежний clamp-путь
+	// (repeat при cover — экзотика; поведение не ломается).
+	var pts []processing.Point
+	if wm.SizeKind == processing.WatermarkSizeCover && wm.Repeat == processing.WatermarkRepeatNoRepeat {
+		dx, dy := wm.CoverOffset(W, canvasH, tw, th)
+		if dx < 0 || dy < 0 {
+			sx, sy := 0, 0
+			if dx < 0 {
+				sx = -dx
+			}
+			if dy < 0 {
+				sy = -dy
+			}
+			sw, sh := tw-sx, th-sy
+			if sw > W {
+				sw = W
+			}
+			if sh > canvasH {
+				sh = canvasH
+			}
+			if sw > 0 && sh > 0 {
+				if err := wmImg.ExtractArea(sx, sy, sw, sh); err != nil {
+					return nil, fmt.Errorf("libvips: watermark %q: cover extract %d,%d %dx%d: %w", wm.Name, sx, sy, sw, sh, err)
+				}
+				px, py := 0, 0
+				if dx > 0 {
+					px = dx
+				}
+				if dy > 0 {
+					py = dy
+				}
+				pts = []processing.Point{{X: px, Y: py}}
+			}
+		}
 	}
-	pts := wm.Layout(W, canvasH, tw, th)
+	if pts == nil {
+		// Проверяем число тайлов ДО материализации среза точек: Layout строит
+		// срез всех позиций, что при патологическом тайлинге (крошечный файл +
+		// repeat на большом холсте) аллоцирует до ~1.6 ГБ. LayoutCount — чистая
+		// арифметика без аллокаций.
+		if n := wm.LayoutCount(W, canvasH, tw, th); n > maxWatermarkTiles {
+			return nil, fmt.Errorf("libvips: watermark %q: too many tiles (%d > %d); increase watermark size or change repeat", wm.Name, n, maxWatermarkTiles)
+		}
+		pts = wm.Layout(W, canvasH, tw, th)
+	}
 
 	// Анимация (кадры = вертикальный стек страниц): покадровый композит.
 	// Композит на весь сшитый холст попал бы только в область первого кадра.

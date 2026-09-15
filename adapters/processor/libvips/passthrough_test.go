@@ -129,6 +129,13 @@ func TestPassthroughEligibleNegative(t *testing.T) {
 			src: staticSource(),
 		},
 		{
+			name: "background set",
+			plan: mustPlanFull(t, func(p *processing.ProcessingPlan) {
+				p.Background = "#ff0000"
+			}),
+			src: staticSource(),
+		},
+		{
 			name: "watermark set",
 			plan: mustPlanFull(t, func(p *processing.ProcessingPlan) {
 				p.Watermark = &processing.WatermarkSpec{Name: "wm", Path: "/x.png"}
@@ -343,6 +350,30 @@ func TestResolveImportPlanFrameLimit(t *testing.T) {
 			name:         "animated input only: all pages",
 			src:          processing.FormatAPNG,
 			out:          processing.FormatJPEG,
+			frames:       0,
+			wantSetPages: true,
+			wantNumPages: -1,
+		},
+		{
+			name:         "avif output: all pages (animated)",
+			src:          processing.FormatJPEG,
+			out:          processing.FormatAVIF,
+			frames:       0,
+			wantSetPages: true,
+			wantNumPages: -1,
+		},
+		{
+			name:         "avif input: all pages (animated)",
+			src:          processing.FormatAVIF,
+			out:          processing.FormatJPEG,
+			frames:       0,
+			wantSetPages: true,
+			wantNumPages: -1,
+		},
+		{
+			name:         "avif to avif: all pages",
+			src:          processing.FormatAVIF,
+			out:          processing.FormatAVIF,
 			frames:       0,
 			wantSetPages: true,
 			wantNumPages: -1,

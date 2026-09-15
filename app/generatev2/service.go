@@ -110,6 +110,11 @@ type Deps struct {
 	// (режим auto/color + tolerance из processing.default-trim-*). nil =
 	// {Mode: auto, Tolerance: 0}. Используется для планов с Trim=true.
 	DefaultTrim *processing.TrimSpec
+	// ResizeBackground — цвет фона letterbox/pillarbox при resize с ОБОИМИ
+	// заданными измерениями (hex "#RRGGBB" или пусто). Пусто = прозрачность,
+	// где возможна; для форматов без альфы (JPEG) при пустом значении
+	// используется белый "#ffffff". Из processing.default-resize-background.
+	ResizeBackground string
 	// Logger — опциональный логгер.
 	Logger Logger
 	// Metrics — опциональные метрики (request/cache/processor/storage).
@@ -992,6 +997,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 		plan.Orientation = or
 		plan.Trim = trim
 		plan.TrimSpec = s.resolveTrim()
+		plan.Background = s.deps.ResizeBackground
 		return plan, nil
 	}
 	if dw := req.Size().Width(); dw != nil {
@@ -1020,6 +1026,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	plan.Orientation = or
 	plan.Trim = trim
 	plan.TrimSpec = s.resolveTrim()
+	plan.Background = s.deps.ResizeBackground
 	return plan, nil
 }
 
