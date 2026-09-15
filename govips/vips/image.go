@@ -600,6 +600,19 @@ func (r *ImageRef) CopyChangingResolution(xres, yres float64) (*ImageRef, error)
 	return newImageRef(out, r.format, r.originalFormat, r.buf), nil
 }
 
+// CopyChangingOffset creates a new copy of the given image with the new X and Y offset.
+// Used to reset the offset (e.g. after ExtractArea) so that multi-page exporters
+// (gifsave/pngsave) write all frames instead of only the first one.
+func (r *ImageRef) CopyChangingOffset(x, y int) (*ImageRef, error) {
+	defer runtime.KeepAlive(r)
+	out, err := vipsGenCopy(r.image, &CopyOptions{Xoffset: &x, Yoffset: &y})
+	if err != nil {
+		return nil, err
+	}
+
+	return newImageRef(out, r.format, r.originalFormat, r.buf), nil
+}
+
 // Copy creates a new copy of the given image with the interpretation.
 func (r *ImageRef) CopyChangingInterpretation(interpretation Interpretation) (*ImageRef, error) {
 	defer runtime.KeepAlive(r)

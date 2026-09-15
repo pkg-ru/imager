@@ -132,9 +132,10 @@ func TestOpResizeWidthOnlyTallSource(t *testing.T) {
 }
 
 // TestOpResizeBothDimensions проверяет контрольный случай "200x200"
-// (оба измерения заданы): SizeBoth при resize ВПИСЫВАЕТ изображение в
-// целевой размер с сохранением пропорций (fit, без кропа) — из 400x200
-// получается 200x100. Изменения поведения на эту ветку фикс не вносил.
+// (оба измерения заданы): thumbnail вписывает изображение пропорционально
+// в бокс (fit, без кропа), затем Embed добавляет прозрачные поля
+// (letterbox/pillarbox) до ТОЧНОГО 200x200. Из 400x200 получается
+// 200x100 + прозрачные полосы сверху/снизу по 50px.
 func TestOpResizeBothDimensions(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
@@ -154,8 +155,18 @@ func TestOpResizeBothDimensions(t *testing.T) {
 		t.Fatalf("process: %v", err)
 	}
 	w, h := decodePngSize(t, res.data)
-	if w != 200 || h != 100 {
-		t.Errorf("output size = %dx%d, want 200x100", w, h)
+	if w != 200 || h != 200 {
+		t.Errorf("output size = %dx%d, want 200x200", w, h)
+	}
+	// Верхняя полоса (letterbox) — прозрачная.
+	_, _, _, aTop := pngPixelAt(t, res.data, 100, 0)
+	if aTop != 0 {
+		t.Errorf("top letterbox alpha = %d, want 0 (transparent)", aTop)
+	}
+	// Центр — синий исходник (400x200 → 200x100, top = 50).
+	r, g, bl, a := pngPixelAt(t, res.data, 100, 50)
+	if r != 0 || g != 0 || bl != 255 || a != 255 {
+		t.Errorf("center pixel = (%d,%d,%d,%d), want (0,0,255,255)", r, g, bl, a)
 	}
 }
 

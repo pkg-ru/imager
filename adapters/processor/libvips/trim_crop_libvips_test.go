@@ -359,7 +359,8 @@ func makeTrimGif(t *testing.T) []byte {
 	const w, h = 32, 32
 	pal := color.Palette{
 		color.RGBA{255, 255, 255, 255}, // фон-рамка
-		color.RGBA{255, 0, 0, 255},     // контент
+		color.RGBA{255, 0, 0, 255},     // контент кадра 0
+		color.RGBA{0, 0, 255, 255},     // контент кадра 1
 	}
 	frames := make([]*image.Paletted, 2)
 	for i := range frames {
@@ -367,7 +368,7 @@ func makeTrimGif(t *testing.T) []byte {
 		for y := 0; y < h; y++ {
 			for x := 0; x < w; x++ {
 				if x >= 8 && x < 24 && y >= 8 && y < 24 {
-					f.SetColorIndex(x, y, 1)
+					f.SetColorIndex(x, y, uint8(i+1))
 				} else {
 					f.SetColorIndex(x, y, 0)
 				}
@@ -440,15 +441,15 @@ func TestTrimAnimatedGifColorBorder(t *testing.T) {
 		}
 	}
 
-	// Контент сохранён: центр кадра 0 красный, угол белый (рамка осталась
-	// частично не должна — центр ровно красный прямоугольник).
+	// Контент сохранён: центр кадра 0 красный, кадра 1 — синий (кадры
+	// отличаются, иначе gifsave схлопывает идентичные кадры в один).
 	r, g, bl, _ := pixelAt(t, out, 0, 8, 8)
 	if !(r > 200 && g < 50 && bl < 50) {
 		t.Errorf("frame 0 center = (%d,%d,%d), want red", r, g, bl)
 	}
 	r, g, bl, _ = pixelAt(t, out, 1, 8, 8)
-	if !(r > 200 && g < 50 && bl < 50) {
-		t.Errorf("frame 1 center = (%d,%d,%d), want red", r, g, bl)
+	if !(r < 50 && g < 50 && bl > 200) {
+		t.Errorf("frame 1 center = (%d,%d,%d), want blue", r, g, bl)
 	}
 }
 

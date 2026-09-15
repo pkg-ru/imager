@@ -621,6 +621,15 @@ func resizeEmbedFrame(img *vips.ImageRef, w, h int, plan *processing.ProcessingP
 	// Альфа возможна, если выходной формат поддерживает альфу ИЛИ исходник
 	// имеет альфа-канал (тогда EmbedBackgroundRGBA добавит/сохранит альфу).
 	if plan.OutputFormats.SupportsAlpha() || img.HasAlpha() {
+		// Если у изображения нет альфа-канала (например, непрозрачный PNG
+		// после thumbnail оптимизирован до 3-канального RGB), а фон должен
+		// быть прозрачным, добавляем альфу явно: embed_image_background
+		// использует 4-канальный фон {r,g,b,a} только при Bands > 3.
+		if !img.HasAlpha() {
+			if err := img.AddAlpha(); err != nil {
+				return fmt.Errorf("add alpha: %w", err)
+			}
+		}
 		if err := img.EmbedBackgroundRGBA(left, top, w, h, &vips.ColorRGBA{R: 0, G: 0, B: 0, A: 0}); err != nil {
 			return fmt.Errorf("embed (transparent): %w", err)
 		}
@@ -845,6 +854,24 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 			return nil, fmt.Errorf("join %d frames: %w", len(frames), err)
 		}
 	}
+	// ExtractArea (vips_crop) сохраняет Xoffset/Yoffset на кадрах, а ArrayJoin
+	// протаскивает их в собранный стек. Экспортёры многостраничных форматов
+	// (gifsave/pngsave) при ненулевом offset пишут только первый кадр —
+	// сбрасываем offset в 0,0. Делаем это ДО восстановления метаданных:
+	// SetPageHeight/SetPages создают копию через vips_copy, которая сохраняет
+	// уже сброшенный offset.
+	if base.OffsetX() != 0 || base.OffsetY() != 0 {
+		nb, err := base.CopyChangingOffset(0, 0)
+		if err != nil {
+			// base == frames[0]: closeFrames(false) закроет его вместе с
+			// остальными кадрами, отдельный Close не нужен (двойное закрытие).
+			closeFrames(false)
+			return nil, fmt.Errorf("reset frame offset: %w", err)
+		}
+		base.Close()
+		base = nb
+		frames[0] = nb
+	}
 	// Метаданные анимации: page-height обязателен (иначе стек читается как
 	// один высокий кадр), n-pages/delay/loop переносятся вручную. Регрессия:
 	// arrayjoin не переносит n-pages — без восстановления экспортёры
@@ -1061,7 +1088,7 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, i
 	// кадра без изменений корректен, а withFrames гарантированно
 	// восстанавливает метаданные анимации.
 	if img.Pages() > 1 && img.Height() > img.PageHeight() && img.PageHeight() > 0 {
-		out, err := withFrames(img, func(f *vips.ImageRef, _ int) error {
+		out, err := withFrames(img, func(f *vips.ImageRef, i int) error {
 			if err := f.ExtractArea(left, top, tw, th); err != nil {
 				return fmt.Errorf("libvips: trim: frame extract: %w", err)
 			}
@@ -1604,6 +1631,26 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportWebp(p)
 		return out, err
 	case processing.FormatGIF:
+		// GIF — палитровый формат: gifsave пишет анимацию для multi-page
+		// изображений (кадры загружены с NumPages=-1, page-height < высоты
+		// стека). Регрессия: как и heifsave/pngsave при strip=true (см. ветки
+		// FormatAVIF/FormatAPNG), gifsave при strip не переносит метаданные
+		// анимации в выходной файл — GIF читается как статичный кадр. Обход:
+		// перед экспортом пересчитываем n-pages из геометрии стека
+		// (H / page-height) и восстанавливаем рассинхронизированные значения;
+		// gifsave пишет последовательность кадров по page-height/n-pages
+		// входного изображения. Для одиночного изображения результат —
+		// статичный GIF (валидный).
+		ph := img.PageHeight()
+		H := img.Height()
+		if ph > 0 && H > ph {
+			n := H / ph
+			if img.Pages() != n {
+				if err := img.SetPages(n); err != nil {
+					return nil, fmt.Errorf("libvips: gif restore n-pages: %w", err)
+				}
+			}
+		}
 		p := vips.NewGifExportParams()
 		// GIF effort/dither (S4): раньше dither=1.0 хардкодился, effort не
 		// управлялся — теперь оба из resolved (дефолты registry 7/1.0
