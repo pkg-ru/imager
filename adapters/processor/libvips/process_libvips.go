@@ -303,8 +303,10 @@ func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processo
 // AutoRotate (EXIF orientation) управляется планом: nil-спецификация =
 // включён. Для анимированных входов/выходов (включая APNG) загружаются
 // все кадры (NumPages=-1), либо не более plan.Frames кадров, если лимит
-// задан. Sequential access mode выставляется там, где операция выполняет
-// ровно один линейный проход по пикселям (см. resolveImportPlan).
+// задан. Для НЕ-анимационного выхода из анимированного источника
+// загружается ТОЛЬКО ПЕРВЫЙ кадр (page=0, n=1) — см. resolveImportPlan.
+// Sequential access mode выставляется там, где операция выполняет ровно
+// один линейный проход по пикселям (см. resolveImportPlan).
 func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	params := vips.NewImportParams()
 	params.AutoRotate.Set(plan.Orientation == nil || plan.Orientation.AutoOrient)
@@ -312,6 +314,12 @@ func (b *libvipsBackend) load(ctx context.Context, data []byte, plan *processing
 	ip := resolveImportPlan(plan)
 	if ip.SetPages {
 		params.NumPages.Set(ip.NumPages)
+		// Явный выбор ПЕРВОГО кадра при загрузке единственного кадра
+		// (не-анимационный выход): page=0 гарантирует, что последующие
+		// фильтры применяются к первому кадру, а не к произвольному.
+		if ip.NumPages == 1 {
+			params.Page.Set(0)
+		}
 	}
 	if ip.Sequential {
 		params.Access.Set(vips.AccessSequential)

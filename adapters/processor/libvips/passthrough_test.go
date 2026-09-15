@@ -323,6 +323,13 @@ func TestSizeMatchesUnknownDimensions(t *testing.T) {
 }
 
 // TestResolveImportPlanFrameLimit — лимит кадров анимации и NumPages.
+//
+// Регрессия (простыня» кадров): не-анимационный выход (JPEG/PNG/JXL) из
+// анимированного источника должен загружать ТОЛЬКО ПЕРВЫЙ кадр (n=1) на
+// этапе import, чтобы все последующие фильтры применялись к одному кадру,
+// а экспортёр не писал все кадры «столбиком» (формат без анимации).
+// Анимационные выходы (GIF/WebP/APNG/HEIF/AVIF) по-прежнему загружают все
+// кадры (n=-1) или лимит plan.Frames.
 func TestResolveImportPlanFrameLimit(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -347,12 +354,28 @@ func TestResolveImportPlanFrameLimit(t *testing.T) {
 			wantNumPages: -1,
 		},
 		{
-			name:         "animated input only: all pages",
+			name:         "animated input to static output: only first frame",
 			src:          processing.FormatAPNG,
 			out:          processing.FormatJPEG,
 			frames:       0,
 			wantSetPages: true,
-			wantNumPages: -1,
+			wantNumPages: 1,
+		},
+		{
+			name:         "gif input to static png: only first frame",
+			src:          processing.FormatGIF,
+			out:          processing.FormatPNG,
+			frames:       0,
+			wantSetPages: true,
+			wantNumPages: 1,
+		},
+		{
+			name:         "webp input to static jpeg: only first frame",
+			src:          processing.FormatWebP,
+			out:          processing.FormatJPEG,
+			frames:       0,
+			wantSetPages: true,
+			wantNumPages: 1,
 		},
 		{
 			name:         "avif output: all pages (animated)",
@@ -363,12 +386,12 @@ func TestResolveImportPlanFrameLimit(t *testing.T) {
 			wantNumPages: -1,
 		},
 		{
-			name:         "avif input: all pages (animated)",
+			name:         "avif input to static output: only first frame",
 			src:          processing.FormatAVIF,
 			out:          processing.FormatJPEG,
 			frames:       0,
 			wantSetPages: true,
-			wantNumPages: -1,
+			wantNumPages: 1,
 		},
 		{
 			name:         "avif to avif: all pages",
@@ -392,6 +415,14 @@ func TestResolveImportPlanFrameLimit(t *testing.T) {
 			out:          processing.FormatPNG,
 			frames:       5,
 			wantSetPages: false,
+		},
+		{
+			name:         "animated input to static with frames limit: still one frame",
+			src:          processing.FormatGIF,
+			out:          processing.FormatJPEG,
+			frames:       7,
+			wantSetPages: true,
+			wantNumPages: 1,
 		},
 	}
 	for _, tc := range cases {
