@@ -148,12 +148,30 @@ func TestWatermarkTargetSize(t *testing.T) {
 	if w, h := natural.TargetSize(400, 400, 500, 250); w != 500 || h != 250 {
 		t.Errorf("natural = %dx%d, want 500x250", w, h)
 	}
-	// Percent: n% от ОБОИХ измерений холста (аспект ватермарки игнорируется).
+	// Percent: ширина = n% ширины холста, высота пропорциональна аспекту
+	// ватермарки (пропорции знака сохраняются).
 	if w, h := pct.TargetSize(1000, 500, 500, 250); w != 500 || h != 250 {
 		t.Errorf("percent = %dx%d, want 500x250", w, h)
 	}
-	if w, h := pct.TargetSize(1000, 500, 300, 200); w != 500 || h != 250 {
-		t.Errorf("percent = %dx%d, want 500x250 (аспект игнорируется)", w, h)
+	// Аспект знака сохраняется независимо от аспекта холста: знак 300x200
+	// при 50% от холста 1000x500 → 500x333 (а не 500x250).
+	if w, h := pct.TargetSize(1000, 500, 300, 200); w != 500 || h != 333 {
+		t.Errorf("percent = %dx%d, want 500x333 (аспект знака сохранён)", w, h)
+	}
+	// Пропорциональность на неквадратном холсте: знак 200x100 (аспект 2:1)
+	// при 50% от холста 800x400 → 400x200 (аспект 2:1 сохранён).
+	if w, h := pct.TargetSize(800, 400, 200, 100); w != 400 || h != 200 {
+		t.Errorf("percent = %dx%d, want 400x200", w, h)
+	}
+	// 25% от холста 800x400 для знака 200x100 → 200x100.
+	pct25, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "25%")
+	if w, h := pct25.TargetSize(800, 400, 200, 100); w != 200 || h != 100 {
+		t.Errorf("percent 25%% = %dx%d, want 200x100", w, h)
+	}
+	// Округление высоты: знак 301x100 при 50% от холста 1000x600 → 500x166.
+	pctR, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "50%")
+	if w, h := pctR.TargetSize(1000, 600, 301, 100); w != 500 || h != 166 {
+		t.Errorf("percent = %dx%d, want 500x166 (round)", w, h)
 	}
 	// Percent: минимум 1 пиксель на крошечном холсте.
 	pct1, _ := NewWatermarkSpec("a", "/a.png", "center", "no-repeat", "1%")

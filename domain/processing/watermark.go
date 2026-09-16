@@ -73,9 +73,9 @@ const (
 	// WatermarkSizePixels — фиксированный размер "{width}px {height}px"
 	// или "{width}px" (высота пропорциональна аспекту ватермарки).
 	WatermarkSizePixels
-	// WatermarkSizePercent — процент от ОБОИХ измерений холста "{n}%"
-	// (или "{n}"): ширина и высота копии = n% соответствующих измерений
-	// холста; аспект ватермарки игнорируется.
+	// WatermarkSizePercent — процент от ширины холста "{n}%" (или "{n}"):
+	// ширина копии = n% ширины холста, высота — пропорционально аспекту
+	// ватермарки (пропорции знака сохраняются).
 	WatermarkSizePercent
 	// WatermarkSizeNatural — исходный (натуральный) размер ватермарки
 	// без масштабирования (пустое значение size).
@@ -249,7 +249,8 @@ func NewWatermarkSpec(name, path string, position WatermarkPosition, repeat Wate
 //	cover   — покрыть холст с сохранением пропорций;
 //	pixels  — фиксированный размер; при HeightPx == 0 высота вычисляется
 //	          пропорционально аспекту ватермарки (round(WidthPx * wmH / wmW));
-//	percent — n% от ОБОИХ измерений холста (аспект ватермарки игнорируется);
+//	percent — ширина = n% ширины холста, высота пропорциональна аспекту
+//	          ватермарки (round(tw * wmH / wmW)); пропорции сохраняются;
 //	natural — исходный размер ватермарки (wmW x wmH).
 func (s *WatermarkSpec) TargetSize(canvasW, canvasH, wmW, wmH int) (int, int) {
 	if canvasW <= 0 || canvasH <= 0 || wmW <= 0 || wmH <= 0 {
@@ -263,8 +264,11 @@ func (s *WatermarkSpec) TargetSize(canvasW, canvasH, wmW, wmH int) (int, int) {
 		// Одиночное px-значение: высота пропорциональна аспекту ватермарки.
 		return s.WidthPx, clampDim(int(math.Round(float64(s.WidthPx) * float64(wmH) / float64(wmW))))
 	case WatermarkSizePercent:
-		return clampDim(int(math.Round(float64(canvasW) * float64(s.WidthPx) / 100))),
-			clampDim(int(math.Round(float64(canvasH) * float64(s.WidthPx) / 100)))
+		// Процент относительно ШИРИНЫ холста; высота пропорциональна
+		// аспекту ватермарки — пропорции знака сохраняются (иначе знак
+		// «сплющивается» на неквадратных холстах).
+		tw := clampDim(int(math.Round(float64(canvasW) * float64(s.WidthPx) / 100)))
+		return tw, clampDim(int(math.Round(float64(tw) * float64(wmH) / float64(wmW))))
 	case WatermarkSizeContain:
 		scale := math.Min(float64(canvasW)/float64(wmW), float64(canvasH)/float64(wmH))
 		return clampDim(int(math.Round(float64(wmW) * scale))), clampDim(int(math.Round(float64(wmH) * scale)))
