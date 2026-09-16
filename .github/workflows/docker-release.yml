@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       imager_version:
-        description: 'Версия релиза (например "v1.2.3" / "1.0.0") или "latest"'
+        description: 'Версия релиза (например "v1.2.3" / "2.0.0") или "latest"'
         required: false
         default: 'latest'
 
@@ -46,8 +46,16 @@ jobs:
       # Сборка из исходников (target from-source): не зависит от наличия
       # release-артефактов в GitHub releases. Использует production build tags
       # libvips,onnx (см. Dockerfile: source-builder).
+      #
+      # IMAGER_RELEASE — маркер релиза для force-sync базовых конфигов
+      # (Dockerfile ARG -> ENV -> docker/entrypoint.sh). Для тега — сам тег
+      # (v1.2.3), для остальных триггеров (workflow_dispatch) — полный SHA
+      # коммита: уникален на каждый билд.
       - name: Build image (from-source)
-        run: docker build --target from-source -t imager:ci .
+        run: |
+          docker build --target from-source \
+            --build-arg IMAGER_RELEASE=${{ github.ref_type == 'tag' && github.ref_name || github.sha }} \
+            -t imager:ci .
 
       # Скан уязвимостей (HIGH,CRITICAL, --ignore-unfixed). Остановка сборки
       # при exit-code=1 — найденные критические уязвимости блокируют релиз.
@@ -105,11 +113,17 @@ jobs:
           echo "Resolved version: ${resolved}"
 
       # Сборка + публикация: altrap/imager:latest и altrap/imager:<VERSION_TAG>.
+      #
+      # IMAGER_RELEASE=${resolved} — нормализованная версия релиза (v1.2.3):
+      # детерминирована для данного пуша и меняется с каждым релизом, поэтому
+      # entrypoint при обновлении образа увидит смену релиза и выполнит
+      # force-sync базовых конфигов (см. Dockerfile ARG IMAGER_RELEASE).
       - name: Build and push
         run: |
           resolved="${{ steps.version.outputs.resolved }}"
           docker build \
             --target from-source \
+            --build-arg IMAGER_RELEASE="${resolved}" \
             -t "altrap/imager:latest" \
             -t "altrap/imager:${resolved}" .
           docker push "altrap/imager:latest"

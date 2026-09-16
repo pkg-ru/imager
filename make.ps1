@@ -96,6 +96,17 @@ function Invoke-GoBuild([string]$tags) {
 # --- CI-образ (Docker) --------------------------------------------------------
 $CI_IMAGE = if ($env:CI_IMAGE) { $env:CI_IMAGE } else { 'gitverse.ru/pkg-ru/imager-ci:v1' }
 
+# Аргументы --build-arg для docker build: IMAGER_RELEASE (маркер релиза для
+# force-sync базовых конфигов, см. Dockerfile ARG IMAGER_RELEASE). Значение —
+# git describe (тег v1.2.3 или short SHA): уникально на каждый билд.
+# Если git недоступен, build-arg не передаётся -> дефолт Dockerfile "dev"
+# (entrypoint использует fallback-хеш содержимого дефолтных конфигов).
+function Get-ReleaseArgs {
+    $release = & git describe --tags --always 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $release) { return @() }
+    return @('--build-arg', "IMAGER_RELEASE=$release")
+}
+
 # Запуск команды в CI-образе: исходники монтируются в /src, GOMODCACHE —
 # предзагруженный каталог образа, CGO_LDFLAGS="-no-pie" — фикс PIE для
 # Alpine/musl (иначе segfault тестов cgo-пакетов).
@@ -267,13 +278,19 @@ switch ($Target) {
     }
 
     # --- Production / Docker -------------------------------------------------
+    # IMAGER_RELEASE — маркер релиза для force-sync базовых конфигов
+    # (Dockerfile ARG -> ENV -> docker/entrypoint.sh): git describe (тег или
+    # short SHA). Если git недоступен, build-arg не передаётся и Dockerfile
+    # берёт дефолт "dev" (entrypoint использует fallback-хеш конфигов).
     'docker-build' {
-        Exec { & docker build -t imager:production . } 'docker build -t imager:production .'
+        $releaseArgs = Get-ReleaseArgs
+        Exec { & docker build @releaseArgs -t imager:production . } 'docker build -t imager:production .'
         break
     }
 
     'docker-build-from-source' {
-        Exec { & docker build --target from-source -t imager:from-source . } 'docker build --target from-source'
+        $releaseArgs = Get-ReleaseArgs
+        Exec { & docker build --target from-source @releaseArgs -t imager:from-source . } 'docker build --target from-source'
         break
     }
 

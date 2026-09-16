@@ -74,7 +74,18 @@ RUN go build -tags "$(echo ${BUILD_TAGS} | tr ',' ' ')" -trimpath -ldflags="-s -
 # из docker/build-deps.sh (install-runtime/install-edge). Бинарь копируется
 # в финальных таргетах from-release / from-source.
 ###############################################################################
+# Релиз образа для force-sync базовых конфигов: entrypoint (docker/entrypoint.sh)
+# при старте сравнивает IMAGER_RELEASE с маркером $IMAGER_CONFIG_DIR/.imager-release
+# и ПЕРЕЗАПИСЫВАЕТ базовые конфиги (server/generate/failback) из /etc/imager при
+# смене релиза (пересборка/pull нового образа). "dev"/пусто -> fallback: sha256
+# от содержимого дефолтных конфигов. CI передаёт версию при сборке:
+#   docker build --build-arg IMAGER_RELEASE=<версия/тег/дата> .
+ARG IMAGER_RELEASE=dev
+
 FROM alpine:3.24 AS runtime-base
+
+# Повторное объявление: ARG из глобальной области невидимы внутри стадии.
+ARG IMAGER_RELEASE=dev
 
 # Pinned версии пакетов для воспроизводимости. onnxruntime — runtime для
 # бинаря с -tags onnx; в Alpine 3.24 он есть в стабильном community.
@@ -90,7 +101,8 @@ RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/reposit
     && adduser -S -D -H -u 10001 -G imager imager
 
 ENV TZ=Europe/Moscow \
-    IMAGER_CONFIG_DIR=/etc/imager
+    IMAGER_CONFIG_DIR=/etc/imager \
+    IMAGER_RELEASE=${IMAGER_RELEASE}
 
 # Каталоги source/result (writable) и mountpoint /etc/imager/models. ONNX-модели
 # в образ НЕ копируются: при старте контейнера они скачиваются entrypoint'ом
@@ -106,15 +118,23 @@ RUN mkdir -p /data/source /data/result /etc/imager /etc/imager/models \
 # рантайме в rw-каталог).
 #
 # /etc/imager — каталог ДЕФОЛТОВ образа. При старте контейнера entrypoint
-# (docker/entrypoint.sh) копирует отсутствующие базовые конфиги и шаблоны
-# *-local.yaml.example в IMAGER_CONFIG_DIR (по умолчанию /etc/imager), НЕ
-# перезаписывая существующие файлы. Это позволяет:
-#   - запускать контейнер вообще без монтирования конфигов (все дефолты из
-#     образа);
-#   - монтировать пустой каталог ./setting — дефолты подтянутся при старте;
-#   - переопределять только *-local.yaml (base-файлы остаются из образа);
-#   - переопределять все конфиги целиком (смонтировать свою папку с полным
-#     набором server/generate/failback + *-local.yaml).
+# (docker/entrypoint.sh):
+#   - ПЕРЕЗАПИСЫВАЕТ базовые конфиги (server.yaml/generate.yaml/failback.yaml)
+#     в IMAGER_CONFIG_DIR версиями из /etc/imager, если сменился релиз образа
+#     (ENV IMAGER_RELEASE != маркер $IMAGER_CONFIG_DIR/.imager-release) — т.е.
+#     при обновлении образа обновлённые дефолты попадают в существующий
+#     volume-mount ./setting; клиентские правки делать ТОЛЬКО в *-local.yaml
+#     (они никогда не перезаписываются), прямые правки base-файлов будут
+#     затёрты при обновлении образа;
+#   - при том же релизе копирует ТОЛЬКО отсутствующие базовые конфиги и
+#     шаблоны *-local.yaml.example в IMAGER_CONFIG_DIR (по умолчанию
+#     /etc/imager), НЕ перезаписывая существующие файлы. Это позволяет:
+#     - запускать контейнер вообще без монтирования конфигов (все дефолты из
+#       образа);
+#     - монтировать пустой каталог ./setting — дефолты подтянутся при старте;
+#     - переопределять только *-local.yaml (base-файлы остаются из образа);
+#     - переопределять все конфиги целиком (смонтировать свою папку с полным
+#       набором server/generate/failback + *-local.yaml).
 COPY setting/server.yaml setting/generate.yaml setting/failback.yaml /etc/imager/
 COPY setting/*-local.yaml.example /etc/imager/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

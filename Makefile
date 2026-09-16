@@ -110,6 +110,13 @@ fuzz:
 IMAGER_IMAGE ?= altrap/imager
 IMAGER_VERSION ?= latest
 
+# Маркер релиза для force-sync базовых конфигов (Dockerfile ARG IMAGER_RELEASE
+# -> ENV -> docker/entrypoint.sh при старте). По умолчанию — git describe
+# (тег вида v1.2.3, иначе short SHA): уникален и меняется при каждом билде.
+# Если git недоступен, переменная пуста -> Dockerfile возьмёт дефолт "dev",
+# entrypoint использует fallback-хеш содержимого дефолтных конфигов.
+IMAGER_RELEASE ?= $(shell git describe --tags --always 2>/dev/null)
+
 VERSION_TAG := $(shell sh -c '. "docker/lib.sh" 2>/dev/null && resolve_release_version "$(IMAGER_VERSION)" 2>/dev/null')
 ifeq ($(strip $(VERSION_TAG)),)
 VERSION_TAG := $(IMAGER_VERSION)
@@ -122,7 +129,7 @@ build-prod:
 # Сборка образа из исходников (локально/CI).
 .PHONY: docker-build
 docker-build:
-	docker build -t imager:production .
+	docker build --build-arg IMAGER_RELEASE="$(IMAGER_RELEASE)" -t imager:production .
 
 # Сборка прод-образа из GitHub releases (default target from-release); см.
 # Dockerfile. Сборка из исходников — docker-build-from-source.
@@ -132,6 +139,7 @@ docker-build:
 .PHONY: docker-build-release
 docker-build-release:
 	docker build --network host --target from-release --build-arg IMAGER_VERSION=$(IMAGER_VERSION) \
+		--build-arg IMAGER_RELEASE=$(VERSION_TAG) \
 		-t $(IMAGER_IMAGE):latest \
 		-t $(IMAGER_IMAGE):$(VERSION_TAG) .
 
@@ -148,7 +156,7 @@ docker-release: docker-build-release docker-push
 # Сборка прод-образа из исходников (builder-стадия, target from-source).
 .PHONY: docker-build-from-source
 docker-build-from-source:
-	docker build --target from-source -t $(IMAGER_IMAGE):from-source .
+	docker build --target from-source --build-arg IMAGER_RELEASE="$(IMAGER_RELEASE)" -t $(IMAGER_IMAGE):from-source .
 
 .PHONY: docker-up
 docker-up:

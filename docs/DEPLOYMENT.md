@@ -7,7 +7,8 @@
 Минимальный запуск готового образа `altrap/imager` с Docker Hub — без
 клонирования репозитория и без сборки. Все базовые конфиги (`server.yaml`,
 `generate.yaml`, `failback.yaml`) уже в образе: при старте entrypoint
-подтянет их в смонтированный каталог конфигурации, если там их нет.
+подтянет их в смонтированный каталог конфигурации (при первом старте или
+после обновления образа — перезапишет свежими версиями из образа).
 
 ```bash
 # 1. Каталоги: конфигурация (можно пустой), исходники, результаты
@@ -32,7 +33,7 @@ curl -o out.webp http://localhost:8080/test-jpg/x.webp  # ассет в webp
 
 | Volume | Обязательность | Назначение |
 |--------|----------------|------------|
-| `./setting:/etc/imager/setting:rw` | **обязателен** | Конфигурация. Может быть **пустым**: entrypoint скопирует базовые конфиги (`server.yaml`, `generate.yaml`, `failback.yaml`) и шаблоны `*-local.yaml.example` из образа при первом старте. `:rw` — чтобы entrypoint мог создавать файлы |
+| `./setting:/etc/imager/setting:rw` | **обязателен** | Конфигурация. Может быть **пустым**: entrypoint скопирует базовые конфиги (`server.yaml`, `generate.yaml`, `failback.yaml`) и шаблоны `*-local.yaml.example` из образа при первом старте, а при обновлении образа перезапишет базовые конфиги свежими версиями (клиентские `*-local.yaml` не трогаются). `:rw` — чтобы entrypoint мог создавать файлы |
 | `./data/source:/data/source:ro` | **обязателен** | Исходные файлы (fs-source из конфига) |
 | `./data/result:/data/result:rw` | **обязателен** | Результаты генерации (fs-result из конфига); uid 10001 должен иметь запись |
 | `./models:/etc/imager/models:rw` | опционален | ONNX-модели. Без монтирования entrypoint скачает их в анонимный volume — при пересоздании контейнера скачивание повторится. Монтируйте, чтобы модели сохранялись на хосте |
@@ -44,18 +45,44 @@ curl -o out.webp http://localhost:8080/test-jpg/x.webp  # ассет в webp
 - **Только `*-local.yaml`** (рекомендуется): монтируйте пустой `./setting`
   и кладите туда только `server-local.yaml` / `generate-local.yaml` /
   `failback-local.yaml`. Базовые конфиги подтянутся из образа, а `-local`
-  файлы глубоко мержатся поверх них. Существующие файлы entrypoint никогда
-  не перезаписывает.
+  файлы глубоко мержатся поверх них. `*-local.yaml` и
+  `*-local.yaml.example` entrypoint никогда не перезаписывает.
 - **Все конфиги целиком**: положите в `./setting` полный набор
   `server.yaml` + `generate.yaml` + `failback.yaml` (+ `*-local.yaml`) —
-  они полностью заменят дефолты образа.
+  на текущем образе они полностью заменят дефолты. Учтите: **прямые правки
+  базовых файлов в `./setting` будут затёрты при обновлении образа** —
+  entrypoint перезапишет их дефолтами нового образа. Правки делайте в
+  `*-local.yaml`.
+
+**Обновление образа и force-sync конфигов.** Образ хранит идентификатор
+релиза (ENV `IMAGER_RELEASE`, задаётся при сборке через
+`ARG IMAGER_RELEASE`; при пустом значении или `dev` — sha256-хеш дефолтных
+конфигов). При старте entrypoint ([`docker/entrypoint.sh`](../docker/entrypoint.sh))
+сравнивает его с маркером `.imager-release` в каталоге конфигурации:
+
+- **новый образ** (пересборка локально или pull обновлённого с Docker Hub) →
+  базовые конфиги `server.yaml` / `generate.yaml` / `failback.yaml`
+  **перезаписываются** версиями из образа (атомарно, права `root:imager
+  0640`), маркер обновляется;
+- **тот же образ** (обычный запуск/перезапуск, `docker compose restart`) →
+  ничего не перезаписывается, копируются только отсутствующие файлы;
+- `*-local.yaml` / `*-local.yaml.example` **не перезаписываются никогда**.
+
+Передача версии при сборке (CI):
+
+```bash
+docker build --build-arg IMAGER_RELEASE=$(git describe --tags --always) -t altrap/imager:<тег> .
+```
+
+См. также [CONFIGURATION.md](CONFIGURATION.md#загрузка-конфигурации).
 
 Что происходит при старте:
 
-- entrypoint ([`docker/entrypoint.sh`](../docker/entrypoint.sh)) копирует
-  отсутствующие базовые конфиги и шаблоны `*-local.yaml.example` из
-  `/etc/imager` (дефолты образа) в `IMAGER_CONFIG_DIR`, затем создаёт
-  `*-local.yaml` из шаблонов (только если файла ещё нет);
+- entrypoint ([`docker/entrypoint.sh`](../docker/entrypoint.sh)) при смене
+  релиза образа перезаписывает базовые конфиги из `/etc/imager` (дефолты
+  образа) в `IMAGER_CONFIG_DIR`; при том же релизе — копирует только
+  отсутствующие базовые конфиги и шаблоны `*-local.yaml.example`, затем
+  создаёт `*-local.yaml` из шаблонов (только если файла ещё нет);
 - entrypoint скачивает ONNX-модели в `IMAGER_MODELS_DIR` (по умолчанию
   `/etc/imager/models`; идемпотентно; без сети сервис всё равно стартует —
   детекция опциональна);
@@ -138,7 +165,7 @@ GitVerse — зеркало, см. [CI](#ci)).
 docker compose up -d --build
 ```
 
-Конфигурация монтируется из `./setting` в `/etc/imager/setting` **read-write** (entrypoint копирует туда отсутствующие базовые конфиги и создаёт `*-local.yaml` из шаблонов), каталог моделей `./models` — в `/etc/imager/models` **read-write**. Модели **не входят в образ** и **не требуют ручного размещения**: при старте контейнера entrypoint (`docker/entrypoint.sh`) скачивает их в смонтированный каталог (`docker/download-models.sh`, источники — OpenCV Zoo и ONNX Model Zoo по умолчанию) и сохраняет на хосте в `./models`, так что при перезапуске скачивание не повторяется. Если скачивание не удалось (нет сети/зеркала) — контейнер продолжает запуск с предупреждением: детекция опциональна, операции `fc`/`oc` просто недоступны (см. [CONFIGURATION.md](CONFIGURATION.md#detection)).
+Конфигурация монтируется из `./setting` в `/etc/imager/setting` **read-write** (entrypoint копирует туда отсутствующие базовые конфиги, при обновлении образа перезаписывает базовые и создаёт `*-local.yaml` из шаблонов), каталог моделей `./models` — в `/etc/imager/models` **read-write**. Модели **не входят в образ** и **не требуют ручного размещения**: при старте контейнера entrypoint (`docker/entrypoint.sh`) скачивает их в смонтированный каталог (`docker/download-models.sh`, источники — OpenCV Zoo и ONNX Model Zoo по умолчанию) и сохраняет на хосте в `./models`, так что при перезапуске скачивание не повторяется. Если скачивание не удалось (нет сети/зеркала) — контейнер продолжает запуск с предупреждением: детекция опциональна, операции `fc`/`oc` просто недоступны (см. [CONFIGURATION.md](CONFIGURATION.md#detection)).
 
 > **Права на каталог.** Контейнер работает от non-root `imager` (uid 10001). Чтобы entrypoint мог скачивать модели, сделайте хост-каталог `./models` доступным на запись этому uid: `chmod -R a+rwX ./models` (либо `chown 10001:10001 ./models`).
 
@@ -180,7 +207,7 @@ docker run -d \
 | PID 1 / сигналы | `ENTRYPOINT` exec'ает бинарь — корректная сигнальная семантика graceful shutdown |
 | VOLUME | `/data/source`, `/data/result`, `/etc/imager/models` — mountpoint'ы для bind-mounts |
 
-**`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` монтируется `:ro`. `/etc/imager/setting` в `docker-compose.yaml` монтируется `:rw` (entrypoint копирует туда отсутствующие базовые конфиги и создаёт `*-local.yaml` из шаблонов); при ручном `docker run` допустимо `:ro` — entrypoint тогда пропустит создание файлов с warning, а конфиги должны быть подготовлены заранее.
+**`read_only: true` не используется**: при read-only rootfs Docker не может создать mountpoint для bind-mount `./models:/etc/imager/models` (каталог лежит в read-only слое). Writable-пути — bind-mounts `/data/result` (`:rw`), `/etc/imager/models` (`:rw`, сюда entrypoint скачивает модели) и tmpfs `/tmp`; `/data/source` монтируется `:ro`. `/etc/imager/setting` в `docker-compose.yaml` монтируется `:rw` (entrypoint копирует туда отсутствующие базовые конфиги, при обновлении образа перезаписывает базовые и создаёт `*-local.yaml` из шаблонов); при ручном `docker run` допустимо `:ro` — entrypoint тогда пропустит sync с warning, а конфиги должны быть подготовлены заранее.
 
 ## Ресурсы
 
