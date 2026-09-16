@@ -1044,8 +1044,10 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// (детектор + selectCrop), вырезается и подгоняется до целевого
 		// размера. trimOffset передаётся для трансляции готовых боксов
 		// (sidecar, координаты оригинала) в координаты подрезанного кадра.
-		boxes, detail, err := b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot, trimOffsetX, trimOffsetY)
-		return img, boxes, detail, err
+		// Для анимации applyDetectionCrop возвращает НОВОЕ изображение
+		// (покадровая обработка, см. комментарий applyDetectionCrop) —
+		// старое закрывает вызывающий process (opImg != img).
+		return b.applyDetectionCrop(ctx, img, plan, detectionsReady, boxes, slot, trimOffsetX, trimOffsetY)
 	default:
 		return img, nil, nil, fmt.Errorf("libvips: unsupported operation %q", plan.Operation)
 	}
@@ -1249,11 +1251,21 @@ func hexToColor(hex string) *vips.Color {
 //  3. Детектор находит боксы (лица или объекты); selectCrop выбирает
 //     область кропа с учётом целевого aspect ratio и отступа margin.
 //  4. Область вырезается (ExtractArea) и подгоняется до целевого размера
-//     (ThumbnailWithSize, SizeForce).
+//     (ThumbnailWithSize, SizeBoth + crop=centre).
 //
 // Для анимированных изображений детекция выполняется по первому кадру
-// (PageHeight), а область применяется ко всему стеку кадров — это
-// согласовано с поведением trim/crop для анимации.
+// (PageHeight), а найденная область применяется к КАЖДОМУ кадру покадрово
+// (механика withFrames, по образцу thumbnailCropFrames): ExtractArea по
+// rect + thumbnail на каждом кадре ИЗОЛИРОВАННО. Раньше вырезка и thumbnail
+// выполнялись на всём вертикальном стеке кадров как на одном изображении —
+// vips_thumbnail_image не поддерживает multi-page: он «склеивал» стек по
+// совокупной высоте и схлопывал page-height, в итоге анимация терялась
+// (статичная «склейка кадров»). withFrames гарантирует page-height = высоте
+// кадра результата, n-pages = числу кадров, delay/loop сохранены.
+//
+// Возвращает актуальный ImageRef: для анимации это НОВОЕ изображение
+// (старое закрывает вызывающий в applyOperation/process), для одиночных
+// изображений — тот же img (обработка in-place).
 // applyDetectionCrop выполняет детекторную обрезку (face-crop/object-crop).
 //
 // Двухуровневые семафоры: при self-detection (модель вызывается
@@ -1276,9 +1288,9 @@ func hexToColor(hex string) *vips.Color {
 // self-detection (faces/objects с реальной уверенностью и label).
 // detail заполняется ТОЛЬКО в режиме self-detection (модель вызывалась
 // внутри процессора); при DetectionsReady=true — nil.
-func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot, trimOffsetX, trimOffsetY int) ([]filemeta.PixelBox, *processor.DetectionsDetail, error) {
+func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan, detectionsReady bool, boxes []filemeta.PixelBox, slot *gateSlot, trimOffsetX, trimOffsetY int) (*vips.ImageRef, []filemeta.PixelBox, *processor.DetectionsDetail, error) {
 	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
+		return img, nil, nil, ctx.Err()
 	}
 
 	// Размеры кадра: для анимации используем высоту одного кадра.
@@ -1305,36 +1317,36 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 		// Self-detection: модель вызывается здесь.
 		det := b.opts.Detector
 		if det == nil || !det.Available() {
-			return nil, nil, fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
+			return img, nil, nil, fmt.Errorf("libvips: %s: detection is not configured; set detection.face-model / detection.object-model and rebuild with -tags onnx", plan.Operation)
 		}
 
 		// Извлечение RGB-пикселей: работаем на копии, чтобы не менять исходник.
 		tmp, err := img.Copy()
 		if err != nil {
-			return nil, nil, fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
+			return img, nil, nil, fmt.Errorf("libvips: %s: copy: %w", plan.Operation, err)
 		}
 		defer tmp.Close()
 		if err := tmp.ToColorSpace(vips.InterpretationSRGB); err != nil {
-			return nil, nil, fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
+			return img, nil, nil, fmt.Errorf("libvips: %s: to-srgb: %w", plan.Operation, err)
 		}
 		if err := tmp.Cast(vips.BandFormatUchar); err != nil {
-			return nil, nil, fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
+			return img, nil, nil, fmt.Errorf("libvips: %s: cast: %w", plan.Operation, err)
 		}
 		// Для анимации берём только первый кадр (высота H).
 		if H < img.Height() {
 			if err := tmp.ExtractArea(0, 0, W, H); err != nil {
-				return nil, nil, fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
+				return img, nil, nil, fmt.Errorf("libvips: %s: extract first frame: %w", plan.Operation, err)
 			}
 		}
 		// Приводим к 3 каналам (RGB), если есть альфа.
 		if tmp.Bands() > 3 {
 			if err := tmp.ExtractBand(0, 3); err != nil {
-				return nil, nil, fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
+				return img, nil, nil, fmt.Errorf("libvips: %s: extract rgb: %w", plan.Operation, err)
 			}
 		}
 		rgb, err := tmp.ToBytes()
 		if err != nil {
-			return nil, nil, fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
+			return img, nil, nil, fmt.Errorf("libvips: %s: to-bytes: %w", plan.Operation, err)
 		}
 
 		// Handoff: захватываем detection-слот и освобождаем
@@ -1364,7 +1376,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 						"operation", plan.Operation)
 					observability.IncDetectionDegradedGlobal()
 				} else {
-					return nil, nil, fmt.Errorf("libvips: %s: detection semaphore: %w", plan.Operation, err)
+					return img, nil, nil, fmt.Errorf("libvips: %s: detection semaphore: %w", plan.Operation, err)
 				}
 			}
 		}
@@ -1383,7 +1395,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 				detBoxes, err2 = det.DetectObjects(ctx, rgb, W, H)
 			}
 			if err2 != nil {
-				return nil, nil, fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err2)
+				return img, nil, nil, fmt.Errorf("libvips: %s: detect: %w", plan.Operation, err2)
 			}
 		}
 	}
@@ -1395,7 +1407,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	// (vips-слот всё время у нас).
 	if slot != nil && !detectionsReady && !degraded {
 		if err := slot.reacquireVips(ctx); err != nil {
-			return nil, nil, fmt.Errorf("libvips: %s: reacquire vips slot: %w", plan.Operation, err)
+			return img, nil, nil, fmt.Errorf("libvips: %s: reacquire vips slot: %w", plan.Operation, err)
 		}
 	}
 
@@ -1419,18 +1431,106 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	default: // processing.OpObjectFixCrop
 		rect = detection.SelectObjectFixCrop(detBoxes, W, H, plan.Size.Width, plan.Size.Height, b.opts.DetectorMargin)
 	}
-	if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
-		return nil, nil, fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
-	}
-	// Финальный ресайз после кропа — тоже с premultiply для альфы
-	// (консистентно с applyOperation). SizeBoth (не Force): область кропа
-	// может иметь пропорции, отличные от целевых, — нужен пропорциональный
-	// масштаб до заполнения + центрированная обрезка до точного WxH.
-	err := premultiplyResize(img, func() error {
-		return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeBoth)
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
+	// Вырезка rect и финальный thumbnail. Для анимации — ПОКАДРОВО
+	// (механика withFrames, по образцу thumbnailCropFrames): ExtractArea по
+	// rect на каждом кадре ИЗОЛИРОВАННО (координаты первого кадра корректны,
+	// т.к. детекция выполняется по нему), затем thumbnail каждого кадра.
+	// Прежняя обработка всего стека как одного изображения ломала анимацию:
+	// vips_thumbnail_image не поддерживает multi-page — он «склеивал» стек
+	// кадров по совокупной высоте и схлопывал page-height (статичная
+	// «склейка кадров» вместо анимации). withFrames гарантирует
+	// page-height = высоте кадра результата, n-pages = числу кадров,
+	// delay/loop сохранены. Для одиночных изображений — прежнее поведение
+	// (in-place).
+	if img.Pages() > 1 && H > 0 && img.Height() > H {
+		outImg, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+			// Кадр из withFrames — одиночное изображение высотой H, но с
+			// унаследованными анимационными метаданными стека (n-pages > 1,
+			// page-height == H). Выравниваем метаданные под одиночное
+			// изображение ДО thumbnail (см. thumbnailCropFrames: регрессия 2).
+			if f.Pages() != 1 {
+				if err := f.SetPages(1); err != nil {
+					return fmt.Errorf("frame %d: reset n-pages: %w", i+1, err)
+				}
+			}
+			if f.PageHeight() != f.Height() {
+				if err := f.SetPageHeight(f.Height()); err != nil {
+					return fmt.Errorf("frame %d: reset page-height: %w", i+1, err)
+				}
+			}
+			// Clamp rect в границы кадра: после trim/прочих фильтров окно
+			// может выйти за границы (детекция по первому кадру, а кадры
+			// могут отличаться) — безопасное зажимание, как в translateBoxes.
+			rx, ry, rw, rh := rect.X, rect.Y, rect.W, rect.H
+			if rx < 0 {
+				rx = 0
+			}
+			if ry < 0 {
+				ry = 0
+			}
+			if rx+rw > W {
+				rw = W - rx
+			}
+			if ry+rh > H {
+				rh = H - ry
+			}
+			if rw <= 0 || rh <= 0 {
+				return fmt.Errorf("frame %d: empty crop rect (%d,%d %dx%d) for %dx%d frame", i+1, rx, ry, rw, rh, W, H)
+			}
+			if err := f.ExtractArea(rx, ry, rw, rh); err != nil {
+				return fmt.Errorf("frame %d: extract area (%d,%d %dx%d): %w", i+1, rx, ry, rw, rh, err)
+			}
+			// Финальный ресайз после кропа — тоже с premultiply для альфы
+			// (консистентно с applyOperation). SizeBoth (не Force): область
+			// кропа может иметь пропорции, отличные от целевых, — нужен
+			// пропорциональный масштаб до заполнения + центрированная
+			// обрезка до точного WxH.
+			if err := premultiplyResize(f, func() error {
+				return f.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeBoth)
+			}); err != nil {
+				return fmt.Errorf("frame %d: resize to %dx%d: %w", i+1, plan.Size.Width, plan.Size.Height, err)
+			}
+			// Защита на каждый кадр: thumbnail с crop != none обязан дать
+			// ТОЧНО plan.Size (см. thumbnailCropFrames) — иначе стек
+			// рассинхронизируется молча.
+			if fw, fh := f.Width(), f.Height(); fw != plan.Size.Width || fh != plan.Size.Height {
+				return fmt.Errorf("frame %d: thumbnail produced %dx%d, want %dx%d", i+1, fw, fh, plan.Size.Width, plan.Size.Height)
+			}
+			// Нормализация метаданных кадра (см. thumbnailCropFrames).
+			if f.PageHeight() != plan.Size.Height {
+				if err := f.SetPageHeight(plan.Size.Height); err != nil {
+					return fmt.Errorf("frame %d: normalize page-height: %w", i+1, err)
+				}
+			}
+			if f.Pages() != 1 {
+				if err := f.SetPages(1); err != nil {
+					return fmt.Errorf("frame %d: normalize n-pages: %w", i+1, err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return img, nil, nil, fmt.Errorf("libvips: %s: %w", plan.Operation, err)
+		}
+		// Финальная защита целостности стека (см. thumbnailCropFrames).
+		if n := outImg.Pages(); outImg.Height()%n != 0 || outImg.Height()/n != plan.Size.Height {
+			outImg.Close()
+			return img, nil, nil, fmt.Errorf("libvips: %s: inconsistent frame stack: height %d, page-height %d, want %d per frame", plan.Operation, outImg.Height(), outImg.Height()/max(n, 1), plan.Size.Height)
+		}
+		img = outImg
+	} else {
+		if err := img.ExtractArea(rect.X, rect.Y, rect.W, rect.H); err != nil {
+			return img, nil, nil, fmt.Errorf("libvips: %s: extract area (%d,%d %dx%d): %w", plan.Operation, rect.X, rect.Y, rect.W, rect.H, err)
+		}
+		// Финальный ресайз после кропа — тоже с premultiply для альфы
+		// (консистентно с applyOperation). SizeBoth (не Force): область кропа
+		// может иметь пропорции, отличные от целевых, — нужен пропорциональный
+		// масштаб до заполнения + центрированная обрезка до точного WxH.
+		if err := premultiplyResize(img, func() error {
+			return img.ThumbnailWithSize(plan.Size.Width, plan.Size.Height, vips.InterestingCentre, vips.SizeBoth)
+		}); err != nil {
+			return img, nil, nil, fmt.Errorf("libvips: %s: resize to %dx%d: %w", plan.Operation, plan.Size.Width, plan.Size.Height, err)
+		}
 	}
 	// Итоговые боксы: в координатах ОРИГИНАЛА (до trim). При self-detection
 	// модель уже вернула боксы в координатах текущего кадра; если trim был
@@ -1466,7 +1566,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	for _, b2 := range detBoxes {
 		out = append(out, filemeta.PixelBox{X: b2.X, Y: b2.Y, Width: b2.W, Height: b2.H})
 	}
-	return out, detail, nil
+	return img, out, detail, nil
 }
 
 // translateBoxes транслирует боксы из координат ОРИГИНАЛА в координаты
