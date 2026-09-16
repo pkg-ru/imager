@@ -13,9 +13,11 @@
 // кадров»). Исправление — покадровая обработка через withFrames (по образцу
 // thumbnailCropFrames).
 //
-// Также покрывает диагностику AVIF+watermark: полный путь GIF→AVIF
-// (compositeWatermarkPerFrame + ExportAvif) — анимация должна сохраняться
-// (pages/page-height корректны после watermark и после экспорта).
+// Диагностические тесты TestDiag* удалены: они проверяли старое (неверное)
+// поведение heifsave — multi-page HEIF/AVIF без animation track. Новая
+// архитектура: animated AVIF → libheif sequence encoder (см.
+// animated_avif_libvips.go и animated_avif_libvips_test.go); animated
+// HEIF/HEIC → статичный первый кадр (документированное поведение).
 package libvips
 
 import (
@@ -24,6 +26,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/davidbyttow/govips/v2/vips"
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
 )
@@ -108,7 +111,9 @@ func TestDetectionCropAnimatedGifToWebpReadyBoxes(t *testing.T) {
 }
 
 // TestDetectionCropAnimatedGifToAvifReadyBoxes — GIF(2 кадра)→AVIF face-crop
-// с готовыми боксами: анимация сохранена (pages=2, page-height=16, 16x16).
+// с готовыми боксами: анимация сохранена (sequence track с 2 кадрами).
+// Верификация через libheif track API: libvips heifload НЕ читает avis-файлы
+// (sequence), поэтому loadAnimated/checkAnimatedOutput для AVIF неприменимы.
 func TestDetectionCropAnimatedGifToAvifReadyBoxes(t *testing.T) {
 	b, det := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
@@ -126,7 +131,12 @@ func TestDetectionCropAnimatedGifToAvifReadyBoxes(t *testing.T) {
 	if det.calls != 0 {
 		t.Errorf("detector calls = %d, want 0 (DetectionsReady skips model)", det.calls)
 	}
-	checkAnimatedOutput(t, res.data, 2, 16, 16, 16)
+	if !vips.HeifHasSequence(res.data) {
+		t.Fatal("animated GIF → AVIF (face-crop): output has no sequence track")
+	}
+	if n := vips.HeifSequenceFrameCount(res.data); n != 2 {
+		t.Fatalf("sequence frame count = %d, want 2", n)
+	}
 }
 
 // TestDetectionCropAnimatedSelfDetect — self-detection (модель вызывается
@@ -217,117 +227,5 @@ func TestDetectionCropAnimatedWithWatermark(t *testing.T) {
 		if !(g > 200 && r < 50 && bl < 50) {
 			t.Errorf("frame %d center = (%d,%d,%d), want green watermark", frame, r, g, bl)
 		}
-	}
-}
-
-// --- Диагностика AVIF+watermark (задача B) ---------------------------------
-//
-// Пользователь наблюдает статичный AVIF всегда; все его проверки были С
-// водяным знаком. Эти тесты проверяют полный путь GIF→AVIF: без фильтров,
-// с ватермаркой, с trim+ватермаркой. Если анимация сохраняется во всех
-// случаях — статичность у пользователя обусловлена окружением (прод-версия
-// libheif/браузер), а не пайплайном.
-
-// TestDiagAvifNoWatermark: GIF→AVIF без фильтров — анимация сохраняется?
-func TestDiagAvifNoWatermark(t *testing.T) {
-	plan, err := processing.NewProcessingPlan(
-		processing.OpResize, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
-	)
-	if err != nil {
-		t.Fatalf("NewProcessingPlan: %v", err)
-	}
-	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
-	if err != nil {
-		t.Fatalf("newLibvipsBackend: %v", err)
-	}
-	res, err := b.process(context.Background(), makeGif(t), plan, false, nil, nil)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	checkAnimatedOutput(t, res.data, 2, 32, 32, 32)
-}
-
-// TestDiagAvifWatermark: GIF→AVIF с ватермаркой (compositeWatermarkPerFrame)
-// — анимация сохраняется? Проверяет pages/pageHeight после watermark и после
-// экспорта AVIF.
-func TestDiagAvifWatermark(t *testing.T) {
-	wmPath := filepath.Join(t.TempDir(), "wm.png")
-	if err := os.WriteFile(wmPath, makePng(t), 0o644); err != nil {
-		t.Fatalf("write wm: %v", err)
-	}
-	wm, err := processing.NewWatermarkSpec("wm", wmPath, processing.WatermarkPositionCenter, processing.WatermarkRepeatNoRepeat, "8px 8px")
-	if err != nil {
-		t.Fatalf("NewWatermarkSpec: %v", err)
-	}
-	plan, err := processing.NewProcessingPlan(
-		processing.OpResize, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
-	)
-	if err != nil {
-		t.Fatalf("NewProcessingPlan: %v", err)
-	}
-	plan.Watermark = wm
-	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
-	if err != nil {
-		t.Fatalf("newLibvipsBackend: %v", err)
-	}
-	res, err := b.process(context.Background(), makeGif(t), plan, false, nil, nil)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	checkAnimatedOutput(t, res.data, 2, 32, 32, 32)
-	// Центр каждого кадра — зелёная ватермарка (lossy AVIF: смягчённые
-	// пороги).
-	out := loadAnimated(t, res.data)
-	defer out.Close()
-	for _, frame := range []int{0, 1} {
-		r, g, bl, _ := vipsPixelAt(t, out, frame, 16, 16)
-		if !(g > 150 && r < 120 && bl < 120) {
-			t.Errorf("avif+wm frame %d center = (%d,%d,%d), want green watermark", frame, r, g, bl)
-		}
-	}
-}
-
-// TestDiagAvifTrimWatermark: GIF→AVIF с trim + ватермаркой — анимация
-// сохраняется? Trim на анимации покадровый (applyTrim через withFrames),
-// затем покадровая ватермарка и экспорт.
-func TestDiagAvifTrimWatermark(t *testing.T) {
-	wmPath := filepath.Join(t.TempDir(), "wm.png")
-	if err := os.WriteFile(wmPath, makePng(t), 0o644); err != nil {
-		t.Fatalf("write wm: %v", err)
-	}
-	wm, err := processing.NewWatermarkSpec("wm", wmPath, processing.WatermarkPositionCenter, processing.WatermarkRepeatNoRepeat, "8px 8px")
-	if err != nil {
-		t.Fatalf("NewWatermarkSpec: %v", err)
-	}
-	plan, err := processing.NewProcessingPlan(
-		processing.OpResize, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
-	)
-	if err != nil {
-		t.Fatalf("NewProcessingPlan: %v", err)
-	}
-	plan.Trim = true
-	plan.TrimSpec = processing.DefaultTrimSpec()
-	plan.Watermark = wm
-	b, err := newLibvipsBackend(Options{Limits: Limits{Concurrency: 1}})
-	if err != nil {
-		t.Fatalf("newLibvipsBackend: %v", err)
-	}
-	res, err := b.process(context.Background(), makeTrimGif(t), plan, false, nil, nil)
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-	// Сплошные кадры GIF: trim может вырезать весь кадр или дать область
-	// меньше целевой — главное, что анимация (2 страницы) сохранена и
-	// page-height согласован.
-	out := loadAnimated(t, res.data)
-	defer out.Close()
-	if pages := out.Pages(); pages != 2 {
-		t.Fatalf("avif trim+wm pages = %d, want 2", pages)
-	}
-	if ph := out.PageHeight(); ph <= 0 || out.Height()%ph != 0 {
-		t.Fatalf("avif trim+wm page-height = %d inconsistent with height %d", ph, out.Height())
 	}
 }

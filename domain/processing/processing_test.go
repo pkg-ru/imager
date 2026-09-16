@@ -67,8 +67,12 @@ func TestParseFormat(t *testing.T) {
 }
 
 func TestFormatAnimated(t *testing.T) {
-	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatHEIF, FormatAVIF}
-	still := []Format{FormatJPEG, FormatPNG, FormatJPEGXL}
+	// Анимированный ВЫХОД: GIF/WebP/APNG/JXL/AVIF.
+	animated := []Format{FormatGIF, FormatWebP, FormatAPNG, FormatJPEGXL, FormatAVIF}
+	// HEIF/HEIC — анимированный вход, но выход = только первый кадр
+	// (libvips heifsave не пишет animation track; libheif HEVC sequence
+	// encoder сломан). Поэтому HEIF/HEIC НЕ входят в Animated().
+	still := []Format{FormatJPEG, FormatPNG, FormatHEIF}
 	for _, f := range animated {
 		if !f.Animated() {
 			t.Errorf("%q should be animated", f)

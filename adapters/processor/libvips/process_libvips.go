@@ -1769,29 +1769,20 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportGIF(p)
 		return out, err
 	case processing.FormatAVIF:
-		// AVIF — HEIF-контейнер с AV1-компрессией: heifsave (foreign.c,
-		// AVIF идёт через heifsave_buffer) пишет анимацию для multi-page
-		// изображений (libvips 8.12+). Кадры загружены с NumPages=-1,
-		// page-height < высоты стека.
+		// Анимированный AVIF: Pages() > 1 && len(delay) > 0 (наличие
+		// frame timing — не просто multipage). Кодируется через нативный
+		// libheif sequence encoder (настоящий animation track, brand avis,
+		// per-frame duration, repetitions). libvips heifsave НЕ пишет
+		// animation track (кадры как отдельные items) — см. README.
 		//
-		// Регрессия: как и pngsave при strip=true (см. ветку FormatAPNG),
-		// heifsave при strip не переносит метаданные анимации в выходной
-		// файл — AVIF читается как статичный кадр. Обход: перед экспортом
-		// пересчитываем n-pages из геометрии стека (H / page-height) и
-		// восстанавливаем рассинхронизированные значения; heifsave пишет
-		// последовательность кадров по page-height/n-pages входного
-		// изображения. Для одиночного изображения результат — статичный
-		// AVIF (валидный).
-		ph := img.PageHeight()
-		H := img.Height()
-		if ph > 0 && H > ph {
-			n := H / ph
-			if img.Pages() != n {
-				if err := img.SetPages(n); err != nil {
-					return nil, fmt.Errorf("libvips: avif restore n-pages: %w", err)
-				}
-			}
+		// Static path (Pages() <= 1 || len(delay) == 0): прежний путь через
+		// libvips heifsave, без sequence encoder/libheif-контекста.
+		if isAnimatedImage(img) {
+			return b.exportAnimatedAvif(img, resolved)
 		}
+		// Static AVIF — HEIF-контейнер с AV1-компрессией: heifsave
+		// (foreign.c, AVIF идёт через heifsave_buffer). Для одиночного
+		// изображения результат — статичный AVIF (валидный).
 		p := vips.NewAvifExportParams()
 		p.Quality = resolved.Quality
 		p.StripMetadata = true

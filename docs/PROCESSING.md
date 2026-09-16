@@ -193,7 +193,34 @@ detection:
 
 ## Анимации
 
-Анимированные форматы: GIF, WebP, HEIF, APNG, AVIF (вход APNG читается как анимированный PNG; запись APNG — см. «Движки»; AVIF — анимация через HEIF-контейнер, libvips heifsave пишет multi-page изображения как последовательность кадров).
+Модель возможностей форматов (анимированный вход / анимированный выход):
+
+| Формат | Анимированный вход | Анимированный выход |
+|--------|--------------------|--------------------|
+| GIF | да | да (gifsave) |
+| WebP | да | да (webpsave) |
+| APNG | да | да (pngsave, acTL/fcTL/fdAT) |
+| JPEG XL | да | да (jxlsave) |
+| AVIF | да | **да** — через нативный libheif sequence encoder (настоящий animation track: brand `avis`, moov/trak/stbl, per-frame duration, repetitions) |
+| HEIF/HEIC | да | **нет** — выход содержит только первый кадр (см. ниже) |
+
+**Анимированный AVIF.** libvips heifsave НЕ пишет animation track: multi-page
+изображение сохраняется как отдельные items без eqiv/anip/delay боксов, и
+плееры показывают только первый кадр. Поэтому анимированный AVIF кодируется
+нативным libheif sequence encoder (libheif >= 1.23, AV1/aom): контекст и
+энкодер создаются один раз на ассет, кадры передаются последовательно с
+per-frame duration из delay исходника, loop маппится в repetitions.
+Анимация определяется как `Pages() > 1 && len(delay) > 0` (наличие frame
+timing); обычный multipage без задержек уходит в static path (libvips
+heifsave).
+
+**Анимированный HEIF/HEIC.** Анимированный вход читается полностью, но
+анимированный выход НЕ поддерживается в текущей Imager: libvips heifsave не
+пишет animation track, а нативный libheif HEVC sequence encoder сломан
+(известный баг libheif 1.23, assert в hevc_enc.cc). Поэтому анимированный
+вход → HEIF/HEIC выход возвращает **корректный статичный HEIF/HEIC,
+содержащий только первый кадр** (загружается n=1, все фильтры применяются к
+нему). Это документированное поведение, а не ошибка входа и не warning.
 
 Поддерживается:
 

@@ -112,16 +112,24 @@ func ParseFormat(s string) (Format, error) {
 	return f, nil
 }
 
-// Animated сообщает, поддерживает ли формат анимацию.
+// Animated сообщает, поддерживает ли формат АНИМИРОВАННЫЙ ВЫХОД.
 //
-// AVIF поддерживает анимацию через HEIF-контейнер (multi-page изображения
-// кодируются libvips heifsave как последовательность кадров, libvips 8.12+).
-// Включение FormatAVIF означает: анимированный AVIF-вход загружается со
-// ВСЕМИ кадрами (NumPages=-1), а для AVIF-выхода multi-page изображение
-// записывается как анимация.
+// Модель возможностей (animated input/output):
+//   - GIF/WebP/APNG/JXL/AVIF — анимированный вход И выход: для выхода
+//     загружаются все кадры (NumPages=-1), экспортёр пишет анимацию
+//     (gifsave/webpsave/pngsave/jxlsave; AVIF — через нативный libheif
+//     sequence encoder, см. exportAnimatedAvif).
+//   - HEIF/HEIC — анимированный ВХОД поддерживается (libvips heifload
+//     читает все кадры), но анимированный ВЫХОД НЕ поддерживается: libvips
+//     heifsave пишет multi-page HEIF как отдельные items БЕЗ animation track
+//     (плееры показывают только первый кадр), а нативный libheif HEVC
+//     sequence encoder сломан (assert в libheif 1.23). Поэтому HEIF/HEIC
+//     НЕ входят в Animated(): анимированный вход → HEIF/HEIC выход
+//     кодирует ТОЛЬКО ПЕРВЫЙ кадр (importopts загружает n=1), статичный
+//     HEIF/HEIC — документированное поведение, не ошибка.
 func (f Format) Animated() bool {
 	switch f {
-	case FormatGIF, FormatWebP, FormatAPNG, FormatHEIF, FormatAVIF:
+	case FormatGIF, FormatWebP, FormatAPNG, FormatJPEGXL, FormatAVIF:
 		return true
 	default:
 		return false
