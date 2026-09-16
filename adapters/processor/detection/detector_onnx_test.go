@@ -89,10 +89,10 @@ func TestOnnxDetectorConfidenceClamp(t *testing.T) {
 // будет передан в initORT при загрузке модели. Путь задаётся через
 // конфиг-файл (detection.onnx-runtime-lib), а не через env.
 func TestOnnxDetectorRuntimeLibOption(t *testing.T) {
-	d := NewDetector(Options{OnnxRuntimeLib: "/usr/lib/libonnxruntime.so.1.29.0"})
+	d := NewDetector(Options{OnnxRuntimeLib: "/usr/lib/libonnxruntime.so"})
 	od := d.(*OnnxDetector)
-	if od.opts.OnnxRuntimeLib != "/usr/lib/libonnxruntime.so.1.29.0" {
-		t.Errorf("OnnxRuntimeLib = %q, want /usr/lib/libonnxruntime.so.1.29.0", od.opts.OnnxRuntimeLib)
+	if od.opts.OnnxRuntimeLib != "/usr/lib/libonnxruntime.so" {
+		t.Errorf("OnnxRuntimeLib = %q, want /usr/lib/libonnxruntime.so", od.opts.OnnxRuntimeLib)
 	}
 	// Пустое значение = автодетекция по стандартным путям.
 	d2 := NewDetector(Options{})
@@ -208,6 +208,11 @@ func TestRealInferenceAutodetectNoLibPath(t *testing.T) {
 	d := NewDetector(Options{FaceModel: yunet, ConfidenceThreshold: 0.5})
 	faces, err := d.DetectFaces(context.Background(), rgb, w, h)
 	if err != nil {
+		// Сборка с тегом onnx, но без cgo (CGO_ENABLED=0): реальный
+		// инференс невозможен по определению — skip, а не fail.
+		if strings.Contains(err.Error(), "requires cgo") {
+			t.Skipf("no real ONNX Runtime (cgo) available: %v", err)
+		}
 		t.Fatalf("DetectFaces (autodetect, empty OnnxRuntimeLib): %v", err)
 	}
 	if len(faces) == 0 {

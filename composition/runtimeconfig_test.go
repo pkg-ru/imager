@@ -55,7 +55,7 @@ policy: {}
 detection:
   face-model: /models/face.onnx
   object-model: /models/obj.onnx
-  onnx-runtime-lib: /usr/lib/libonnxruntime.so.1.29.0
+  onnx-runtime-lib: /usr/lib/libonnxruntime.so
   confidence-threshold: 0.6
   max-objects: 10
   margin: 0.2
@@ -69,8 +69,8 @@ detection:
 	if rc.Detection.ObjectModel != "/models/obj.onnx" {
 		t.Errorf("ObjectModel = %q, want /models/obj.onnx", rc.Detection.ObjectModel)
 	}
-	if rc.Detection.OnnxRuntimeLib != "/usr/lib/libonnxruntime.so.1.29.0" {
-		t.Errorf("OnnxRuntimeLib = %q, want /usr/lib/libonnxruntime.so.1.29.0", rc.Detection.OnnxRuntimeLib)
+	if rc.Detection.OnnxRuntimeLib != "/usr/lib/libonnxruntime.so" {
+		t.Errorf("OnnxRuntimeLib = %q, want /usr/lib/libonnxruntime.so", rc.Detection.OnnxRuntimeLib)
 	}
 	if rc.Detection.ConfidenceThreshold != 0.6 {
 		t.Errorf("ConfidenceThreshold = %v, want 0.6", rc.Detection.ConfidenceThreshold)

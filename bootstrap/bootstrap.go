@@ -60,6 +60,9 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 	// Детектор лиц/объектов (face-crop/object-crop). Создаётся всегда из
 	// секции detection.*; при пустых путях к моделям — неактивная заглушка,
 	// и libvips вернёт понятную ошибку при запросе fc/oc без моделей.
+	// Логгер нужен детектору для INFO при успешной автодетекции библиотеки
+	// ONNX Runtime и WARN при fallback с конфиг-пути (detection.SetLogger).
+	detection.SetLogger(logger)
 	det := detection.NewDetector(detection.Options{
 		FaceModel:           rc.Detection.FaceModel,
 		ObjectModel:         rc.Detection.ObjectModel,

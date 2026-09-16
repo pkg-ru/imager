@@ -31,6 +31,36 @@ type Detector interface {
 	Describe() DetectorInfo
 }
 
+// Logger — минимальный интерфейс логирования детектора (совместим с
+// observability.Logger и bootstrap.Logger: достаточно Infof/Warnf).
+// Используется для INFO-сообщения при успешной АВТОДЕТЕКЦИИ библиотеки
+// ONNX Runtime и предупреждений при fallback с конфиг-пути.
+type Logger interface {
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+}
+
+// ortLogger — опциональный логгер (nil = логирование отключено).
+// Устанавливается через SetLogger (см. bootstrap).
+var ortLogger Logger
+
+// SetLogger устанавливает опциональный логгер детектора. Передавайте
+// observability.Logger / bootstrap.Logger — интерфейс совместим.
+func SetLogger(l Logger) { ortLogger = l }
+
+// logORTInfo / logORTWarn — обёртки: не паникуют при nil-логгере.
+func logORTInfo(format string, args ...any) {
+	if ortLogger != nil {
+		ortLogger.Infof(format, args...)
+	}
+}
+
+func logORTWarn(format string, args ...any) {
+	if ortLogger != nil {
+		ortLogger.Warnf(format, args...)
+	}
+}
+
 // DetectorInfo — описание конфигурации детектора. Зеркало
 // detector.DetectorInfo (ports/detector), чтобы пакет detection не зависел
 // от портов.

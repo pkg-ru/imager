@@ -54,8 +54,9 @@ type modelBackend interface {
 //
 // Модели загружаются лениво (при первом DetectFaces/DetectObjects) и
 // кэшируются до завершения процесса: повторные запросы не перечитывают
-// файл модели и не повторяют ошибки загрузки (состояние фиксируется один
-// раз флажком ready).
+// файл модели. Неудачная загрузка фиксируется один раз (флажок ready +
+// сохранённая ошибка), и все последующие вызовы возвращают эту же
+// сохранённую ошибку (обёрнутую), а не generic ErrModelNotConfigured.
 type OnnxDetector struct {
 	opts Options
 
@@ -68,6 +69,12 @@ type OnnxDetector struct {
 	// (успешно или с зафиксированной ошибкой).
 	faceReady   bool
 	objectReady bool
+	// faceLoadErr / objectLoadErr — реальная ошибка первой (неудачной)
+	// загрузки; возвращается при последующих вызовах вместо generic
+	// ErrModelNotConfigured, чтобы не маскировать причину (например,
+	// ошибку initORT из-за неверного пути onnx-runtime-lib).
+	faceLoadErr   error
+	objectLoadErr error
 }
 
 // NewDetector создаёт OnnxDetector из конфигурации. Модели НЕ загружаются
@@ -104,7 +111,7 @@ func (d *OnnxDetector) Describe() DetectorInfo {
 // DetectFaces обнаруживает лица. Модель YuNet загружается лениво при первом
 // вызове и кэшируется на время жизни процесса.
 func (d *OnnxDetector) DetectFaces(ctx context.Context, rgb []byte, width, height int) ([]Box, error) {
-	backend, err := d.load(&d.faceModel, &d.faceReady, d.opts.FaceModel, "face")
+	backend, err := d.load(&d.faceModel, &d.faceReady, &d.faceLoadErr, d.opts.FaceModel, "face")
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +124,7 @@ func (d *OnnxDetector) DetectFaces(ctx context.Context, rgb []byte, width, heigh
 
 // DetectObjects обнаруживает объекты. Модель загружается лениво.
 func (d *OnnxDetector) DetectObjects(ctx context.Context, rgb []byte, width, height int) ([]Box, error) {
-	backend, err := d.load(&d.objectModel, &d.objectReady, d.opts.ObjectModel, "object")
+	backend, err := d.load(&d.objectModel, &d.objectReady, &d.objectLoadErr, d.opts.ObjectModel, "object")
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +137,17 @@ func (d *OnnxDetector) DetectObjects(ctx context.Context, rgb []byte, width, hei
 
 // load загружает модель один раз (double-checked locking): первый вызов
 // выполняет загрузку под mutex, последующие — читают закэшированный
-// результат или возвращают зафиксированную ранее ошибку.
-func (d *OnnxDetector) load(slot *modelBackend, ready *bool, path, kind string) (modelBackend, error) {
+// результат или возвращают сохранённую ошибку первой неудачной загрузки
+// (чтобы реальная причина, например ошибка initORT, не маскировалась
+// generic ErrModelNotConfigured).
+func (d *OnnxDetector) load(slot *modelBackend, ready *bool, loadErr *error, path, kind string) (modelBackend, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if *ready {
 		if *slot == nil {
+			if *loadErr != nil {
+				return nil, fmt.Errorf("detection: model load failed: %w", *loadErr)
+			}
 			return nil, ErrModelNotConfigured
 		}
 		return *slot, nil
@@ -143,6 +155,7 @@ func (d *OnnxDetector) load(slot *modelBackend, ready *bool, path, kind string) 
 	backend, err := d.buildModel(path, kind)
 	*ready = true
 	if err != nil {
+		*loadErr = err
 		return nil, err
 	}
 	*slot = backend

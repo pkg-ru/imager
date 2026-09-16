@@ -3,16 +3,24 @@
 // Кроссплатформенный автодетект библиотеки ONNX Runtime.
 //
 // Список кандидатов зависит от ОС (runtime.GOOS):
-//   - Linux:   libonnxruntime.so, libonnxruntime.so.<version>, onnxruntime.so
-//     в /usr/lib, /usr/local/lib, /opt/onnxruntime/lib
+//   - Linux:   libonnxruntime.so, версионированные libonnxruntime.so.*
+//     (glob), onnxruntime.so — в /usr/lib, /usr/local/lib, /opt/onnxruntime/lib
 //     (+ путь Debian/Ubuntu multiarch /usr/lib/x86_64-linux-gnu);
 //   - Windows: onnxruntime.dll рядом с exe, в %WINDIR%\System32 и в каталоге
 //     установки ONNX Runtime (ProgramFiles);
-//   - macOS:   libonnxruntime.dylib, libonnxruntime.<version>.dylib
-//     в /usr/local/lib, /opt/homebrew/lib, /opt/onnxruntime/lib.
+//   - macOS:   libonnxruntime.dylib, версионированные
+//     libonnxruntime.*.dylib (glob) — в /usr/local/lib, /opt/homebrew/lib,
+//     /opt/onnxruntime/lib.
 //
-// Автодетект выполняется ТОЛЬКО при пустом detection.onnx-runtime-lib:
-// путь из конфиг-файла всегда имеет приоритет (см. initORT в onnx_cgo.go).
+// Список НЕ привязан к конкретной минорной версии: версионированные имена
+// ищутся через glob-паттерны (libonnxruntime.so.* / libonnxruntime.*.dylib),
+// поэтому обновление ONNX Runtime (например, 1.20 -> 1.29) не требует
+// изменений в коде или конфигах.
+//
+// Автодетект выполняется при пустом detection.onnx-runtime-lib, а также как
+// fallback, если указанный в конфиге путь не существует/не загружается
+// (см. initORT в onnx_cgo.go).
+//
 // Файл определён с тегом "onnx" (без cgo), чтобы список кандидатов был
 // доступен в тестах и в сборках с CGO_ENABLED=0.
 package detection
@@ -21,15 +29,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 )
 
-// ortLibVersion — версия ONNX Runtime, чьи версионированные имена файлов
-// ищем в автодетекте. Alpine edge и Homebrew ставят версионированные файлы
-// без голого симлинка (.so / .dylib), поэтому такие имена нужны явно.
-const ortLibVersion = "1.29.0"
-
 // ortLibraryCandidates возвращает возможные пути к библиотеке ONNX Runtime
-// в порядке приоритета для текущей ОС.
+// в порядке приоритета для текущей ОС. Элементы, содержащие glob-метасимволы
+// (* ? [), раскрываются в конкретные существующие файлы функцией
+// expandORTCandidates (версионированные варианты — по убыванию версии).
 //
 // Сохраняется приоритет: путь из конфига (detection.onnx-runtime-lib) →
 // первый СУЩЕСТВУЮЩИЙ кандидат из этого списка → дефолт биндинга
@@ -47,12 +54,12 @@ func ortLibraryCandidates() []string {
 	}
 }
 
-// autodetectORTLib возвращает первый СУЩЕСТВУЮЩИЙ кандидат в
-// ortLibraryCandidates() или "" , если ни один не найден. Вызывается из
-// initORT (onnx_cgo.go) при пустом пути из конфига. Выделена в отдельную
-// функцию для тестируемости.
+// autodetectORTLib возвращает первый СУЩЕСТВУЮЩИЙ кандидат (с раскрытием
+// glob-паттернов) или "", если ни один не найден. Вызывается из initORT
+// (onnx_cgo.go) при пустом пути из конфига и как fallback при неудачной
+// загрузке конфиг-пути. Выделена в отдельную функцию для тестируемости.
 func autodetectORTLib() string {
-	return firstExisting(ortLibraryCandidates())
+	return firstExisting(expandORTCandidates(ortLibraryCandidates()))
 }
 
 // ortLibPathForInit выбирает путь к библиотеке ONNX Runtime для initORT:
@@ -60,11 +67,28 @@ func autodetectORTLib() string {
 // автодетектом; при пустом — автодетекция по платформе; если автодетект не
 // нашёл ни одного файла — возвращается "" (тогда биндинг пробует свой
 // дефолт "onnxruntime.so" / "onnxruntime.dll").
+//
+// Если конфиг-путь не существует как файл, а автодетект нашёл библиотеку —
+// возвращается автодетектированный путь (конфиг-путь при этом логируется
+// как сбойный в initORT).
 func ortLibPathForInit(libPath string) string {
+	if libPath != "" && fileExists(libPath) {
+		return libPath
+	}
+	if alt := autodetectORTLib(); alt != "" {
+		if libPath != "" && alt != libPath {
+			// Конфиг-путь отсутствует на диске — используем автодетект;
+			// предупреждение пишет initORT через логгер.
+			return alt
+		}
+		if libPath == "" {
+			return alt
+		}
+	}
 	if libPath != "" {
 		return libPath
 	}
-	return autodetectORTLib()
+	return ""
 }
 
 // firstExisting возвращает первый путь из paths, являющийся обычным файлом,
@@ -79,6 +103,40 @@ func firstExisting(paths []string) string {
 	return ""
 }
 
+// expandORTCandidates раскрывает glob-паттерны (содержащие * ? [) в список
+// существующих файлов (совпадения сортируются по убыванию, чтобы более
+// высокие версии шли первыми: libonnxruntime.so.1.29.0 раньше
+// libonnxruntime.so.1) и возвращает единый список путей без дубликатов.
+// Не-паттерны переносятся как есть.
+func expandORTCandidates(cands []string) []string {
+	var out []string
+	seen := make(map[string]bool, len(cands))
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, c := range cands {
+		if !strings.ContainsAny(c, "*?[") {
+			add(c)
+			continue
+		}
+		matches, err := filepath.Glob(c)
+		if err != nil {
+			continue // некорректный паттерн — пропускаем
+		}
+		// По убыванию: "1.29.0" лексикографически больше "1.20.0".
+		sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+		for _, m := range matches {
+			if fileExists(m) {
+				add(m)
+			}
+		}
+	}
+	return out
+}
+
 // fileExists проверяет существование обычного файла по пути path.
 // Определена здесь (а не в onnx_cgo.go), чтобы оставаться доступной в
 // сборках "onnx" без cgo (тесты автодетекта).
@@ -90,15 +148,19 @@ func fileExists(path string) bool {
 // ortLinuxCandidates — кандидаты для Linux (разделяемые библиотеки .so).
 func ortLinuxCandidates() []string {
 	return []string{
-		// Alpine edge onnxruntime (musl): версионированный файл без симлинка.
-		filepath.Join("/usr/lib", "libonnxruntime.so."+ortLibVersion),
-		// Дефолт большинства дистрибутивов.
+		// Дефолт большинства дистрибутивов (симлинк на версионный файл).
 		filepath.Join("/usr/lib", "libonnxruntime.so"),
+		// Версионированные файлы без симлинка (Alpine edge onnxruntime/musl
+		// и ручные установки): glob, НЕ привязанный к минорной версии.
+		filepath.Join("/usr/lib", "libonnxruntime.so.*"),
 		filepath.Join("/usr/local/lib", "libonnxruntime.so"),
+		filepath.Join("/usr/local/lib", "libonnxruntime.so.*"),
 		// Debian/Ubuntu multiarch.
 		filepath.Join("/usr/lib", "x86_64-linux-gnu", "libonnxruntime.so"),
+		filepath.Join("/usr/lib", "x86_64-linux-gnu", "libonnxruntime.so.*"),
 		// Кастомная установка (например, из официального tar.gz).
 		filepath.Join("/opt/onnxruntime", "lib", "libonnxruntime.so"),
+		filepath.Join("/opt/onnxruntime", "lib", "libonnxruntime.so.*"),
 		// Дефолт биндинга yalue/onnxruntime_go (dlopen ищет в ld.so / PATH).
 		"onnxruntime.so",
 		"libonnxruntime.so",
@@ -128,13 +190,13 @@ func ortWindowsCandidates() []string {
 // ortDarwinCandidates — кандидаты для macOS (.dylib).
 func ortDarwinCandidates() []string {
 	return []string{
-		// Версионированные имена (Homebrew / ручная установка): файл без
-		// голого симлинка .dylib.
-		filepath.Join("/usr/local/lib", "libonnxruntime."+ortLibVersion+".dylib"),
-		filepath.Join("/opt/homebrew/lib", "libonnxruntime."+ortLibVersion+".dylib"),
 		// Обычные имена (после symlink-сборки или Homebrew).
 		filepath.Join("/usr/local/lib", "libonnxruntime.dylib"),
 		filepath.Join("/opt/homebrew/lib", "libonnxruntime.dylib"),
+		// Версионированные имена без симлинка (Homebrew / ручная установка):
+		// glob, НЕ привязанный к минорной версии.
+		filepath.Join("/usr/local/lib", "libonnxruntime.*.dylib"),
+		filepath.Join("/opt/homebrew/lib", "libonnxruntime.*.dylib"),
 		// Кастомная установка (официальный .pkg / tar.gz).
 		filepath.Join("/opt/onnxruntime", "lib", "libonnxruntime.dylib"),
 		// Голое имя: dyld ищет по DYLD_LIBRARY_PATH и стандартным путям.

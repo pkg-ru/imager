@@ -53,14 +53,37 @@ var (
 // Путь к библиотеке берётся из конфига (detection.onnx-runtime-lib,
 // передаётся через Options.OnnxRuntimeLib), а НЕ из env-переменных
 // ONNXRUNTIME_SHARED_LIBRARY_PATH / ORT_DYLIB_PATH (соглашение проекта:
-// все настройки — через конфиг-файл). Если путь из конфига пуст —
-// выполняется автодетекция по платформе (ort_library.go): Linux (.so),
-// Windows (.dll), macOS (.dylib). Если автодетект не нашёл библиотеку,
-// путь остаётся пустым и биндинг пробует свой дефолт
-// ("onnxruntime.so" / "onnxruntime.dll" в системных путях).
+// все настройки — через конфиг-файл).
+//
+// Fallback-логика:
+//   - конфиг-путь существует как файл → используется как есть (без логов);
+//   - конфиг-путь НЕ существует → WARN + автодетекция по платформе
+//     (ort_library.go): Linux (.so, включая glob версионированных),
+//     Windows (.dll), macOS (.dylib). Успешная автодетекция → INFO с
+//     найденным путём;
+//   - конфиг-путь пуст → автодетекция; успех → INFO с найденным путём;
+//   - автодетект ничего не нашёл → путь остаётся пустым, биндинг пробует
+//     свой дефолт ("onnxruntime.so" / "onnxruntime.dll" в системных путях).
 func initORT(libPath string) error {
 	ortenvOnce.Do(func() {
+		cfgPath := libPath
 		path := ortLibPathForInit(libPath)
+		switch {
+		case path != "" && path == cfgPath:
+			// Путь из конфига существует — используем без логов.
+		case path != "":
+			// Автодетект нашёл библиотеку (конфиг-путь пуст или отсутствует).
+			if cfgPath != "" {
+				logORTWarn("detection: onnx-runtime-lib %q does not exist, falling back to autodetected %q", cfgPath, path)
+			}
+			logORTInfo("detection: ONNX Runtime library autodetected: %s (set detection.onnx-runtime-lib to silence this message)", path)
+		case cfgPath != "":
+			// Конфиг-путь отсутствует, автодетект ничего не нашёл —
+			// оставляем конфиг-путь, чтобы биндинг вернул понятную ошибку
+			// именно по нему.
+			path = cfgPath
+			logORTWarn("detection: onnx-runtime-lib %q does not exist and autodetect found no library, trying configured path anyway", cfgPath)
+		}
 		if path != "" {
 			ort.SetSharedLibraryPath(path)
 		}

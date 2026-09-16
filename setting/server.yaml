@@ -629,9 +629,8 @@ detection:
   # загружаемой через dlopen/LoadLibrary.
   # Пусто = кроссплатформенная автодетекция по стандартным путям
   # (Linux .so / Windows .dll / macOS .dylib); явный путь = жёсткое
-  # переопределение. Задаётся только через конфиг (env
-  # ONNXRUNTIME_SHARED_LIBRARY_PATH не используется).
-  onnx-runtime-lib: "/usr/lib/libonnxruntime.so.1.29.0"
+  # переопределение. Задаётся только через конфиг.
+  onnx-runtime-lib: "/usr/lib/libonnxruntime.so"
 
   # confidence-threshold — порог уверенности детектора в интервале [0,1].
   # Боксы с уверенностью ниже порога отбрасываются (до NMS).

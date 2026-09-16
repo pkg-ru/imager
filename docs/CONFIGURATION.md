@@ -718,11 +718,15 @@ Vips-метрики (`libvips.metrics-interval`) — периодический 
 
 Автодетект библиотеки (`onnx-runtime-lib` пуст) кроссплатформенный и работает на Linux, Windows и macOS:
 
-- **Linux** — ищутся `libonnxruntime.so.1.29.0`, `libonnxruntime.so`, `onnxruntime.so` и `libonnxruntime.so` в `/usr/lib/`, `/usr/lib/x86_64-linux-gnu/`, `/usr/local/lib/`, `/opt/onnxruntime/lib/`;
+- **Linux** — ищутся `libonnxruntime.so`, версионированные `libonnxruntime.so.*` (glob, любая минорная версия — по убыванию) и `onnxruntime.so` в `/usr/lib/`, `/usr/lib/x86_64-linux-gnu/`, `/usr/local/lib/`, `/opt/onnxruntime/lib/`;
 - **Windows** — ищется `onnxruntime.dll` (дефолт биндинга через `LoadLibrary`), рядом с исполняемым файлом, в `%WINDIR%\System32` и в каталоге установки ONNX Runtime (`%ProgramFiles%\onnxruntime\lib\`);
-- **macOS** — ищутся `libonnxruntime.1.29.0.dylib` и `libonnxruntime.dylib` в `/usr/local/lib/`, `/opt/homebrew/lib/`, `/opt/onnxruntime/lib/`, а также голое имя `libonnxruntime.dylib`.
+- **macOS** — ищутся `libonnxruntime.dylib`, версионированные `libonnxruntime.*.dylib` (glob, любая минорная версия) в `/usr/local/lib/`, `/opt/homebrew/lib/`, `/opt/onnxruntime/lib/`, а также голое имя `libonnxruntime.dylib`.
 
 Приоритет: путь из конфига → первый существующий кандидат автодетекта → дефолт биндинга. Если ни один файл не найден, биндинг `github.com/yalue/onnxruntime_go` сам пробует `onnxruntime.so` (Linux/macOS) или `onnxruntime.dll` (Windows) через системные механизмы (ld.so / dyld / LoadLibrary).
+
+Fallback: если указанный в конфиге путь не существует как файл, он автоматически заменяется результатом автодетекта (WARN-сообщение в лог); при пустом значении или сработавшем fallback успешная автодетекция пишется в лог как INFO с найденным путём. Путь из конфига, который существует, но не загружается биндингом, НЕ заменяется автоматически — биндинг вернёт ошибку загрузки по этому пути (её причина видна в сообщении `detection: init onnxruntime: ...`).
+
+Версионированные имена (`libonnxruntime.so.*`, `libonnxruntime.*.dylib`) ищутся через glob-паттерны и НЕ привязаны к конкретной минорной версии: обновление ONNX Runtime не требует правок кода или конфигов. При успешной автодетекции рекомендуется задать `onnx-runtime-lib` явно, чтобы сообщение INFO больше не появлялось.
 
 ## metadata
 
