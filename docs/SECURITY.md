@@ -1,5 +1,7 @@
 # Безопасность
 
+Связанные документы: [POLICIES.md](POLICIES.md) (модель политики), [ARCHITECTURE.md](ARCHITECTURE.md) (место политики и admission control в конвейере), [API.md](API.md) (коды ошибок), [CONFIGURATION.md](CONFIGURATION.md) (параметры), [DEPLOYMENT.md](DEPLOYMENT.md) (hardening контейнера), [OBSERVABILITY.md](OBSERVABILITY.md) (приватность метрик).
+
 ## Политика авторизации (deny-by-default)
 
 Всё запрещено по умолчанию; разрешается только явно покрытое правилами. Реализация — `domain/policy`: конфигурация компилируется в неизменяемую политику на старте (fail-fast при невалидных правилах).
@@ -59,7 +61,7 @@
 
 ### libvips (единственный)
 
-In-process без subprocess; ограничения: `libvips.limits.timeout` (context deadline), `output-bytes` (bounded writer), `concurrency` (слоты одновременных операций; 0 = дефолт 16), `source-bytes` (лимит чтения входа; 0 = дефолт 10 MiB), лимиты кэша и потоков. Тяжёлые ONNX-инференсы (fc/oc) выполняются под отдельным detection-семафором (`libvips.detection.concurrency`, дефолт `max(1, GOMAXPROCS/2)`; `max-wait`, дефолт 5s → при перегрузке fallback center-crop или 503), чтобы не голодать лёгкие операции.
+In-process без subprocess; ограничения: `libvips.limits.timeout` (context deadline), `output-bytes` (bounded writer), `concurrency` (слоты одновременных операций; 0 = дефолт 16), `source-bytes` (лимит чтения входа; 0 = дефолт 10 MiB), лимиты кэша и потоков. Тяжёлые ONNX-инференсы (fc/oc) выполняются под отдельным detection-семафором (`libvips.detection.concurrency`, дефолт `max(1, GOMAXPROCS/2)`; `max-wait`, дефолт 5s). При перегрузке детекции (переполнение очереди ожидания или истечение `max-wait`) запрос **деградирует** к center-crop (graceful degradation, счётчик `imager_detection_degraded_total`), а не получает 503, чтобы не голодать лёгкие операции.
 
 ## HTTP hardening
 

@@ -4,6 +4,8 @@
 
 Живой пример работы сервиса и клиентской части — [онлайн-демо](https://altuh.ru/demo/imager). Клиент для формирования asset URL и обращения к сервису — [imager-client](https://gitverse.ru/pkg-ru/imager-client).
 
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (жизненный цикл запроса), [POLICIES.md](POLICIES.md) (правила генерации), [FORMATS.md](FORMATS.md) (поддерживаемые форматы), [PROCESSING.md](PROCESSING.md), [CONFIGURATION.md](CONFIGURATION.md), [SECURITY.md](SECURITY.md), [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Эндпоинты
 
 | Путь | Методы | Назначение |
@@ -38,7 +40,7 @@
 | `source_format` | Формат исходника: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|apng\|jxl`, а также видео-контейнеры, декодируемые ffmpeg: `mp4\|webm\|mov\|mkv\|avi\|m4v\|mpg\|mpeg\|wmv\|flv\|3gp\|ogv\|ts\|mts\|m2ts` (ассеты из видео строятся из кадра — см. [PROCESSING.md](PROCESSING.md)). APNG-вход читается как анимированный PNG |
 | `segment` | Имя пресета или custom-имя (≤64 символа; буквы, цифры, `_`, `.`, `@`, `-`, `!`, `,`). Дефисы допустимы, кроме имён, конфликтующих с грамматикой URL: `префикс-размер` (`sc-120x80`) и `имя-формат` (`my-png`) запрещены, обычные дефисы (`face-fix`) разрешены. Custom-имя — размер-грамматика: `120x80`, `x400`, `300x`, `x` (исходный размер) |
 | `dpr` | Device pixel ratio; отсутствие = 1; явно допустимы только `2` и `3` (`@1`/`@0` — ошибка) |
-| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|jxl`. APNG-выход не поддерживается (запись требует libvips с libspng). Запрос выхода, совпадающего с исходным форматом (включая видео `mp4`/`webm`/… и `svg`), на сегменте `x` отдаётся как passthrough без обработки. В конфигурации пресетов/customs элемент whitelist-а `output-formats: [auto]` (или `""`) разрешает ТОЛЬКО формат исходника запроса (для видео — jpg); passthrough оригинала видео при `auto` отклоняется — укажите формат явно (`[auto, mp4]`) |
+| `output_format` | Выходной формат: `jpeg\|jpg\|png\|webp\|gif\|avif\|heif\|heic\|jxl`. APNG-выход не поддерживается (запись требует libvips с libspng). Анимированный AVIF поддерживается (libheif ≥ 1.23), анимированный HEIF/HEIC — нет (см. [FORMATS.md](FORMATS.md#важные-ограничения)). Запрос выхода, совпадающего с исходным форматом (включая видео `mp4`/`webm`/… и `svg`), на сегменте `x` отдаётся как passthrough без обработки. В конфигурации пресетов/customs элемент whitelist-а `output-formats: [auto]` (или `""`) разрешает ТОЛЬКО формат исходника запроса (для видео — jpg); passthrough оригинала видео при `auto` отклоняется — укажите формат явно (`[auto, mp4]`) |
 
 Разрешение сегмента описано в [CONFIGURATION.md](CONFIGURATION.md#policy) (path-policies, deny-by-default).
 
@@ -123,7 +125,7 @@ Gzip применяется только к JSON-ответам (error envelope,
 | `431` | — | Заголовки больше `server.max-header-bytes` (текстовое тело, не JSON) |
 | `500` | `processing` | Внутренняя ошибка обработки |
 | `500` | `internal` | Паника в не-asset ветке (admin/health/metrics/static), перехваченная recover-middleware |
-| `501` | `unsupported_format` | Формат/движок недоступен (например, fc/oc без ONNX) |
+| `501` | `unsupported_format` | Выходной формат вне покрытия движка (например, APNG-запись без libspng) |
 | `503` | `overloaded` / `unavailable` | Перегрузка процессоров (`Retry-After` из `http.retry-after`, по умолчанию `1`) или хранилище/координатор недоступны |
 | `503` | — | Admission control (`http.max-concurrent-requests`): текстовое тело `too many requests` (не JSON) и динамический `Retry-After` (число занятых слотов, минимум 1) |
 | `504` | `canceled` | Таймаут генерации (`http.generate-timeout`) или отмена клиента |

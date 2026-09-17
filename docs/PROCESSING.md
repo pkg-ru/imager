@@ -1,5 +1,7 @@
 # Обработка изображений
 
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (общий конвейер), [FORMATS.md](FORMATS.md) (возможности форматов), [AI.md](AI.md) (AI-кропы и детекция), [POLICIES.md](POLICIES.md) (правила генерации), [API.md](API.md), [CONFIGURATION.md](CONFIGURATION.md).
+
 ## Конвейер генерации
 
 Запрос проходит конвейер (`app/generatev2`):

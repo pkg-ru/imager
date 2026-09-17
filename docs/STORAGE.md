@@ -2,6 +2,8 @@
 
 Source и result настраиваются независимо в секциях `source:` и `result:`. Тип задаётся ключом `storage`.
 
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (роль хранилищ в конвейере), [CONFIGURATION.md](CONFIGURATION.md) (секции `source`/`result`/`metadata`), [API.md](API.md) (ключи и URL), [SECURITY.md](SECURITY.md) (защита файловой системы, секреты), [TROUNLESHOOTING.md](TROUNLESHOOTING.md) (диагностика хранилищ).
+
 | Тип | Source | Result | Примечание |
 |-----|--------|--------|------------|
 | `fs` | ✅ | ✅ | Локальная файловая система |
@@ -159,6 +161,15 @@ URL:      https://cdn.example.com/images/foo/bar.jpg
 - размер ограничивается `spool-max-bytes`; при наличии `Content-Length` oversized-объект отклоняется до скачивания;
 - метаданные заполняются из `Content-Length`, `Last-Modified`, `Content-Type`, `ETag`;
 - `base-url` не должен содержать query-параметры или fragment (исключает утечку секретов в URL).
+
+## Remote-буферы (spillable buffer pool)
+
+Для remote-хранилищ (s3/sftp/ftp/ftps) чтение и запись выполняются через пул spillable-буферов (`adapters/storage/remote/buffer.go`):
+
+- данные держатся в памяти до лимита пула, при превышении сбрасываются на диск (spill);
+- бюджет пула — атомарный счётчик (`application.buffer-max-bytes`, по умолчанию 500 MiB);
+- читатели используют refcount: буфер удерживает данные, пока открыт хотя бы один reader (важно для асинхронной публикации — см. [PROCESSING.md](PROCESSING.md#асинхронная-публикация));
+- метрика `imager_buffer_pool_bytes` показывает текущий объём пула.
 
 ## Метаданные детекции (sidecar)
 

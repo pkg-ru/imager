@@ -3,6 +3,8 @@
 Все настройки задаются в YAML. CLI-флагов нет; допускается несколько
 прикладных env-переменных (см. таблицы ниже и секцию `detection`).
 
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (общая архитектура), [POLICIES.md](POLICIES.md) (секция `policy`), [FORMATS.md](FORMATS.md) (секции `encoders`, `video`), [AI.md](AI.md) (секция `detection`), [OBSERVABILITY.md](OBSERVABILITY.md) (секция `observability`), [API.md](API.md), [STORAGE.md](STORAGE.md), [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Загрузка конфигурации
 
 Прикладные env-переменные:
