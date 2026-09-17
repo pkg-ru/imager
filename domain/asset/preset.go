@@ -182,14 +182,69 @@ func (p *Preset) Size() Size { return p.size }
 // OutputFormats возвращает список допустимых выходных форматов.
 func (p *Preset) OutputFormats() []Format { return append([]Format(nil), p.outputFormat...) }
 
-// AllowsOutputFormat сообщает, входит ли формат в список допустимых.
-func (p *Preset) AllowsOutputFormat(f Format) bool {
+// AllowsOutputFormat сообщает, разрешён ли выходной формат f запроса
+// списком output-formats пресета. Элемент "auto" (FormatAuto) разрешает
+// ТОЛЬКО эффективный формат исходника запроса src (для видео — jpeg,
+// т.к. ассет из видео строится из извлечённого JPEG-кадра; для картинок —
+// канонический формат исходника). Явные форматы списка сравниваются
+// канонически (алиасы jpg→jpeg, heic→heif нормализуются в обеих сторонах).
+// src может быть "" (нет в запросе) — тогда auto не совпадает ни с чем.
+func (p *Preset) AllowsOutputFormat(f, src Format) bool {
+	if f == "" {
+		return false
+	}
+	canonicalSrc := effectiveSourceFormat(src)
 	for _, of := range p.outputFormat {
-		if of == f {
-			return true
+		switch of {
+		case FormatAuto:
+			if canonicalOutputFormat(f) == canonicalSrc {
+				return true
+			}
+		default:
+			if canonicalOutputFormat(f) == canonicalOutputFormat(of) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// effectiveSourceFormat возвращает ЭФФЕКТИВНЫЙ формат исходника для
+// сравнения с элементом "auto" whitelist-а: для видео-исходников — jpeg
+// (ассет из видео строится из извлечённого JPEG-кадра), для картинок —
+// канонический формат (алиасы jpg→jpeg, heic→heif нормализуются).
+// Пустая строка возвращается как есть (auto не совпадает ни с чем).
+func effectiveSourceFormat(src Format) Format {
+	s := string(src)
+	if s == "" {
+		return ""
+	}
+	if processing.IsVideoFormat(s) {
+		return Format(processing.FormatJPEG)
+	}
+	if cf, err := processing.ParseFormat(s); err == nil {
+		return Format(cf)
+	}
+	return Format(strings.ToLower(s))
+}
+
+// canonicalOutputFormat приводит формат к канонической форме для сравнения
+// в whitelist-е output-formats: алиасы картинок нормализуются через
+// processing.ParseFormat (jpg→jpeg, heic→heif, jpegxl→jxl), видео-форматы
+// (для которых ParseFormat не определён) возвращаются в нижнем регистре
+// как есть. Пустая строка возвращается как есть.
+func canonicalOutputFormat(f Format) Format {
+	s := string(f)
+	if s == "" {
+		return ""
+	}
+	if processing.IsVideoFormat(s) {
+		return Format(strings.ToLower(s))
+	}
+	if cf, err := processing.ParseFormat(s); err == nil {
+		return Format(cf)
+	}
+	return Format(strings.ToLower(s))
 }
 
 // DPR возвращает фиксированный DPR пресета (0 = не задан).
@@ -359,7 +414,7 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 			Reason:      "preset not found",
 		}
 	}
-	if !p.AllowsOutputFormat(req.outputFormat) {
+	if !p.AllowsOutputFormat(req.outputFormat, req.sourceFormat) {
 		return nil, &ResolveError{
 			SegmentName: segmentName,
 			PresetName:  segmentName,

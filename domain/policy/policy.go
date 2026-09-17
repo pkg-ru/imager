@@ -332,7 +332,7 @@ func (p *Policy) applyPreset(req *asset.Request, pr *asset.Preset, segment strin
 		dpr = asset.DefaultDPR
 	}
 
-	if !pr.AllowsOutputFormat(req.OutputFormats()) {
+	if !pr.AllowsOutputFormat(req.OutputFormats(), req.SourceFormat()) {
 		return nil, Decision{
 			Allowed: false,
 			Reason:  ReasonFormatNotAllowed,

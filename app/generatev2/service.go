@@ -744,7 +744,7 @@ func (s *Service) generateLocked(ctx context.Context, key object.ObjectKey, req 
 	// кадра видео (извлечённого через VideoExtractor или закэшированного
 	// x.jpg), а не из самого видео (процессоры не умеют декодировать
 	// видео). Оригинал видео отдаётся как есть через serveOriginal выше.
-	if isVideoFormat(req.SourceFormat().String()) {
+	if processing.IsVideoFormat(req.SourceFormat().String()) {
 		return s.generateVideoLocked(ctx, key, req)
 	}
 
@@ -1478,7 +1478,7 @@ func isOriginalRequest(req *asset.Request) bool {
 // не знает) возвращает нижний регистр как есть.
 func normalizeFormatForCompare(f string) string {
 	lower := strings.ToLower(f)
-	if isVideoFormat(lower) {
+	if processing.IsVideoFormat(lower) {
 		return lower
 	}
 	if parsed, err := processing.ParseFormat(lower); err == nil {

@@ -497,3 +497,93 @@ func TestParsePresetNameSpecialChars(t *testing.T) {
 		t.Errorf("resolved Size = %q, want 120x80", got)
 	}
 }
+
+// TestAllowsOutputFormatAuto — семантика элемента "auto" (FormatAuto) в
+// output-formats: разрешает ТОЛЬКО эффективный формат исходника (для видео
+// — jpeg, т.к. ассет из видео строится из JPEG-кадра); явные форматы
+// сравниваются канонически (алиасы jpg→jpeg нормализуются).
+func TestAllowsOutputFormatAuto(t *testing.T) {
+	autoOnly, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
+		[]Format{FormatAuto}, 0, false, 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPreset auto: %v", err)
+	}
+	mixed, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
+		[]Format{FormatAuto, mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPreset auto+webp: %v", err)
+	}
+	explicit, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
+		[]Format{mustFormat(t, "jpg")}, 0, false, 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPreset jpg: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		p    *Preset
+		f    Format
+		src  Format
+		want bool
+	}{
+		// auto: картинка-исходник — совпадение канонического формата.
+		{"auto: png source, png out", autoOnly, "png", "png", true},
+		{"auto: jpg source, jpg out (alias)", autoOnly, "jpg", "jpg", true},
+		{"auto: jpg source, jpeg out", autoOnly, "jpeg", "jpg", true},
+		{"auto: heic source, heif out", autoOnly, "heif", "heic", true},
+		// auto: видео-исходник — эффективный формат jpeg (кадр).
+		{"auto: mp4 source, jpg out", autoOnly, "jpg", "mp4", true},
+		{"auto: mp4 source, jpeg out", autoOnly, "jpeg", "mp4", true},
+		{"auto: mp4 source, mp4 out (passthrough)", autoOnly, "mp4", "mp4", false},
+		{"auto: webm source, webm out", autoOnly, "webm", "webm", false},
+		// auto: чужой формат отклоняется.
+		{"auto: png source, webp out", autoOnly, "webp", "png", false},
+		{"auto: empty source", autoOnly, "png", "", false},
+		{"auto: empty out", autoOnly, "", "png", false},
+		// Микс [auto, webp].
+		{"mix: png source, png out", mixed, "png", "png", true},
+		{"mix: png source, webp out", mixed, "webp", "png", true},
+		{"mix: png source, gif out", mixed, "gif", "png", false},
+		// Явный формат без auto: алиасы нормализуются в обеих сторонах.
+		{"explicit: jpg list, jpeg out", explicit, "jpeg", "png", true},
+		{"explicit: jpg list, webp out", explicit, "webp", "png", false},
+	}
+	for _, tt := range tests {
+		if got := tt.p.AllowsOutputFormat(tt.f, tt.src); got != tt.want {
+			t.Errorf("%s: AllowsOutputFormat(%q, %q) = %v, want %v",
+				tt.name, tt.f, tt.src, got, tt.want)
+		}
+	}
+}
+
+// TestResolveAutoOutputFormat — end-to-end: пресет с output-formats [auto]
+// разрешает запрос с форматом исходника и отклоняет чужой формат.
+func TestResolveAutoOutputFormat(t *testing.T) {
+	p, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
+		[]Format{FormatAuto}, 0, false, 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPreset: %v", err)
+	}
+	set, err := NewPresetSet([]*Preset{p})
+	if err != nil {
+		t.Fatalf("NewPresetSet: %v", err)
+	}
+
+	// Совпадение с исходником (png → png) — разрешено.
+	req, err := Parse("/photos/photo-1-png/thumb.png")
+	if err != nil {
+		t.Fatalf("Parse png: %v", err)
+	}
+	if _, err := set.Resolve(req); err != nil {
+		t.Fatalf("Resolve png→png: %v", err)
+	}
+
+	// Чужой формат (png → webp) — отклонено.
+	req, err = Parse("/photos/photo-1-png/thumb.webp")
+	if err != nil {
+		t.Fatalf("Parse webp: %v", err)
+	}
+	if _, err := set.Resolve(req); err == nil {
+		t.Fatal("Resolve png→webp: expected error, got nil")
+	}
+}

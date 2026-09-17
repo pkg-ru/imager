@@ -127,6 +127,13 @@ func (n SourceName) String() string { return string(n) }
 // Format — формат файла (source или output).
 type Format string
 
+// FormatAuto — маркер "auto" в списке output-formats конфигурации: элемент
+// whitelist-а, разрешающий ТОЛЬКО формат исходника запроса (для видео —
+// jpg, т.к. ассет из видео строится из извлечённого JPEG-кадра). В URL
+// формат auto недопустим (не валиден как расширение); auto может
+// соседствовать с явными форматами: output-formats: [auto, webp].
+const FormatAuto Format = "auto"
+
 // NewFormat создаёт Format с валидацией длины и символов.
 func NewFormat(s string) (Format, error) {
 	if err := validateComponent("format", s, formatChars, MaxFormatLen); err != nil {

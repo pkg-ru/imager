@@ -74,7 +74,9 @@ func TestValidateConfigInvalid(t *testing.T) {
 		{PathPolicies: map[string]PathPolicyConfig{"a": {}, "/a/": {}}},
 		// Пресеты: пустое имя (пустой ключ map).
 		{Presets: map[string]PresetConfig{"": {OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
-		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("")}}}},
+		// Формат из недопустимых символов — ошибка (пустая строка —
+		// валидный элемент "auto", см. TestValidateConfigValidAutoFormats).
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("web p")}}}},
 		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{}}}},
 		// Недопустимые значения crop.
 		{Presets: map[string]PresetConfig{"a": {Crop: dynamic.String("bogus"), OutputFormats: dynamic.StringSlice{dynamic.String("webp")}}}},
@@ -113,6 +115,25 @@ func TestValidateConfigInvalid(t *testing.T) {
 	for _, c := range invalid {
 		if err := ValidateConfig(c); err == nil {
 			t.Errorf("ValidateConfig(%+v) expected error", c)
+		}
+	}
+}
+
+// TestValidateConfigValidAutoFormats — "auto" и "" в output-formats валидны
+// (элемент, разрешающий формат исходника запроса), в том числе в смеси
+// с явными форматами.
+func TestValidateConfigValidAutoFormats(t *testing.T) {
+	valid := []*Config{
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("auto")}}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("")}}}},
+		{Presets: map[string]PresetConfig{"a": {OutputFormats: dynamic.StringSlice{dynamic.String("auto"), dynamic.String("webp")}}}},
+		{PathPolicies: map[string]PathPolicyConfig{"/": {Customs: map[string]PresetConfig{
+			"200x200": {OutputFormats: dynamic.StringSlice{dynamic.String(""), dynamic.String("png")}},
+		}}}},
+	}
+	for _, c := range valid {
+		if err := ValidateConfig(c); err != nil {
+			t.Errorf("ValidateConfig(%+v) unexpected error: %v", c, err)
 		}
 	}
 }

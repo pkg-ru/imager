@@ -311,12 +311,15 @@ func validatePresetConfig(errs *ValidationErrors, base, name string, p PresetCon
 		})
 	}
 
-	// Output-format: непустой список допустимых форматов.
+	// Output-format: непустой список допустимых форматов. Помимо явных
+	// форматов допускается "auto" (и пустая строка "") — элемент, разрешающий
+	// ТОЛЬКО формат исходника запроса (для видео — jpg): ассет из видео
+	// строится из извлечённого JPEG-кадра.
 	if len(p.OutputFormats) == 0 {
 		*errs = append(*errs, &ValidationError{Path: base + ".output-formats", Reason: "output format list is empty"})
 	}
 	for i, f := range p.OutputFormats {
-		if _, err := asset.NewFormat(f.Unwrap()); err != nil {
+		if err := validateOutputFormatEntry(f.Unwrap()); err != nil {
 			*errs = append(*errs, &ValidationError{
 				Path:   fmt.Sprintf("%s.output-formats[%d]", base, i),
 				Reason: err.Error(),
@@ -753,14 +756,33 @@ func sizeFromCustom(name string, cfg PresetConfig) (asset.Size, error) {
 	return asset.NewSize(dw, dh)
 }
 
-// formatsFromConfig собирает список допустимых выходных форматов.
+// validateOutputFormatEntry проверяет один элемент списка output-formats:
+// "auto" (и "" — эквивалент auto) разрешает формат исходника запроса,
+// остальное должно быть валидным форматом (asset.NewFormat).
+func validateOutputFormatEntry(s string) error {
+	if s == "" || s == string(asset.FormatAuto) {
+		return nil
+	}
+	if _, err := asset.NewFormat(s); err != nil {
+		return err
+	}
+	return nil
+}
+
+// formatsFromConfig собирает список допустимых выходных форматов. Элементы
+// "auto" и "" маппятся в asset.FormatAuto (разрешение формата исходника).
 func formatsFromConfig(list dynamic.StringSlice) ([]asset.Format, error) {
 	if len(list) == 0 {
 		return nil, fmt.Errorf("output format list is empty")
 	}
 	out := make([]asset.Format, 0, len(list))
 	for _, s := range list {
-		f, err := asset.NewFormat(s.Unwrap())
+		v := s.Unwrap()
+		if v == "" || v == string(asset.FormatAuto) {
+			out = append(out, asset.FormatAuto)
+			continue
+		}
+		f, err := asset.NewFormat(v)
 		if err != nil {
 			return nil, err
 		}

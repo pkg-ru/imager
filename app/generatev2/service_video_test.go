@@ -12,6 +12,7 @@ import (
 	"gitverse.ru/pkg-ru/imager/domain/asset"
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 	"gitverse.ru/pkg-ru/imager/domain/object"
+	"gitverse.ru/pkg-ru/imager/domain/processing"
 	"gitverse.ru/pkg-ru/imager/ports/metadata"
 )
 
@@ -392,18 +393,24 @@ func TestVideoOptionsPassedToExtractor(t *testing.T) {
 	}
 }
 
-// TestIsVideoFormat — распознавание видео-форматов и не-видео.
+// TestIsVideoFormat — распознавание видео-форматов и не-видео
+// (processing.IsVideoFormat).
 func TestIsVideoFormat(t *testing.T) {
-	video := []string{"mp4", "webm", "mov", "mkv", "avi", "m4v", "MP4", "WebM", "MOV"}
+	video := []string{
+		"mp4", "webm", "mov", "mkv", "avi", "m4v",
+		"mpg", "mpeg", "wmv", "flv", "3gp", "ogv",
+		"ts", "mts", "m2ts",
+		"MP4", "WebM", "MOV", "M2TS",
+	}
 	for _, f := range video {
-		if !isVideoFormat(f) {
-			t.Errorf("isVideoFormat(%q) = false, want true", f)
+		if !processing.IsVideoFormat(f) {
+			t.Errorf("IsVideoFormat(%q) = false, want true", f)
 		}
 	}
-	nonVideo := []string{"jpg", "jpeg", "png", "webp", "gif", "svg", "html", "txt"}
+	nonVideo := []string{"jpg", "jpeg", "png", "webp", "gif", "apng", "svg", "html", "txt", ""}
 	for _, f := range nonVideo {
-		if isVideoFormat(f) {
-			t.Errorf("isVideoFormat(%q) = true, want false", f)
+		if processing.IsVideoFormat(f) {
+			t.Errorf("IsVideoFormat(%q) = true, want false", f)
 		}
 	}
 }

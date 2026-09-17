@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"time"
 
 	"gitverse.ru/pkg-ru/imager/domain/asset"
@@ -17,25 +16,12 @@ import (
 	"gitverse.ru/pkg-ru/imager/ports/videoframe"
 )
 
-// videoFormats — множество видео-форматов, для которых ассеты генерируются
-// из ОДНОГО кадра (извлечённого через VideoExtractor), а не из самого видео
-// (процессоры не умеют декодировать видео).
-var videoFormats = map[string]struct{}{
-	"mp4": {}, "webm": {}, "mov": {}, "mkv": {}, "avi": {}, "m4v": {},
-}
-
 // videoExtractTimeout — собственный таймаут извлечения кадра из видео
 // (ffmpeg). Извлечение выполняется на detached-контексте
 // (context.WithoutCancel): разрыв клиента не должен прерывать извлечение
 // (иначе кадр теряется и следующий запрос повторяет дорогую ffmpeg-работу).
 // ffmpeg может быть медленным для больших видео, поэтому таймаут щедрый.
 const videoExtractTimeout = 60 * time.Second
-
-// isVideoFormat сообщает, является ли формат (расширение) видео-источником.
-func isVideoFormat(f string) bool {
-	_, ok := videoFormats[strings.ToLower(f)]
-	return ok
-}
 
 // videoFrameKey строит ключ ассета кадра (x.jpg) для видео-источника.
 // Ключ вида "<видео-ключ>/x.jpg" — ассет без параметров, лежащий рядом с
