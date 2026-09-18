@@ -1805,6 +1805,25 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportHeif(p)
 		return out, err
 	case processing.FormatJPEGXL:
+		// JXL поддерживает анимацию: jxlsave пишет multi-page изображения
+		// как animation (кадры загружены с NumPages=-1, page-height < высоты
+		// стека). Регрессия (как у heifsave/pngsave при strip=true,
+		// см. ветки FormatGIF/FormatAPNG): jxlsave при strip не переносит
+		// метаданные анимации (n-pages/delay/loop) в выходной файл — JXL
+		// содержит кадры, но читается как статичное изображение. Обход:
+		// перед экспортом пересчитываем n-pages из геометрии стека
+		// (H / page-height) и восстанавливаем рассинхронизированные значения.
+		// Для одиночного изображения результат — статичный JXL (валидный).
+		ph := img.PageHeight()
+		H := img.Height()
+		if ph > 0 && H > ph {
+			n := H / ph
+			if img.Pages() != n {
+				if err := img.SetPages(n); err != nil {
+					return nil, fmt.Errorf("libvips: jxl restore n-pages: %w", err)
+				}
+			}
+		}
 		p := vips.NewJxlExportParams()
 		p.Quality = resolved.Quality
 		p.StripMetadata = true

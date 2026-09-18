@@ -164,7 +164,11 @@ int set_jp2kload_options(VipsOperation *operation, LoadParams *params) {
 }
 
 int set_jxlload_options(VipsOperation *operation, LoadParams *params) {
-  // nothing need to do
+  // page: int, n: int — multi-page/animated JXL (animation frames are
+  // stored as pages; n=-1 loads all frames, page-height < image height).
+  MAYBE_SET_INT(operation, params->page, "page");
+  MAYBE_SET_INT(operation, params->n, "n");
+  MAYBE_SET_INT(operation, params->access, "access");
   return 0;
 }
 
