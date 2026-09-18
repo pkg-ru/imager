@@ -105,7 +105,7 @@ func (b *libvipsBackend) exportAnimatedAvif(img *vips.ImageRef, resolved encodin
 	//
 	// Формат выхода и параметры кодирования не меняются: та же цепочка
 	// операций на кадр, тот же порядок AddFrame, тот же duration.
-	err := runAvifFramePipeline(
+	err = runAvifFramePipeline(
 		nil, n, b.frameWorkers,
 		// makeFrame: последовательное создание кадра i из стека
 		// (одиночное изображение высотой ph, как в withFrames).
