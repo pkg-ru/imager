@@ -1,0 +1,42 @@
+# Нормализация окончаний строк.
+#
+# Зачем: gofmt-джоба CI (gofmt -l .) выполняется в Linux-контейнере и
+# требует LF. Без явного правила файлы, отредактированные на Windows с
+# core.autocrlf=true, попадают в чекаут с CRLF и gofmt помечает их как
+# неформатированные (ложное падение CI).
+#
+# Репозиторий хранит LF; при чекауте на Windows Go-файлы остаются LF
+# (gofmt-совместимо), текстовые файлы Windows-инструментов — CRLF.
+* text=auto
+
+# Go: всегда LF (gofmt).
+*.go text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# Shell-скрипты: всегда LF (sh не принимает CRLF).
+*.sh text eol=lf
+
+# Windows-специфика: CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# YAML/Markdown/конфиги: LF.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+Dockerfile text eol=lf
+Makefile text eol=lf
+
+# Бинарники.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.heic binary
+*.onnx binary
