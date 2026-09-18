@@ -2199,7 +2199,20 @@ func compositeWatermarkOnce(target *vips.ImageRef, tile *vips.ImageRef, pts []pr
 // многокадрового изображения и собирает кадры обратно в вертикальный стек.
 // Механика разборки/сборки анимации инкапсулирована в withFrames; каждый кадр
 // получает ЕДИНЫЙ композит всех копий (см. compositeWatermarkOnce).
+//
+// ВАЖНО: wmImg общий для всех кадров-горутин, поэтому выравнивание числа
+// каналов ватермарки (AddAlpha — мутация ImageRef) выполняется ЗДЕСЬ, до
+// параллельной фазы, ровно один раз. Внутри compositeWatermarkOnce ветка
+// tile.AddAlpha() при параллельном вызове была бы data race (write
+// setImage в одной горутине против read toVipsCompositeStructs в другой)
+// и источником порчи кадров (VipsRegion: images do not match in pixel size).
+// Кадры f уникальны per-goroutine, поэтому target.AddAlpha() там безопасен.
 func (b *libvipsBackend) compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
+	if wmImg.Bands() < img.Bands() {
+		if err := wmImg.AddAlpha(); err != nil {
+			return nil, fmt.Errorf("libvips: watermark: add alpha to watermark: %w", err)
+		}
+	}
 	n := img.Pages()
 	return b.withFrames(img, func(f *vips.ImageRef, i int) error {
 		if err := compositeWatermarkOnce(f, wmImg, pts); err != nil {
