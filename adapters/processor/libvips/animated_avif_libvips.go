@@ -82,38 +82,80 @@ func (b *libvipsBackend) exportAnimatedAvif(img *vips.ImageRef, resolved encodin
 	}
 	defer enc.Close()
 
-	// Кадры извлекаются последовательно из стека; каждый кадр —
-	// одиночное изображение высотой ph (как в withFrames).
-	for i := 0; i < n; i++ {
-		f, err := img.Copy()
-		if err != nil {
-			return nil, fmt.Errorf("libvips: animated avif: copy frame %d/%d: %w", i+1, n, err)
-		}
-		if err := f.SetPageHeight(H); err != nil {
+	// Конвейер покадровой подготовки (см. avifpipeline.go):
+	//   - dispatcher (последовательно): Copy → SetPageHeight → ExtractArea —
+	//     операции над общим стеком img, img.Copy() из горутин небезопасен;
+	//   - workers (параллельно): RawRGBAPixels — тяжёлый CPU-bound дрейн
+	//     пикселей, основной выигрыш конвейеризации;
+	//   - consumer (последовательно): enc.AddFrame строго в порядке кадров
+	//     (libheif-контекст/трек один на ассет, AddFrame не потокобезопасен).
+	//
+	// Лимит воркеров — тот же, что у кадрового семафора withFrames
+	// (b.frameWorkers из libvips.frame-workers.workers): параллелится та же
+	// природа работы (vips-операции на кадрах), тот же бюджет памяти/CPU.
+	// Свой кадровый семафор b.frameSem здесь НЕ захватывается: конвейер уже
+	// ограничивает одновременные vips-операции на кадрах значением workers,
+	// а захват общего семафора добавил бы AVIF-экспорту риск tooManyErr
+	// (очередь ожидания frameSem ограничена), которого не было на
+	// последовательном пути.
+	//
+	// Память: «в полёте» не более workers кадров (vips-изображение +
+	// пиксельный буфер) независимо от скорости AddFrame; все кадры сразу
+	// не буферизуются.
+	//
+	// Формат выхода и параметры кодирования не меняются: та же цепочка
+	// операций на кадр, тот же порядок AddFrame, тот же duration.
+	err := runAvifFramePipeline(
+		nil, n, b.frameWorkers,
+		// makeFrame: последовательное создание кадра i из стека
+		// (одиночное изображение высотой ph, как в withFrames).
+		func(i int) (*vips.ImageRef, error) {
+			f, err := img.Copy()
+			if err != nil {
+				return nil, fmt.Errorf("libvips: animated avif: copy frame %d/%d: %w", i+1, n, err)
+			}
+			if err := f.SetPageHeight(H); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("libvips: animated avif: set page height frame %d/%d: %w", i+1, n, err)
+			}
+			if err := f.ExtractArea(0, i*ph, W, ph); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("libvips: animated avif: extract frame %d/%d: %w", i+1, n, err)
+			}
+			return f, nil
+		},
+		// drain: параллельная материализация пикселей. Владеет кадром:
+		// закрывает его всегда (в т.ч. при ошибке).
+		func(f *vips.ImageRef, i int) (avifFramePixels, error) {
+			pixels, hasAlpha, err := f.RawRGBAPixels()
 			f.Close()
-			return nil, fmt.Errorf("libvips: animated avif: set page height frame %d/%d: %w", i+1, n, err)
-		}
-		if err := f.ExtractArea(0, i*ph, W, ph); err != nil {
+			if err != nil {
+				return avifFramePixels{}, fmt.Errorf("libvips: animated avif: frame %d/%d pixels: %w", i+1, n, err)
+			}
+			// Duration кадра: delay[i] мс; при отсутствии/нуле — 100 мс
+			// (дефолт GIF-подобной анимации, libvips использует 100 мс
+			// для кадров без delay).
+			d := 100
+			if i < len(delay) && delay[i] > 0 {
+				d = delay[i]
+			}
+			return avifFramePixels{pixels: pixels, hasAlpha: hasAlpha, duration: uint32(d)}, nil
+		},
+		// consume: единственное место вызова AddFrame — строго в порядке
+		// кадров, из одной горутины (потокобезопасность libheif).
+		func(p avifFramePixels, i int) error {
+			if err := enc.AddFrame(p.pixels, p.hasAlpha, p.duration); err != nil {
+				return fmt.Errorf("libvips: animated avif: encode frame %d/%d: %w", i+1, n, err)
+			}
+			return nil
+		},
+		// discard: кадр не дошёл до drain (остановка конвейера) — освобождаем.
+		func(f *vips.ImageRef) {
 			f.Close()
-			return nil, fmt.Errorf("libvips: animated avif: extract frame %d/%d: %w", i+1, n, err)
-		}
-
-		pixels, hasAlpha, err := f.RawRGBAPixels()
-		f.Close()
-		if err != nil {
-			return nil, fmt.Errorf("libvips: animated avif: frame %d/%d pixels: %w", i+1, n, err)
-		}
-
-		// Duration кадра: delay[i] мс; при отсутствии/нуле — 100 мс
-		// (дефолт GIF-подобной анимации, libvips использует 100 мс для
-		// кадров без delay).
-		d := 100
-		if i < len(delay) && delay[i] > 0 {
-			d = delay[i]
-		}
-		if err := enc.AddFrame(pixels, hasAlpha, uint32(d)); err != nil {
-			return nil, fmt.Errorf("libvips: animated avif: encode frame %d/%d: %w", i+1, n, err)
-		}
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := enc.Finish(); err != nil {

@@ -198,6 +198,10 @@ type Options struct {
 	// тяжёлые CPU-bound ONNX-инференсы выполняются вне libvips-слотов.
 	// Нулевое значение = дефолты (см. DetectionSemaphoreOpts.Normalized).
 	DetectionSem DetectionSemaphoreOpts
+	// FrameSem — настройки кадрового семафора: параллелизм fn на кадрах
+	// внутри withFrames (worker pool покадровой обработки анимаций).
+	// Нулевое значение = дефолты (см. FrameSemaphoreOpts.Normalized).
+	FrameSem FrameSemaphoreOpts
 	// VipsMetricsInterval — интервал периодического сбора vips-метрик.
 	// 0 = дефолт observability.DefaultVipsMetricsInterval.
 	VipsMetricsInterval time.Duration
@@ -303,6 +307,9 @@ func New(opts Options) (*Processor, error) {
 	}
 	if err := opts.DetectionSem.Validate(); err != nil {
 		return nil, fmt.Errorf("libvips: detection semaphore: %w", err)
+	}
+	if err := opts.FrameSem.Validate(); err != nil {
+		return nil, fmt.Errorf("libvips: frame semaphore: %w", err)
 	}
 	detOpts := opts.DetectionSem.Normalized()
 	bk, err := newBackend(opts)

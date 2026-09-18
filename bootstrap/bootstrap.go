@@ -91,6 +91,7 @@ func BuildProcessor(logger Logger, rc *composition.RuntimeConfig) (*ProcessorBui
 		OperationCache:      rc.Libvips.OperationCache,
 		WatermarkCache:      rc.Libvips.WatermarkCache,
 		DetectionSem:        rc.Libvips.DetectionSem,
+		FrameSem:            rc.Libvips.FrameSem,
 		VipsMetricsInterval: rc.Libvips.VipsMetricsInterval,
 		// Фильтрация логов libvips/govips по configured observability.log-level:
 		// без этого govips пишет info-сообщения ([govips.info]/[VIPS.info])

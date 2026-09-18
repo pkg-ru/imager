@@ -19,6 +19,7 @@ import (
 	"github.com/davidbyttow/govips/v2/vips"
 
 	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
+	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
 	"gitverse.ru/pkg-ru/imager/domain/filemeta"
 	"gitverse.ru/pkg-ru/imager/domain/processing"
 	"gitverse.ru/pkg-ru/imager/observability"
@@ -41,6 +42,14 @@ type libvipsBackend struct {
 	// экземпляру backend, поэтому несколько Processor с разными
 	// WatermarkCacheOpts не влияют друг на друга.
 	wmCache *watermarkCache
+	// frameSem — кадровый семафор: ограничивает параллелизм fn на кадрах
+	// внутри withFrames (worker pool). ОТДЕЛЬНЫЙ от основного libvips-gate:
+	// иначе 8 запросов × 8 кадров = 64 одновременных vips-операции.
+	// См. framesemaphore.go.
+	frameSem *shared.Semaphore
+	// frameWorkers — нормализованный лимит кадровых воркеров
+	// (min(n, opts.FrameSem.Workers)); 1 = последовательный путь.
+	frameWorkers int
 }
 
 var _ backend = (*libvipsBackend)(nil)
@@ -79,6 +88,13 @@ func newLibvipsBackend(opts Options) (backend, error) {
 		opts:    opts,
 		wmCache: newWatermarkCache(opts.WatermarkCache),
 	}
+	// Кадровый семафор: fail-fast валидация + нормализация дефолтов
+	// (min(GOMAXPROCS, 4), клэмп до [1, MaxFrameWorkers]).
+	if err := opts.FrameSem.Validate(); err != nil {
+		return nil, fmt.Errorf("libvips: frame semaphore: %w", err)
+	}
+	b.frameWorkers = opts.FrameSem.Normalized().Workers
+	b.frameSem = newFrameSemaphore(opts.FrameSem)
 	// Vips-метрики: регистрируем провайдер снимков libvips +
 	// кэша ватермарок этого движка в observability (периодический сборщик,
 	// отказоустойчивый). Повторное создание движка заменяет провайдер.
@@ -458,7 +474,7 @@ func premultiplyResize(img *vips.ImageRef, fn func() error) error {
 // выхода. Для одиночных изображений — напрямую (прежнее поведение).
 // Возвращает ImageRef-результат: для анимации это НОВОЕ изображение
 // (вызывающий закрывает старое).
-func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*vips.ImageRef, error) {
+func (b *libvipsBackend) thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*vips.ImageRef, error) {
 	ph := img.PageHeight()
 	if !(img.Pages() > 1 && ph > 0 && img.Height() > ph) {
 		if err := premultiplyResize(img, func() error {
@@ -469,7 +485,7 @@ func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*
 		return img, nil
 	}
 	n := img.Pages()
-	base, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+	base, err := b.withFrames(img, func(f *vips.ImageRef, i int) error {
 		// Кадр из withFrames — одиночное изображение высотой ph, но с
 		// унаследованными анимационными метаданными стека (n-pages > 1,
 		// page-height == ph). Выравниваем метаданные под одиночное
@@ -548,7 +564,7 @@ func thumbnailCropFrames(img *vips.ImageRef, w, h int, crop vips.Interesting) (*
 //
 // Возвращает ImageRef-результат: для анимации это НОВОЕ изображение
 // (вызывающий закрывает старое).
-func resizeEmbedFrames(img *vips.ImageRef, w, h int, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
+func (b *libvipsBackend) resizeEmbedFrames(img *vips.ImageRef, w, h int, plan *processing.ProcessingPlan) (*vips.ImageRef, error) {
 	ph := img.PageHeight()
 	if !(img.Pages() > 1 && ph > 0 && img.Height() > ph) {
 		if err := resizeEmbedFrame(img, w, h, plan); err != nil {
@@ -557,7 +573,7 @@ func resizeEmbedFrames(img *vips.ImageRef, w, h int, plan *processing.Processing
 		return img, nil
 	}
 	n := img.Pages()
-	base, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+	base, err := b.withFrames(img, func(f *vips.ImageRef, i int) error {
 		// Кадр из withFrames — одиночное изображение высотой ph, но с
 		// унаследованными анимационными метаданными стека (n-pages > 1,
 		// page-height == ph). Выравниваем метаданные под одиночное
@@ -756,7 +772,7 @@ func (b *libvipsBackend) applyOrientation(ctx context.Context, img *vips.ImageRe
 			return nil, fmt.Errorf("libvips: flip horizontal: %w", err)
 		}
 	case processing.FlipVertical:
-		newImg, err := flipVertical(img)
+		newImg, err := b.flipVertical(img)
 		if err != nil {
 			return nil, fmt.Errorf("libvips: flip vertical: %w", err)
 		}
@@ -772,7 +788,7 @@ func (b *libvipsBackend) applyOrientation(ctx context.Context, img *vips.ImageRe
 // изображений (анимации) применяется покадрово: вертикальный flip всего
 // стека перевернул бы порядок кадров. Для одиночных изображений — прямой
 // vips_flip.
-func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
+func (b *libvipsBackend) flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 	n := img.Pages()
 	if n <= 1 {
 		if err := img.Flip(vips.DirectionVertical); err != nil {
@@ -788,7 +804,7 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 		}
 		return img, nil
 	}
-	return withFrames(img, func(f *vips.ImageRef, i int) error {
+	return b.withFrames(img, func(f *vips.ImageRef, i int) error {
 		if err := f.Flip(vips.DirectionVertical); err != nil {
 			return fmt.Errorf("flip frame %d/%d: %w", i+1, n, err)
 		}
@@ -810,10 +826,18 @@ func flipVertical(img *vips.ImageRef) (*vips.ImageRef, error) {
 //  4. кадры склеиваются ArrayJoin(..., across=1) и восстанавливаются
 //     page-height / delay / loop.
 //
+// Параллелизация: создание кадров (Copy/SetPageHeight/ExtractArea) идёт
+// строго последовательно — img.Copy() из нескольких горутин небезопасен;
+// параллельно выполняется ТОЛЬКО fn на готовых кадрах (worker pool через
+// runFramesParallel, см. framesemaphore.go). Параллелизм ограничен
+// кадровым семафором b.frameSem (отдельный от основного libvips-gate:
+// иначе 8 запросов × 8 кадров = 64 одновременных vips-операции). При
+// n <= 1 или выключенном параллелизме — последовательный путь без горутин.
+//
 // Семантика освобождения cgo-ресурсов: при любой ошибке текущий кадр и все
 // ранее собранные (кроме base при успешном join) закрываются; после
 // успешной сборки промежуточные кадры закрываются, остаётся только base.
-func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vips.ImageRef, error) {
+func (b *libvipsBackend) withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vips.ImageRef, error) {
 	n := img.Pages()
 	ph := img.PageHeight()
 	W := img.Width()
@@ -831,29 +855,32 @@ func withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef, i int) error) (*vi
 			f.Close()
 		}
 	}
-	for i := 0; i < n; i++ {
+	makeFrame := func(i int) (*vips.ImageRef, error) {
 		f, err := img.Copy()
 		if err != nil {
-			closeFrames(false)
 			return nil, fmt.Errorf("copy frame %d/%d: %w", i+1, n, err)
 		}
 		if err := f.SetPageHeight(H); err != nil {
 			f.Close()
-			closeFrames(false)
 			return nil, fmt.Errorf("set page height of frame %d/%d: %w", i+1, n, err)
 		}
 		if err := f.ExtractArea(0, i*ph, W, ph); err != nil {
 			f.Close()
-			closeFrames(false)
 			return nil, fmt.Errorf("extract frame %d/%d: %w", i+1, n, err)
 		}
-		if err := fn(f, i); err != nil {
-			f.Close()
-			closeFrames(false)
-			return nil, err
-		}
-		frames = append(frames, f)
+		return f, nil
 	}
+	// makeFrame при ошибке НЕ закрывает уже созданные кадры: runFramesParallel
+	// возвращает частичный slice, closeFrames(false) закрывает всё (включая
+	// кадр, на котором fn упал — семантика совпадает с последовательным
+	// путём, где упавший кадр закрывался отдельно).
+	created, err := runFramesParallel[*vips.ImageRef](nil, n, b.frameWorkers, b.frameSem, makeFrame, fn)
+	if err != nil {
+		frames = append(frames, created...)
+		closeFrames(false)
+		return nil, err
+	}
+	frames = created
 
 	base := frames[0]
 	if len(frames) > 1 {
@@ -952,7 +979,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 	// из координат оригинала в координаты подрезанного кадра.
 	var trimOffsetX, trimOffsetY int
 	if plan.Trim {
-		trimmed, ox, oy, err := applyTrim(img, plan.TrimSpec)
+		trimmed, ox, oy, err := b.applyTrim(img, plan.TrimSpec)
 		if err != nil {
 			return img, nil, nil, err
 		}
@@ -996,7 +1023,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// (см. resolveResizeSize): "x200" → ширина, "200x" → высота. Здесь
 		// letterbox не нужен: холст = результат thumbnail (пропорциональный).
 		if w > 0 && h > 0 {
-			out, err := resizeEmbedFrames(img, w, h, plan)
+			out, err := b.resizeEmbedFrames(img, w, h, plan)
 			if err != nil {
 				return img, nil, nil, fmt.Errorf("libvips: resize: %w", err)
 			}
@@ -1018,7 +1045,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// он растягивает изображение до WxH, игнорируя пропорции
 		// (сплющивание). Для анимации — покадрово (см. thumbnailCropFrames:
 		// thumbnail с кропом на стеке кадров схлопывает page-height).
-		out, err := thumbnailCropFrames(img, w, h, vips.InterestingCentre)
+		out, err := b.thumbnailCropFrames(img, w, h, vips.InterestingCentre)
 		if err != nil {
 			return img, nil, nil, fmt.Errorf("libvips: crop: %w", err)
 		}
@@ -1028,7 +1055,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 		// изображения; масштаб и кроп до точного размера одним проходом
 		// (с premultiply для альфы — см. OpResize). SizeBoth (не Force):
 		// см. комментарий OpCrop. Для анимации — покадрово.
-		out, err := thumbnailCropFrames(img, w, h, vips.InterestingAttention)
+		out, err := b.thumbnailCropFrames(img, w, h, vips.InterestingAttention)
 		if err != nil {
 			return img, nil, nil, fmt.Errorf("libvips: smart-crop: %w", err)
 		}
@@ -1080,7 +1107,7 @@ func (b *libvipsBackend) applyOperation(ctx context.Context, img *vips.ImageRef,
 // поэтому непрозрачная цветная рамка (отличающаяся по альфе от контента или
 // шумящая в альфе) не распознавалась как фон. Координаты RGB-копии совпадают
 // с оригиналом, ExtractArea выполняется на оригинале.
-func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, int, int, error) {
+func (b *libvipsBackend) applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, int, int, error) {
 	if spec == nil {
 		spec = processing.DefaultTrimSpec()
 	}
@@ -1098,7 +1125,7 @@ func applyTrim(img *vips.ImageRef, spec *processing.TrimSpec) (*vips.ImageRef, i
 	// кадра без изменений корректен, а withFrames гарантированно
 	// восстанавливает метаданные анимации.
 	if img.Pages() > 1 && img.Height() > img.PageHeight() && img.PageHeight() > 0 {
-		out, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+		out, err := b.withFrames(img, func(f *vips.ImageRef, i int) error {
 			if err := f.ExtractArea(left, top, tw, th); err != nil {
 				return fmt.Errorf("libvips: trim: frame extract: %w", err)
 			}
@@ -1443,7 +1470,7 @@ func (b *libvipsBackend) applyDetectionCrop(ctx context.Context, img *vips.Image
 	// delay/loop сохранены. Для одиночных изображений — прежнее поведение
 	// (in-place).
 	if img.Pages() > 1 && H > 0 && img.Height() > H {
-		outImg, err := withFrames(img, func(f *vips.ImageRef, i int) error {
+		outImg, err := b.withFrames(img, func(f *vips.ImageRef, i int) error {
 			// Кадр из withFrames — одиночное изображение высотой H, но с
 			// унаследованными анимационными метаданными стека (n-pages > 1,
 			// page-height == H). Выравниваем метаданные под одиночное
@@ -2093,7 +2120,7 @@ func (b *libvipsBackend) applyWatermark(img *vips.ImageRef, plan *processing.Pro
 	// Анимация (кадры = вертикальный стек страниц): покадровый композит.
 	// Композит на весь сшитый холст попал бы только в область первого кадра.
 	if animated {
-		out, err := compositeWatermarkPerFrame(img, wmImg, pts, W, ph)
+		out, err := b.compositeWatermarkPerFrame(img, wmImg, pts, W, ph)
 		if err != nil {
 			return nil, fmt.Errorf("libvips: watermark %q: animated output %q: %w", wm.Name, plan.OutputFormats, err)
 		}
@@ -2172,9 +2199,9 @@ func compositeWatermarkOnce(target *vips.ImageRef, tile *vips.ImageRef, pts []pr
 // многокадрового изображения и собирает кадры обратно в вертикальный стек.
 // Механика разборки/сборки анимации инкапсулирована в withFrames; каждый кадр
 // получает ЕДИНЫЙ композит всех копий (см. compositeWatermarkOnce).
-func compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
+func (b *libvipsBackend) compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *vips.ImageRef, pts []processing.Point, W, ph int) (*vips.ImageRef, error) {
 	n := img.Pages()
-	return withFrames(img, func(f *vips.ImageRef, i int) error {
+	return b.withFrames(img, func(f *vips.ImageRef, i int) error {
 		if err := compositeWatermarkOnce(f, wmImg, pts); err != nil {
 			return fmt.Errorf("frame %d/%d: %w", i+1, n, err)
 		}

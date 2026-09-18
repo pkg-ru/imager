@@ -134,6 +134,9 @@ type LibvipsConfig struct {
 	// DetectionSem — настройки detection-семафора: отдельный лимит
 	// конкурентности ONNX-инференса вне libvips-слотов.
 	DetectionSem libvips.DetectionSemaphoreOpts
+	// FrameSem — настройки кадрового семафора: параллелизм fn на кадрах
+	// внутри withFrames (worker pool покадровой обработки анимаций).
+	FrameSem libvips.FrameSemaphoreOpts
 	// Color — политика ICC color management: strip (дефолт,
 	// удалять профиль), transform (конвертация в sRGB перед обработкой),
 	// keep (сохранить embedded-профиль в выход).
@@ -352,6 +355,8 @@ type LibvipsYAML struct {
 	WatermarkCache WatermarkCacheYAML `yaml:"watermark-cache"`
 	// DetectionSem — настройки detection-семафора.
 	DetectionSem DetectionSemYAML `yaml:"detection"`
+	// FrameSem — настройки кадрового семафора (withFrames).
+	FrameSem FrameSemYAML `yaml:"frame-workers"`
 	// Color — политика ICC color management: strip/transform/keep.
 	Color ColorYAML `yaml:"color"`
 	// OperationCache — настройки operation cache.
@@ -370,6 +375,13 @@ type ColorYAML struct {
 type OperationCacheYAML struct {
 	// Enabled — включить operation cache libvips (nil = включено по умолчанию).
 	Enabled dynamic.Nullable[dynamic.Bool] `yaml:"enabled"`
+}
+
+// FrameSemYAML — YAML-представление libvips.FrameSemaphoreOpts.
+type FrameSemYAML struct {
+	// Workers — максимум одновременных fn на кадрах внутри одного withFrames
+	// (0 = дефолт min(GOMAXPROCS, 4); клэмп до [1, 8]).
+	Workers dynamic.Int64 `yaml:"workers"`
 }
 
 // DetectionSemYAML — YAML-представление libvips.DetectionSemaphoreOpts.
@@ -1405,6 +1417,14 @@ func (l LibvipsYAML) build() (LibvipsConfig, error) {
 		return LibvipsConfig{}, fmt.Errorf("detection: %w", err)
 	}
 	cfg.DetectionSem = ds
+	// Кадровый семафор (withFrames): fail-fast валидация значений на старте.
+	fs := libvips.FrameSemaphoreOpts{
+		Workers: int(l.FrameSem.Workers.Unwrap()),
+	}
+	if err := fs.Validate(); err != nil {
+		return LibvipsConfig{}, fmt.Errorf("frame-workers: %w", err)
+	}
+	cfg.FrameSem = fs
 	// Цветовой менеджмент: строгая политика mode (strip/transform/
 	// keep). Empty = strip (дефолт); неизвестное значение — fail-fast
 	// ошибка конфигурации.

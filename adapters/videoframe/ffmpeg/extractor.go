@@ -5,12 +5,14 @@
 package ffmpeg
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"gitverse.ru/pkg-ru/imager/ports/videoframe"
@@ -47,6 +49,15 @@ func NewDefault() *Extractor {
 }
 
 // Extract извлекает кадр из видео-источника. См. videoframe.Extractor.
+//
+// Все попытки (перебор кадров вперёд при неудачной проверке контрастности)
+// выполняются ОДНИМ процессом ffmpeg: поток декодируется один раз, кадры на
+// целевых позициях выбираются фильтром select по номеру кадра. Это устраняет
+// N-1 повторных запусков ffmpeg и повторных seek/decode (раньше каждая
+// попытка была отдельным процессом, а для pipe-источников — ещё и повторным
+// чтением потока с начала). Как только очередной кадр проходит проверку
+// контрастности, процесс останавливается досрочно — ранний выход и порядок
+// попыток сохранены.
 func (e *Extractor) Extract(ctx context.Context, source io.ReadSeeker, opts videoframe.Options) (*videoframe.Result, error) {
 	if source == nil {
 		return nil, errors.New("videoframe: source is nil")
@@ -61,37 +72,38 @@ func (e *Extractor) Extract(ctx context.Context, source io.ReadSeeker, opts vide
 	// Целевая секунда первого кадра.
 	t := targetSecond(info.Duration, opts.FramePercent)
 
-	// Перебор кадров вперёд при неудачной проверке контрастности.
-	var last *videoframe.Result
+	// Перебор кадров вперёд при неудачной проверке контрастности: позиции
+	// попыток известны заранее (t, t+step/fps, ...), поэтому все кадры
+	// выбираются одним процессом.
 	attempts := opts.Attempts
 	if attempts <= 0 {
 		attempts = 1
 	}
-	for i := int64(0); i < attempts; i++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	times := make([]float64, attempts)
+	times[0] = t
+	for i := 1; i < len(times); i++ {
+		times[i] = nextSecond(times[i-1], opts.FrameStep, info.FPS)
+	}
 
-		res, err := e.extractFrame(ctx, source, t)
-		if err != nil {
-			return nil, err
-		}
+	var last *videoframe.Result
+	err = e.extractFrames(ctx, source, times, opts.FrameStep, func(res *videoframe.Result) bool {
 		res.Width = info.Width
 		res.Height = info.Height
 		last = res
 
-		// Проверка контрастности.
+		// Проверка контрастности; true — кадр подошёл, остановить извлечение.
 		contrast, cerr := contrastOf(res.Frame)
 		if cerr != nil {
 			// Не удалось декодировать кадр — считаем неудачным и идём дальше.
 			contrast = 0
 		}
-		if contrast >= opts.MinContrast {
-			return res, nil
-		}
-
-		// Следующий кадр вперёд.
-		t = nextSecond(t, opts.FrameStep, info.FPS)
+		return contrast >= opts.MinContrast
+	})
+	if err != nil {
+		return nil, err
+	}
+	if last == nil {
+		return nil, errors.New("ffmpeg produced no frame")
 	}
 
 	// Ни один кадр не прошёл проверку — возвращаем последний извлечённый.
@@ -174,17 +186,27 @@ func probeArgs(input string) []string {
 	return args
 }
 
-// extractFrame извлекает один кадр (JPEG) на секунде t через ffmpeg.
-// Две ветки:
+// extractFrames извлекает до len(times) кадров (JPEG) ОДНИМ процессом
+// ffmpeg: первый — на секунде times[0], далее с шагом step кадров
+// (times[i] вычислены заранее через nextSecond). Для каждого извлечённого
+// кадра вызывается fn; если fn вернула true, извлечение останавливается —
+// процесс завершается досрочно (кадры после подошедшего не декодируются).
+//
+// Две ветки ввода:
 //   - path: источник — файл на диске (pathProvider). ffmpeg открывает файл
-//     сам; input seek `-ss <t>` перед `-i <path>` перематывает по контейнеру
-//     (без декодирования до точки seek) — основной выигрыш против pipe.
-//     Перемотка rewindToStart не нужна: каждый запуск ffmpeg открывает файл
-//     заново с начала.
-//   - pipe: источник — stdin (pipe:0). Перед КАЖДОЙ попыткой выполняется
-//     rewindToStart (см. rewindToStart), т.к. ffprobe уже прочитал начало
-//     потока.
-func (e *Extractor) extractFrame(ctx context.Context, source io.ReadSeeker, t float64) (*videoframe.Result, error) {
+//     сам; input seek `-ss <times[0]>` перед `-i <path>` перематывает по
+//     контейнеру (без декодирования до точки seek) — основной выигрыш против
+//     pipe. Перемотка rewindToStart не нужна: ffmpeg открывает файл заново
+//     с начала.
+//   - pipe: источник — stdin (pipe:0). Перемотка rewindToStart выполняется
+//     ОДИН раз перед единственным запуском ffmpeg (см. rewindToStart):
+//     процесс читает поток последовательно от точки seek вперёд, seek назад
+//     невозможен и не нужен — именно поэтому пакетная обработка попыток
+//     одним процессом для pipe-источников не только возможна, но и выгодна.
+//
+// Кадры читаются из stdout по одному (см. nextJPEG) и не буферизуются все
+// сразу: память ограничена одним кадром независимо от числа попыток.
+func (e *Extractor) extractFrames(ctx context.Context, source io.ReadSeeker, times []float64, step int64, fn func(*videoframe.Result) bool) error {
 	input := inputPath(source)
 	if input == "" {
 		if err := rewindToStart(source); err != nil {
@@ -192,15 +214,15 @@ func (e *Extractor) extractFrame(ctx context.Context, source io.ReadSeeker, t fl
 			// без перемотки ffmpeg получает данные без заголовка
 			// контейнера — "Error opening input file pipe:0: Invalid data
 			// found". Для path-ветки перемотка не выполняется.
-			return nil, err
+			return err
 		}
 		input = "pipe:0"
 	}
 
-	// Аргументы идентичны для обеих веток: input seek `-ss <t>` перед `-i`
+	// Аргументы идентичны для обеих веток: input seek `-ss <t0>` перед `-i`
 	// быстр по контейнеру для файла и по максимальному байтовому смещению
-	// для pipe; см. frameArgs.
-	args := frameArgs(input, t)
+	// для pipe; см. batchFrameArgs.
+	args := batchFrameArgs(input, times[0], int64(len(times)), step)
 
 	cmd := exec.CommandContext(ctx, e.ffmpegPath, args...)
 	cmd.Stderr = &bytes.Buffer{}
@@ -208,22 +230,64 @@ func (e *Extractor) extractFrame(ctx context.Context, source io.ReadSeeker, t fl
 		cmd.Stdin = source
 	}
 
-	out, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg extract failed: %w: %s", err, cmd.Stderr)
+		return fmt.Errorf("ffmpeg stdout pipe: %w", err)
 	}
-	if len(out) == 0 {
-		return nil, errors.New("ffmpeg produced no frame")
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start failed: %w", err)
 	}
 
-	return &videoframe.Result{Frame: out, Timestamp: t}, nil
+	// stop завершает процесс досрочно (кадр подошёл или контекст отменён).
+	stop := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+
+	// Чтение кадров из stdout: в image2pipe JPEG-кадры идут подряд,
+	// разбираем их по маркерам SOI/EOI по одному.
+	br := bufio.NewReader(stdout)
+	delivered := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			stop()
+			return err
+		}
+
+		frame, rerr := nextJPEG(br)
+		if rerr != nil {
+			// EOF (поток закончился) или ошибка чтения — обработка ниже,
+			// после Wait.
+			break
+		}
+
+		res := &videoframe.Result{Frame: frame, Timestamp: times[delivered]}
+		delivered++
+		if fn(res) {
+			// Кадр подошёл — досрочно останавливаем ffmpeg.
+			stop()
+			return nil
+		}
+	}
+
+	waitErr := cmd.Wait()
+	if delivered == 0 {
+		if waitErr != nil {
+			return fmt.Errorf("ffmpeg extract failed: %w: %s", waitErr, cmd.Stderr)
+		}
+		return errors.New("ffmpeg produced no frame")
+	}
+	// Кадры были доставлены; ошибка завершения процесса после них (обрыв
+	// потока, досрочный kill) на результат не влияет.
+	return nil
 }
 
-// frameArgs формирует аргументы ffmpeg для извлечения одного кадра (JPEG).
-// Используется для обеих веток (path и pipe) — отличается только значение
-// -i (путь файла либо pipe:0).
+// batchFrameArgs формирует аргументы ffmpeg для извлечения нескольких
+// кадров (JPEG) одним процессом: первый кадр — на секунде t0, далее каждый
+// step-й кадр, всего до attempts штук. Используется для обеих веток (path и
+// pipe) — отличается только значение -i (путь файла либо pipe:0).
 //
-//   - `-ss <t>` перед `-i` — input seek: для файла демуксер перематывает по
+//   - `-ss <t0>` перед `-i` — input seek: для файла демуксер перематывает по
 //     контейнеру (индекс/ключевые кадры) без декодирования всей прокрутки;
 //     точность кадра сохраняется (ffmpeg декодирует до целевого PTS).
 //     Значение достаточно точное, т.к. ffmpeg после input seek делает
@@ -231,25 +295,96 @@ func (e *Extractor) extractFrame(ctx context.Context, source io.ReadSeeker, t fl
 //   - `-threads 2` ограничивает число декодер/энкодер-потоков: при
 //     извлечении кадра из 4K HEVC 10-bit `-threads auto` порождает ~16
 //     frame-threads с большим DPB, что вместе с cgroup-лимитом памяти
-//     приводит к OOM-kill контейнера.
+//     приводит к OOM-kill контейнера. Процесс теперь один, поэтому пик
+//     памяти декодера не выше, чем у одного прежнего одиночного процесса
+//     (параллельных процессов нет).
+//   - `-vf select='...'` выбирает кадры с номерами 0, step, 2*step, ...
+//     (номер n считается фильтром от первого кадра после seek). Выбор по
+//     номеру кадра вместо времени не зависит от точности таймстампов и даёт
+//     те же позиции, что прежние последовательные попытки с шагом
+//     step/fps секунд. select стоит перед scale, чтобы не масштабировать
+//     отброшенные кадры.
 //   - `-vf scale='min(1920,iw)':-2` уменьшает кадр до 1920 по ширине (шире —
 //     ужимается, уже/равно — не масштабируется вверх), высота считается
 //     пропорционально с выравниванием на чётность (-2). Аргументы передаются
 //     через exec.Command напрямую (без shell): запятая в значении фильтра
-//     не требует экранирования, фильтр — один аргумент argv.
+//     экранируется одинарными кавычками фильтрграфа, фильтр — один аргумент
+//     argv.
 //   - `-noaccurate_seek` и `-skip_frame nokey` намеренно НЕ добавляются:
 //     они ускоряют seek, но жертвуют точностью кадра.
-func frameArgs(input string, t float64) []string {
+func batchFrameArgs(input string, t0 float64, attempts, step int64) []string {
 	return []string{
-		"-ss", formatSeconds(t),
+		"-ss", formatSeconds(t0),
 		"-i", input,
 		"-threads", "2",
-		"-vf", "scale='min(1920,iw)':-2",
-		"-frames:v", "1",
+		"-vf", "select='" + selectExpr(attempts, step) + "',scale='min(1920,iw)':-2",
+		"-frames:v", strconv.FormatInt(attempts, 10),
 		"-q:v", "2",
 		"-f", "image2pipe",
 		"-vcodec", "mjpeg",
 		"-", // вывод JPEG в stdout (pipe)
+	}
+}
+
+// selectExpr формирует выражение фильтра select для выбора кадров с
+// номерами 0, step, 2*step, ... (всего attempts штук). Номер кадра n
+// считается от первого декодированного после seek кадра (с нуля): попытка i
+// прежней последовательной версии извлекала кадр на t0 + i*step/fps секунд —
+// это тот же (i*step)-й кадр после t0. Целочисленное выражение не зависит
+// от накопления ошибок плавающей точки в таймстампах.
+func selectExpr(attempts, step int64) string {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if step < 0 {
+		step = 0
+	}
+	parts := make([]string, 0, attempts)
+	for i := int64(0); i < attempts; i++ {
+		parts = append(parts, fmt.Sprintf("eq(n,%d)", i*step))
+	}
+	return strings.Join(parts, "+")
+}
+
+// nextJPEG читает из br следующий JPEG-кадр из потока image2pipe (кадры
+// идут подряд: SOI ... EOI SOI ... EOI). Поиск ведётся по маркерам:
+// SOI (0xFF 0xD8) — начало кадра, EOI (0xFF 0xD9) — конец. В энтропийно
+// кодированных данных JPEG байт 0xFF всегда сопровождается вставкой 0x00
+// (byte stuffing), поэтому пара 0xFF 0xD9 внутри сжатых данных кадра не
+// встречается. Байты до первого SOI пропускаются. Возвращает ошибку
+// (в т.ч. io.EOF), если кадр не найден до конца потока.
+func nextJPEG(br *bufio.Reader) ([]byte, error) {
+	for {
+		// Поиск SOI.
+		b, err := br.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b != 0xFF {
+			continue
+		}
+		b, err = br.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b != 0xD8 {
+			continue
+		}
+
+		// SOI найден — читаем до EOI.
+		frame := []byte{0xFF, 0xD8}
+		prev := byte(0)
+		for {
+			b, err := br.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			frame = append(frame, b)
+			if prev == 0xFF && b == 0xD9 {
+				return frame, nil
+			}
+			prev = b
+		}
 	}
 }
 
