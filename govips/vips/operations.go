@@ -777,7 +777,10 @@ func vipsDetermineImageTypeFromMetaLoader(in *C.VipsImage) ImageType {
 }
 
 func vipsImageSetBlob(in *C.VipsImage, name string, data []byte) {
-	cData := unsafe.Pointer(&data)
+	if len(data) == 0 {
+		return
+	}
+	cData := unsafe.Pointer(unsafe.SliceData(data))
 	cDataLength := C.size_t(len(data))
 
 	cField := C.CString(name)
