@@ -21,17 +21,19 @@ BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-de
 
 # Runtime-stage packages (alpine:3.24 runtime). onnxruntime теперь в стабильном
 # community-репозитории 3.24 — edge-репозиторий для него не нужен.
-RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~=1.0 libjxl~=0.11 poppler-utils libraw~=0.22 librsvg~=2.62 ghostscript~=10.07 ffmpeg~=8.1 tzdata~=2026 ca-certificates onnxruntime"
+RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1.0 libjxl~=0.11 poppler-utils libraw~=0.22 librsvg~=2.62 ghostscript~=10.07 ffmpeg~=8.1 tzdata~=2026 ca-certificates onnxruntime"
 
 # Edge packages: фиксы CVE, которых ещё нет в стабильном 3.24 (ffmpeg 8.1.2-r1,
 # libraw 0.22.2, libass 0.17.5, nghttp2 1.70.0). Устанавливаются
 # с --upgrade после включения edge-репозиториев. ~= constraint держит апгрейд внутри
 # той же линейки версий, чтобы не сломать ABI-совместимость с пакетами из 3.24
 # (например, vips~=8.18 собран против libde265 1.0.x; ffmpeg 9.x — несовместим).
-# libde265 умышленно НЕ в edge: ~=1.0 в Alpine — major pin (>=1.0,<2.0),
-# поэтому 1.1.x проходит constraint, но конфликтует с точным pin ~1.0 из
-# RUNTIME_PACKAGES (установлен из стабильного 3.24). Оставляем libde265
-# только в стабильном репозитории — там версия 1.0.x, ABI-совместимая с vips.
+# libde265 умышленно НЕ в edge: в Alpine ~=1.0 — minor pin (>=1.0.0,<1.1.0),
+# поэтому 1.1.x из стабильного 3.24 (CVE-апгрейд) не проходит constraint и apk
+# не может выбрать пакет. Используем ~1.0 — major pin (>=1.0.0,<2.0.0):
+# 1.1.x обратно совместим с 1.0.x (ABI-стабильный), проходит constraint.
+# Оставляем libde265 только в стабильном репозитории — там версия 1.0.x/1.1.x,
+# ABI-совместимая с vips~=8.18.
 EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70"
 
 case "${1:-}" in
