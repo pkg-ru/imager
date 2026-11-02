@@ -9,9 +9,9 @@
 | Компонент | Версия | Источник |
 |-----------|--------|----------|
 | Go | 1.27.0 | `golang:1.27.0-alpine3.24` |
-| libvips + codecs | pinned (build-deps.sh) | Alpine 3.24 (mirror.yandex.ru) |
+| libvips + codecs | pinned (build-deps.sh) | Alpine 3.24 (mirror.yandex.ru — только для этого образа) |
 | ONNX Runtime | 1.24+ (community 3.24) | Alpine 3.24 |
-| ffmpeg / ffprobe | 8.1 | Alpine 3.24 (mirror.yandex.ru) |
+| ffmpeg / ffprobe | 8.1 | Alpine 3.24 (mirror.yandex.ru — только для этого образа) |
 | gofmt | встроен в Go 1.27 | `/usr/local/go/bin/gofmt` |
 | govulncheck | latest | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
 | staticcheck | 2026.2.2 (pinned) | `go install honnef.co/go/tools/cmd/staticcheck@2026.2.2` |

@@ -44,9 +44,10 @@ ENV CGO_ENABLED=1 \
     # тестового бинаря. -no-pie отключает PIE (стандартное исправление).
     CGO_LDFLAGS="-no-pie"
 
-# dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —
-# единый источник: docker/build-deps.sh (pinned версии сохранены).
+# Зеркало mirror.yandex.ru оставлено ТОЛЬКО здесь, для сборки GitVerse CI-образа:
+# из РФ-инфраструктуры dl-cdn.alpinelinux.org бывает недоступен, а зеркало — нет.
+# Production-образ (./Dockerfile, собирается в GitHub Actions) использует
+# официальный dl-cdn. Список пакетов — единый источник: docker/build-deps.sh.
 # Дополнительно: ffmpeg/ffprobe (интеграционные тесты видеокадров),
 # curl (download-models.sh), tzdata/ca-certificates.
 #

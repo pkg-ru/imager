@@ -42,15 +42,19 @@ ENV CGO_ENABLED=1 \
 # через "--build-arg BUILD_TAGS=libvips,onnx" (docker-compose).
 ARG BUILD_TAGS=libvips,onnx
 
-# dl-cdn.alpinelinux.org недоступен из Docker — переопределяем репозитории
-# на mirror.yandex.ru (v3.24 для golang:1.27.0-alpine3.24). Список пакетов —
-# единый источник: docker/build-deps.sh (pinned версии сохранены).
+# Официальный CDN Alpine (dl-cdn.alpinelinux.org) — сборка выполняется в
+# GitHub Actions (US-раннеры), откуда CDN доступен. Зеркало mirror.yandex.ru
+# оставлено ТОЛЬКО для сборки GitVerse CI-образа (см. .gitverse/docker/):
+# из РФ-инфраструктуры CDN бывает недоступен, а зеркало — нет. Здесь же
+# используем официальный источник: зеркала периодически отдают обрезанные
+# .apk («unexpected end of file», «I/O error»), на чём сборка и падала.
+# Список пакетов — единый источник: docker/build-deps.sh.
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
+RUN echo "https://dl-cdn.alpinelinux.org/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/v3.24/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-builder \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-edge
 
 WORKDIR /src
@@ -91,13 +95,13 @@ ARG IMAGER_RELEASE=dev
 # Pinned версии пакетов для воспроизводимости. onnxruntime — runtime для
 # бинаря с -tags onnx; в Alpine 3.24 он есть в стабильном community.
 # Edge-репозитории включаются для edge-фиксов CVE (см. build-deps.sh:
-# EDGE_PACKAGES — ffmpeg/libraw/libass/nghttp2).
+# EDGE_PACKAGES — ffmpeg/libraw/libass/nghttp2/cups-libs).
 COPY docker/build-deps.sh /tmp/build-deps.sh
-RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
+RUN echo "https://dl-cdn.alpinelinux.org/alpine/v3.24/main" > /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/v3.24/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-runtime \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
-    && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories \
+    && echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories \
     && sh /tmp/build-deps.sh install-edge \
     && addgroup -S -g 10001 imager \
     && adduser -S -D -H -u 10001 -G imager imager

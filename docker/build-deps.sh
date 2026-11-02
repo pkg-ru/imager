@@ -19,6 +19,25 @@
 # libvips/libheif, и бинарь падал при старте (Error loading shared library).
 set -eu
 
+# apk_add_retry — apk add с повторами. Зеркала и CDN периодически отдают
+# обрезанные .apk («unexpected end of file», «failed to extract ... I/O error»),
+# из-за чего сборка падала на ровном месте. apk транзакционен: неудачный
+# add откатывается, поэтому повтор безопасен.
+apk_add_retry() {
+    _attempt=1
+    while :; do
+        if apk add --no-cache "$@"; then
+            return 0
+        fi
+        if [ "$_attempt" -ge 3 ]; then
+            return 1
+        fi
+        _attempt=$((_attempt + 1))
+        echo "apk add failed, retry ${_attempt}/3 in 5s..." >&2
+        sleep 5
+    done
+}
+
 # Builder-stage dev packages (golang:1.27.3-alpine3.24 builder).
 BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev~1 libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
 
@@ -40,21 +59,24 @@ RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1 libjxl~=0
 # (>=1.0.0,<2.0.0): 1.1.x обратно совместим с 1.0.x (ABI-стабильный),
 # проходит constraint. Оставляем libde265 только в стабильном репозитории —
 # там версия 1.0.x/1.1.x, ABI-совместимая с vips~=8.18.
-EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70"
+# cups-libs: транзитивная зависимость vips (через librsvg/poppler), CVE-2026-55453
+# (HIGH, newline injection в статусе принтера) — в 3.24 фикс не выпущен,
+# в edge уже 2.4.20-r1. ~=2.4 держит мажор/минор.
+EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70 cups-libs~=2.4"
 
 case "${1:-}" in
     install-builder)
         # shellcheck disable=SC2086
-        apk add --no-cache $BUILDER_PACKAGES
+        apk_add_retry $BUILDER_PACKAGES
         ;;
     install-runtime)
         # shellcheck disable=SC2086
-        apk add --no-cache $RUNTIME_PACKAGES
+        apk_add_retry $RUNTIME_PACKAGES
         # Security: обновление OpenSSL из base image (CVE-2026-14456 и др.,
         # фикс 3.5.8-r0). apk add НЕ обновляет уже установленные пакеты,
         # поэтому libcrypto3/libssl3/openssl из alpine:3.24 остаются
         # устаревшими; --upgrade форсирует обновление до последней версии.
-        apk add --no-cache --upgrade openssl libcrypto3 libssl3
+        apk_add_retry --upgrade openssl libcrypto3 libssl3
         # Edge-фиксы CVE устанавливаются отдельным шагом install-edge
         # после включения edge-репозиториев (см. Dockerfile: runtime-base).
         ;;
@@ -63,7 +85,7 @@ case "${1:-}" in
         # nghttp2 1.70.0). ~= constraints удерживают апгрейд внутри той же
         # major-версии, чтобы не сломать ABI-совместимость с пакетами из 3.24.
         # shellcheck disable=SC2086
-        apk add --no-cache --upgrade $EDGE_PACKAGES
+        apk_add_retry --upgrade $EDGE_PACKAGES
         ;;
     print-builder)
         printf '%s\n' "$BUILDER_PACKAGES"
