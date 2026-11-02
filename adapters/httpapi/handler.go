@@ -43,14 +43,16 @@ type Handler struct {
 	// etagCache — bounded LRU-кэш вычисленных ETag по identity
 	// (canonical URL + size), чтобы не пересчитывать SHA-256 на каждый запрос.
 	// Ограничен по числу ключей, чтобы не расти безгранично.
-	etagCache *lru.Cache[string, string]
+	etagCache *lru.Cache[etagKey, string]
 
 	// topPaths — bounded реестр проблемных путей (top-paths). Создаётся в
 	// New, если asset-errors.top-paths.enabled. nil = учёт выключен.
 	topPaths *observability.TopPaths
 
 	// copyPool — sync.Pool буферов копирования (64 KiB), чтобы не аллоцировать
-	// новый буфер на каждый запрос (оптимизация горячего пути).
+	// новый буфер на каждый запрос (оптимизация горячего пути). В пуле лежат
+	// *[]byte (а не []byte): упаковка значения-слайса в any при Put сама
+	// аллоцирует, и пул не выполнял бы свою задачу (staticcheck SA6002).
 	copyPool sync.Pool
 }
 
@@ -75,7 +77,8 @@ func New(gen Generator, cfg Config) (*Handler, error) {
 		etagCache: newEtagCache(4096),
 		copyPool: sync.Pool{
 			New: func() any {
-				return make([]byte, 64*1024)
+				b := make([]byte, 64*1024)
+				return &b
 			},
 		},
 	}
@@ -107,10 +110,18 @@ func buildFormatMap() map[string]string {
 	return m
 }
 
+// etagKey — identity для кэша ETag: canonical URL + размер. comparable-
+// структура вместо конкатенации строки — без аллокации на каждый запрос
+// (key используется и в Get, и в Set горячего пути).
+type etagKey struct {
+	url  string
+	size int64
+}
+
 // newEtagCache создаёт bounded LRU-кэш ETag по identity с лимитом max записей
 // (generic-реализация из пакета adapters/lru).
-func newEtagCache(max int) *lru.Cache[string, string] {
-	return lru.New[string, string](max)
+func newEtagCache(max int) *lru.Cache[etagKey, string] {
+	return lru.New[etagKey, string](max)
 }
 
 // ServeHTTP обрабатывает запрос.
@@ -287,9 +298,9 @@ func (h *Handler) serveResult(w http.ResponseWriter, r *http.Request, result *ge
 	}
 	// Буферизованное копирование (64 KiB) вместо дефолтных 8 KiB.
 	// Буфер берём из sync.Pool, чтобы не аллоцировать на каждый запрос.
-	buf := h.copyPool.Get().([]byte)
-	defer h.copyPool.Put(buf)
-	_, _ = io.CopyBuffer(w, result.Opened, buf)
+	bufp := h.copyPool.Get().(*[]byte)
+	defer h.copyPool.Put(bufp)
+	_, _ = io.CopyBuffer(w, result.Opened, *bufp)
 }
 
 // etagFor вычисляет стабильный ETag из metadata/content identity.
@@ -304,13 +315,14 @@ func (h *Handler) etagFor(meta object.ObjectMetadata, result *generation.Result)
 		return `"` + strings.Trim(meta.ETag, `"`) + `"`
 	}
 	// Иначе — стабильная identity из canonical URL + size, кэшируем.
-	identity := result.URL + ":" + strconv.FormatInt(meta.Size, 10)
-	if v, ok := h.etagCache.Get(identity); ok {
+	// Ключ-структура: без конкатенации/FormatInt на каждый запрос.
+	key := etagKey{url: result.URL, size: meta.Size}
+	if v, ok := h.etagCache.Get(key); ok {
 		return v
 	}
-	sum := sha256.Sum256([]byte(identity))
+	sum := sha256.Sum256([]byte(result.URL + ":" + strconv.FormatInt(meta.Size, 10)))
 	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
-	h.etagCache.Set(identity, etag)
+	h.etagCache.Set(key, etag)
 	return etag
 }
 
@@ -439,14 +451,19 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Redirect fallback. Для HEAD не пишем body (GET/HEAD parity).
+	// Все заголовки выставляются ДО WriteHeader: после отправки строки
+	// статуса их изменение уже не попадает на провод (REGRESSION: раньше
+	// Content-Type/Content-Length терялись, ответ уходил chunked).
 	if nf.Redirect != "" {
 		w.Header().Set("Location", nf.Redirect)
-		w.WriteHeader(http.StatusMovedPermanently)
 		if r.Method != http.MethodHead {
 			body := []byte("<a href=\"" + html.EscapeString(nf.Redirect) + "\">Moved Permanently</a>.\n")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusMovedPermanently)
 			_, _ = w.Write(body)
+		} else {
+			w.WriteHeader(http.StatusMovedPermanently)
 		}
 		return
 	}
@@ -492,9 +509,9 @@ func (h *Handler) serveFallbackFile(w http.ResponseWriter, r *http.Request, file
 	}
 	// Буферизованное копирование: буфер берём из copyPool (64 KiB), чтобы не
 	// аллоцировать новый на каждый запрос (как в serveSourceObject).
-	buf := h.copyPool.Get().([]byte)
-	defer h.copyPool.Put(buf)
-	_, _ = io.CopyBuffer(w, f, buf)
+	bufp := h.copyPool.Get().(*[]byte)
+	defer h.copyPool.Put(bufp)
+	_, _ = io.CopyBuffer(w, f, *bufp)
 }
 
 // serveOriginal — отдельная фича: отдача исходника по «простому» URL вида
@@ -630,9 +647,9 @@ func (h *Handler) serveSourceObject(w http.ResponseWriter, r *http.Request, key 
 	if r.Method == http.MethodHead {
 		return true
 	}
-	buf := h.copyPool.Get().([]byte)
-	defer h.copyPool.Put(buf)
-	_, _ = io.CopyBuffer(w, art, buf)
+	bufp := h.copyPool.Get().(*[]byte)
+	defer h.copyPool.Put(bufp)
+	_, _ = io.CopyBuffer(w, art, *bufp)
 	return true
 }
 

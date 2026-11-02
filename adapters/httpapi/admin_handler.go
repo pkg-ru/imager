@@ -99,7 +99,7 @@ func (a *AdminHandler) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := a.svc.EnqueueGenerate(req.Source.Unwrap(), req.Assets.Unwrap(), req.Wait.Unwrap())
+	res, err := a.svc.EnqueueGenerate(r.Context(), req.Source.Unwrap(), req.Assets.Unwrap(), req.Wait.Unwrap())
 	if err != nil {
 		a.mapServiceError(w, r, err)
 		return

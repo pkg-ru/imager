@@ -31,11 +31,19 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// remoteFile — открытый файл на SFTP-сервере: поток + метаданные. Интерфейс
+// выделен, потому что у *sftp.File нет публичного конструктора: тесты
+// подставляют in-memory реализацию без реального сервера.
+type remoteFile interface {
+	io.ReadSeekCloser
+	Stat() (os.FileInfo, error)
+}
+
 // client — узкий интерфейс SFTP-клиента, используемый адаптером. Выделен,
 // чтобы тесты могли подставлять in-memory реализацию без реального сервера.
 type client interface {
 	Stat(path string) (os.FileInfo, error)
-	Open(path string) (*sftp.File, error)
+	Open(path string) (remoteFile, error)
 	OpenFile(path string, f int) (io.WriteCloser, error)
 	MkdirAll(path string) error
 	PosixRename(oldname, newname string) error
@@ -161,6 +169,10 @@ func (o Options) hostKeyCallback() (ssh.HostKeyCallback, error) {
 // OpenFile к io.WriteCloser.
 type clientAdapter struct {
 	*sftp.Client
+}
+
+func (a *clientAdapter) Open(path string) (remoteFile, error) {
+	return a.Client.Open(path)
 }
 
 func (a *clientAdapter) OpenFile(path string, f int) (io.WriteCloser, error) {

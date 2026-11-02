@@ -116,7 +116,7 @@ func TestPresetResolveDPRConflict(t *testing.T) {
 // пресета имеет приоритет над @dpr в имени.
 func TestPresetResolveDPRFieldPriority(t *testing.T) {
 	// Пресет "thumb@2" с полем dpr=3: применяется dpr=3.
-	p, err := NewPreset("thumb@2", CropCenter, false, mustSize(t, "240x160"), []Format{mustFormat(t, "webp")}, DPR(3), true, 0, 0, 0, nil, nil)
+	p, err := NewPreset("thumb@2", CropCenter, false, mustSize(t, "240x160"), []Format{mustFormat(t, "webp")}, DPR(3), true, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestPresetResolveDPRFieldPriority(t *testing.T) {
 // пресета пробрасываются в результирующий запрос.
 func TestPresetResolveProcessingOptions(t *testing.T) {
 	loop := true
-	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 80, 10, 5000, &loop, nil)
+	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 80, 10, &loop, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -162,9 +162,6 @@ func TestPresetResolveProcessingOptions(t *testing.T) {
 	}
 	if got := resolved.Frames(); got != 10 {
 		t.Errorf("Frames = %d, want 10", got)
-	}
-	if got := resolved.Duration(); got != 5000 {
-		t.Errorf("Duration = %d, want 5000", got)
 	}
 	if resolved.Loop() == nil || !*resolved.Loop() {
 		t.Errorf("Loop = %v, want true", resolved.Loop())
@@ -269,7 +266,7 @@ func mustNewPresetFormats(t *testing.T, name string, crop Crop, size string, out
 	for _, f := range outFmts {
 		formats = append(formats, mustFormat(t, f))
 	}
-	p, err := NewPreset(name, crop, false, mustSize(t, size), formats, 0, false, 0, 0, 0, nil, nil)
+	p, err := NewPreset(name, crop, false, mustSize(t, size), formats, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -371,7 +368,7 @@ func TestPresetResolveNoOrientation(t *testing.T) {
 // TestPresetDPRSet проверяет различение «dpr не задан» от «dpr: 0/1».
 func TestPresetDPRSet(t *testing.T) {
 	// dpr не задан: DPRSet=false, DPR=0.
-	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil, nil)
+	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -379,7 +376,7 @@ func TestPresetDPRSet(t *testing.T) {
 		t.Errorf("expected dpr not set, got DPRSet=%v DPR=%d", p.DPRSet(), p.DPR())
 	}
 	// dpr: 0 задан явно: DPRSet=true, DPR=0.
-	p2, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, true, 0, 0, 0, nil, nil)
+	p2, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, true, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -387,7 +384,7 @@ func TestPresetDPRSet(t *testing.T) {
 		t.Errorf("expected dpr set to 0, got DPRSet=%v DPR=%d", p2.DPRSet(), p2.DPR())
 	}
 	// dpr: 2 задан явно.
-	p3, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 2, true, 0, 0, 0, nil, nil)
+	p3, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 2, true, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -403,7 +400,7 @@ func TestPresetEncodingOverridesPropagation(t *testing.T) {
 		"webp": {"quality": 90, "reduction-effort": 6},
 		"png":  {"compression-level": 9},
 	}
-	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 85, 0, 0, nil, over)
+	p, err := NewPreset("thumb", CropCenter, false, mustSize(t, "120x80"), []Format{mustFormat(t, "webp")}, 0, false, 85, 0, nil, over)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}
@@ -504,17 +501,17 @@ func TestParsePresetNameSpecialChars(t *testing.T) {
 // сравниваются канонически (алиасы jpg→jpeg нормализуются).
 func TestAllowsOutputFormatAuto(t *testing.T) {
 	autoOnly, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
-		[]Format{FormatAuto}, 0, false, 0, 0, 0, nil, nil)
+		[]Format{FormatAuto}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset auto: %v", err)
 	}
 	mixed, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
-		[]Format{FormatAuto, mustFormat(t, "webp")}, 0, false, 0, 0, 0, nil, nil)
+		[]Format{FormatAuto, mustFormat(t, "webp")}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset auto+webp: %v", err)
 	}
 	explicit, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
-		[]Format{mustFormat(t, "jpg")}, 0, false, 0, 0, 0, nil, nil)
+		[]Format{mustFormat(t, "jpg")}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset jpg: %v", err)
 	}
@@ -560,7 +557,7 @@ func TestAllowsOutputFormatAuto(t *testing.T) {
 // разрешает запрос с форматом исходника и отклоняет чужой формат.
 func TestResolveAutoOutputFormat(t *testing.T) {
 	p, err := NewPreset("thumb", Crop(""), false, mustSize(t, "120x80"),
-		[]Format{FormatAuto}, 0, false, 0, 0, 0, nil, nil)
+		[]Format{FormatAuto}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset: %v", err)
 	}

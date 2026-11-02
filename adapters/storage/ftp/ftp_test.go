@@ -27,6 +27,15 @@ type fakeConn struct {
 	// deleteNoSuchFile — если true, Delete возвращает 550 (File unavailable)
 	// для отсутствующих файлов (проверка идемпотентности Delete).
 	deleteNoSuchFile bool
+	// deleteErr / removeDirErr / retrErr — если заданы, соответствующие
+	// операции возвращают их.
+	deleteErr    error
+	removeDirErr error
+	retrErr      error
+	// retrFailures — сколько раз Retr вернёт ошибку соединения.
+	retrFailures int
+	// quits — число вызовов Quit (освобождение соединения).
+	quits int
 }
 
 func newFakeConn() *fakeConn {
@@ -38,7 +47,7 @@ func newFakeConn() *fakeConn {
 }
 
 func (c *fakeConn) Login(user, password string) error { return nil }
-func (c *fakeConn) Quit() error                       { return nil }
+func (c *fakeConn) Quit() error                       { c.quits++; return nil }
 func (c *fakeConn) Feature(cmd string) bool {
 	// Явно заданные значения имеют приоритет.
 	if v, ok := c.features[cmd]; ok {
@@ -98,6 +107,13 @@ func (c *fakeConn) List(path string) ([]*ftp.Entry, error) {
 	return nil, nil
 }
 func (c *fakeConn) Retr(path string) (io.ReadCloser, error) {
+	if c.retrFailures > 0 {
+		c.retrFailures--
+		return nil, errors.New("connection reset")
+	}
+	if c.retrErr != nil {
+		return nil, c.retrErr
+	}
 	data, ok := c.files[path]
 	if !ok {
 		return nil, errors.New("no such file")
@@ -122,6 +138,9 @@ func (c *fakeConn) Rename(from, to string) error {
 	return nil
 }
 func (c *fakeConn) Delete(path string) error {
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
 	if c.deleteNoSuchFile {
 		if _, ok := c.files[path]; !ok {
 			return &textproto.Error{Code: 550, Msg: "file unavailable"}
@@ -135,6 +154,9 @@ func (c *fakeConn) MakeDir(path string) error {
 	return nil
 }
 func (c *fakeConn) RemoveDir(path string) error {
+	if c.removeDirErr != nil {
+		return c.removeDirErr
+	}
 	delete(c.dirs, path)
 	return nil
 }
@@ -499,5 +521,407 @@ func TestFTPDeleteIdempotent550(t *testing.T) {
 	// Файла нет — Delete должен быть идемпотентным (550 → успех).
 	if err := r.Delete(ctx, object.ObjectKey("missing.bin")); err != nil {
 		t.Fatalf("Delete missing: expected idempotent success, got %v", err)
+	}
+}
+
+// TestFTPServerName — hostname извлекается из "host:port" для TLS ServerName.
+func TestFTPServerName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"example.com:21", "example.com"},
+		{"127.0.0.1:2121", "127.0.0.1"},
+		{"[::1]:21", "::1"},
+		{"no-port", "no-port"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := serverName(tt.in); got != tt.want {
+			t.Errorf("serverName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestFTPValidate — fail-fast валидация опций.
+func TestFTPValidate(t *testing.T) {
+	base := Options{Addr: "h:21", User: "u", Password: "p", TLSVerify: true}
+	tests := []struct {
+		name    string
+		mutate  func(*Options)
+		wantErr bool
+	}{
+		{"valid", func(*Options) {}, false},
+		{"empty addr", func(o *Options) { o.Addr = "" }, true},
+		{"empty user", func(o *Options) { o.User = "" }, true},
+		{"tls without verify", func(o *Options) { o.TLS = true; o.TLSVerify = false }, true},
+		{"cr in root", func(o *Options) { o.Root = "a\rb" }, true},
+		{"lf in root", func(o *Options) { o.Root = "a\nb" }, true},
+		{"del in root", func(o *Options) { o.Root = "a\x7fb" }, true},
+		{"valid root", func(o *Options) { o.Root = "assets/img" }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := base
+			tt.mutate(&o)
+			err := o.validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("validate() = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestFTPSourceOpenBuffered — Open материализует объект в перематываемый
+// буфер с метаданными.
+func TestFTPSourceOpenBuffered(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["dir/file.bin"] = []byte("payload")
+	s, err := NewSourceStore(Options{Addr: "localhost:21", User: "u", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	art, err := s.Open(context.Background(), "dir/file.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if meta := art.Metadata(); meta.Key != "dir/file.bin" || meta.Size != int64(len("payload")) {
+		t.Errorf("Metadata() = %+v", meta)
+	}
+	got, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "payload" {
+		t.Errorf("read = %q, want payload", got)
+	}
+	if _, err := art.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+	if err := art.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestFTPResultOpen — ResultStore.Open работает через тот же буфер.
+func TestFTPResultOpen(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["r.bin"] = []byte("result")
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	art, err := r.Open(context.Background(), "r.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = art.Close() }()
+	got, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "result" {
+		t.Errorf("read = %q, want result", got)
+	}
+}
+
+// TestFTPOpenSpoolLimit — превышение spool-лимита даёт ErrQuota.
+func TestFTPOpenSpoolLimit(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["big.bin"] = []byte("0123456789")
+	s, err := NewSourceStore(Options{
+		Addr: "localhost:21", User: "u", Dialer: dialerFor(conn), SpoolMaxBytes: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Open(context.Background(), "big.bin"); !errors.Is(err, object.ErrQuota) {
+		t.Fatalf("Open err = %v, want ErrQuota", err)
+	}
+}
+
+// TestFTPOpenErrorMapped — ошибка Retr (не found/connection) маппится в
+// ErrUnavailable после исчерпания попыток.
+func TestFTPOpenErrorMapped(t *testing.T) {
+	conn := newFakeConn()
+	conn.retrErr = errors.New("no such file")
+	s, err := NewSourceStore(Options{
+		Addr: "localhost:21", User: "u", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+	})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Open(context.Background(), "missing.bin"); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("Open err = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestFTPReadStream — ReadStream отдаёт поток без материализации;
+// соединение живёт до Close и освобождается ровно один раз.
+func TestFTPReadStream(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["s.bin"] = []byte("stream")
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	st, err := r.ReadStream(context.Background(), "s.bin")
+	if err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+	if meta := st.Metadata(); meta.Key != "s.bin" {
+		t.Errorf("Metadata() = %+v", meta)
+	}
+	got, err := io.ReadAll(st)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "stream" {
+		t.Errorf("read = %q, want stream", got)
+	}
+	if err := st.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+	if conn.quits != 1 {
+		t.Errorf("Quit calls = %d, want 1", conn.quits)
+	}
+}
+
+// TestFTPReadStreamRetry — ошибка соединения при Retr повторяется.
+func TestFTPReadStreamRetry(t *testing.T) {
+	conn := newFakeConn()
+	conn.files["s.bin"] = []byte("x")
+	conn.retrFailures = 1
+	r, err := NewResultStore(Options{
+		Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	st, err := r.ReadStream(context.Background(), "s.bin")
+	if err != nil {
+		t.Fatalf("ReadStream after retry: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestFTPReadStreamError — ошибка Retr маппится в ErrUnavailable.
+func TestFTPReadStreamError(t *testing.T) {
+	conn := newFakeConn()
+	conn.retrErr = errors.New("no such file")
+	r, err := NewResultStore(Options{
+		Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r.ReadStream(context.Background(), "missing.bin"); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("ReadStream err = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestFTPStreamCloserIdempotent — Close закрывает поток и освобождает
+// соединение ровно один раз.
+func TestFTPStreamCloserIdempotent(t *testing.T) {
+	var streamCloses, sessionDiscards int
+	wantErr := errors.New("close failed")
+	rc := closeFunc(func() error {
+		streamCloses++
+		return wantErr
+	})
+	sess := remote.NewDirectSession[conn](nil, func(conn) error {
+		sessionDiscards++
+		return nil
+	})
+	c := &ftpStreamCloser{rc: rc, session: sess}
+	if err := c.Close(); !errors.Is(err, wantErr) {
+		t.Errorf("first Close = %v, want %v", err, wantErr)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("second Close = %v, want nil", err)
+	}
+	if streamCloses != 1 {
+		t.Errorf("stream closes = %d, want 1", streamCloses)
+	}
+	if sessionDiscards != 1 {
+		t.Errorf("session discards = %d, want 1", sessionDiscards)
+	}
+}
+
+// closeFunc — io.Closer на основе функции.
+type closeFunc func() error
+
+func (f closeFunc) Close() error { return f() }
+
+// TestFTPStats — рекурсивная агрегация объектов/байт; temp-файлы
+// пропускаются; Root задаёт начало обхода.
+func TestFTPStats(t *testing.T) {
+	conn := newFakeConn()
+	conn.dirs["/"] = true
+	conn.dirs["/sub"] = true
+	conn.files["/a.bin"] = []byte("aaa")
+	conn.files["/sub/b.bin"] = []byte("bbbb")
+	conn.files["/.tmp-partial"] = []byte(strings.Repeat("x", 100))
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	stats, err := r.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Objects != 2 || stats.TotalBytes != 7 {
+		t.Errorf("Stats = %+v, want 2 objects / 7 bytes", stats)
+	}
+
+	// Root задаёт начало обхода.
+	conn.dirs["assets"] = true
+	conn.files["assets/x.bin"] = []byte("x")
+	r2, err := NewResultStore(Options{
+		Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn), Root: "assets",
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	stats2, err := r2.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats(root): %v", err)
+	}
+	if stats2.Objects != 1 || stats2.TotalBytes != 1 {
+		t.Errorf("Stats(root) = %+v, want 1 object / 1 byte", stats2)
+	}
+}
+
+// TestFTPStatsError — ошибка обхода маппится в ErrUnavailable.
+func TestFTPStatsError(t *testing.T) {
+	conn := newFakeConn()
+	conn.listFailures = 100
+	r, err := NewResultStore(Options{
+		Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn),
+		ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r.Stats(context.Background()); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("Stats err = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestFTPDeleteByPrefixNested — вложенные каталоги удаляются рекурсивно,
+// temp-файлы пропускаются.
+func TestFTPDeleteByPrefixNested(t *testing.T) {
+	conn := newFakeConn()
+	conn.dirs["assets"] = true
+	conn.dirs["assets/sub"] = true
+	conn.files["assets/a.webp"] = []byte("a")
+	conn.files["assets/sub/b.webp"] = []byte("b")
+	conn.files["assets/.tmp-pub"] = []byte("t")
+	conn.files["assets/sub/x.tmp"] = []byte("t")
+	r, err := NewResultStore(Options{Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(conn)})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	n, err := r.DeleteByPrefix(context.Background(), object.ObjectKey("assets/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted = %d, want 2", n)
+	}
+	for _, k := range []string{"assets/a.webp", "assets/sub/b.webp"} {
+		if _, ok := conn.files[k]; ok {
+			t.Errorf("file %q not deleted", k)
+		}
+	}
+	for _, k := range []string{"assets/.tmp-pub", "assets/sub/x.tmp"} {
+		if _, ok := conn.files[k]; !ok {
+			t.Errorf("temp file %q unexpectedly deleted", k)
+		}
+	}
+	if conn.dirs["assets/sub"] {
+		t.Error("subdirectory assets/sub not removed")
+	}
+}
+
+// TestFTPDeleteByPrefixErrors — ошибки DELE/RMD маппятся в ErrUnavailable;
+// 550 при RMD считается идемпотентным.
+func TestFTPDeleteByPrefixErrors(t *testing.T) {
+	ctx := context.Background()
+	opts := func(c *fakeConn) Options {
+		return Options{
+			Addr: "localhost:21", User: "u", Password: "p", Dialer: dialerFor(c),
+			ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+		}
+	}
+
+	c1 := newFakeConn()
+	c1.dirs["assets"] = true
+	c1.files["assets/a.webp"] = []byte("a")
+	c1.deleteErr = errors.New("delete failed")
+	r1, err := NewResultStore(opts(c1))
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r1.DeleteByPrefix(ctx, object.ObjectKey("assets/")); !errors.Is(err, object.ErrUnavailable) {
+		t.Errorf("delete error = %v, want ErrUnavailable", err)
+	}
+
+	c2 := newFakeConn()
+	c2.dirs["assets"] = true
+	c2.dirs["assets/sub"] = true
+	c2.files["assets/sub/b.webp"] = []byte("b")
+	c2.removeDirErr = errors.New("rmdir failed")
+	r2, err := NewResultStore(opts(c2))
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r2.DeleteByPrefix(ctx, object.ObjectKey("assets/")); !errors.Is(err, object.ErrUnavailable) {
+		t.Errorf("rmdir error = %v, want ErrUnavailable", err)
+	}
+
+	// 550 (no such file) при DELE/RMD — идемпотентный успех.
+	c3 := newFakeConn()
+	c3.dirs["assets"] = true
+	c3.dirs["assets/sub"] = true
+	c3.files["assets/sub/b.webp"] = []byte("b")
+	c3.deleteErr = &textproto.Error{Code: 550, Msg: "file unavailable"}
+	c3.removeDirErr = &textproto.Error{Code: 550, Msg: "dir unavailable"}
+	r3, err := NewResultStore(opts(c3))
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r3.DeleteByPrefix(ctx, object.ObjectKey("assets/")); err != nil {
+		t.Errorf("DeleteByPrefix(550) = %v, want nil", err)
+	}
+}
+
+// TestServerConnAdapterFeature — Feature объявляет поддержку базовых команд
+// RFC 959 и отклоняет расширенные.
+func TestServerConnAdapterFeature(t *testing.T) {
+	a := &serverConnAdapter{}
+	for _, cmd := range []string{"STOR", "RNFR", "RNTO", "DELE", "MKD", "RMD"} {
+		if !a.Feature(cmd) {
+			t.Errorf("Feature(%q) = false, want true", cmd)
+		}
+		if !a.Feature(strings.ToLower(cmd)) {
+			t.Errorf("Feature(%q) = false, want true (case-insensitive)", strings.ToLower(cmd))
+		}
+	}
+	for _, cmd := range []string{"MFMT", "SITE", ""} {
+		if a.Feature(cmd) {
+			t.Errorf("Feature(%q) = true, want false", cmd)
+		}
 	}
 }

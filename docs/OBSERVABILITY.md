@@ -2,7 +2,7 @@
 
 Imager предоставляет метрики, структурированные логи и health-эндпоинты для мониторинга в production.
 
-Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md), [CONFIGURATION.md](CONFIGURATION.md), [DEPLOYMENT.md](DEPLOYMENT.md), [TROUNLESHOOTING.md](TROUNLESHOOTING.md).
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md), [CONFIGURATION.md](CONFIGURATION.md), [DEPLOYMENT.md](DEPLOYMENT.md), [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Метрики
 
@@ -122,4 +122,4 @@ server:
 - [ARCHITECTURE.md](ARCHITECTURE.md) — место наблюдаемости в архитектуре.
 - [CONFIGURATION.md](CONFIGURATION.md) — секция `observability`.
 - [DEPLOYMENT.md](DEPLOYMENT.md) — настройка мониторинга в production.
-- [TROUNLESHOOTING.md](TROUNLESHOOTING.md) — диагностика по метрикам и логам.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — диагностика по метрикам и логам.

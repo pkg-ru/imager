@@ -151,14 +151,12 @@ func (c *closedProcessor) Close() error {
 
 // LibvipsCaps — покрытие форматов libvips (primary).
 //
-// Выходные форматы (Formats) НЕ включают APNG: запись APNG требует libvips,
-// собранного с libspng (Alpine-пакет vips собран только с libpng — pngsave
-// пишет статичный PNG вместо анимированного APNG). APNG-выход отклоняется
-// маршрутизатором (engine-unavailable).
-//
-// Входные форматы (SourceFormats) включают APNG: чтение APNG-входов работает
-// всегда (pngload читает multi-page PNG независимо от libspng) — APNG-вход
-// обрабатывается как анимированный PNG.
+// APNG присутствует и в Formats, и в SourceFormats: чтение APNG-входов
+// всегда даёт анимированный PNG, а APNG-выход поддержан маршрутизацией.
+// В стандартной сборке (libvips без libspng) pngsave пишет СТАТИЧНЫЙ PNG:
+// кадры анимации склеиваются в один вертикальный холст. Анимированный
+// APNG-выход возможен только при сборке libvips с libspng
+// (см. docs/INSTALLATION.md).
 func LibvipsCaps() routing.Capability {
 	return routing.Capability{
 		Name: "libvips",

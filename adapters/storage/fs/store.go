@@ -112,14 +112,22 @@ var _ storage.SourceStore = (*SourceStore)(nil)
 // Durability: fsync temp перед rename и fsync каталога после rename
 // (где поддерживается платформой).
 type ResultStore struct {
-	root  string
-	cache *cacheManager
+	root   string
+	cache  *cacheManager
+	noSync bool
 }
 
-// ResultStoreOptions — опции ResultStore (квота/eviction).
+// ResultStoreOptions — опции ResultStore (квота/eviction, durability).
 type ResultStoreOptions struct {
 	// Cache — параметры квоты (0 по умолчанию = без лимитов).
 	Cache CacheOptions
+	// NoSync — не выполнять fsync temp-файла и каталога при публикации/
+	// удалении. По умолчанию false (durability включена). Отключение
+	// ускоряет публикацию на сетевых дисках/EBS (2 syscall на объект), но
+	// после аварийного завершения процесса/машины последние записи могут
+	// быть потеряны. Для кэша результатов, который пересобирается из
+	// исходников, это приемлемый компромисс при явном opt-in.
+	NoSync bool
 }
 
 // NewResultStore создаёт ResultStore в root без лимитов.
@@ -136,7 +144,7 @@ func NewResultStoreWithOptions(root string, opts ResultStoreOptions) (*ResultSto
 	if err != nil {
 		return nil, fmt.Errorf("fs: result store: %w", err)
 	}
-	r := &ResultStore{root: abs}
+	r := &ResultStore{root: abs, noSync: opts.NoSync}
 	cm, err := newCacheManager(opts.Cache, r.deleteFile)
 	if err != nil {
 		return nil, err
@@ -338,11 +346,16 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			return cErr
 		}
 	}
-	if err = tmp.Sync(); err != nil {
-		if qErr := quotaErr(err); qErr != nil {
-			return qErr
+	// Durability: fsync temp перед rename. При noSync (opt-in) шаг
+	// пропускается — запись может потеряться при аварии, но публикация
+	// быстрее (см. ResultStoreOptions.NoSync).
+	if !r.noSync {
+		if err = syncFile(tmp); err != nil {
+			if qErr := quotaErr(err); qErr != nil {
+				return qErr
+			}
+			return fmt.Errorf("fs: sync temp: %w", err)
 		}
-		return fmt.Errorf("fs: sync temp: %w", err)
 	}
 	if err = tmp.Close(); err != nil {
 		if qErr := quotaErr(err); qErr != nil {
@@ -371,11 +384,13 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 			return fmt.Errorf("fs: link temp: %w", lnErr)
 		}
 		_ = os.Remove(tmpName)
-		if err := fsyncDir(dir); err != nil {
-			// fsync каталога не удался — запись может быть не durable.
-			// Возвращаем ошибку, чтобы вызывающий знал о риске потери.
-			r.cache.releaseBytes(written)
-			return fmt.Errorf("fs: fsync dir: %w", err)
+		if !r.noSync {
+			if err := fsyncDirHook(dir); err != nil {
+				// fsync каталога не удался — запись может быть не durable.
+				// Возвращаем ошибку, чтобы вызывающий знал о риске потери.
+				r.cache.releaseBytes(written)
+				return fmt.Errorf("fs: fsync dir: %w", err)
+			}
 		}
 		r.cache.releaseBytes(written)
 		r.cache.recordPublish(key, written)
@@ -389,10 +404,12 @@ func (r *ResultStore) Publish(ctx context.Context, key object.ObjectKey, src io.
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("fs: rename temp: %w", err)
 	}
-	if err := fsyncDir(dir); err != nil {
-		// fsync каталога не удался — запись может быть не durable.
-		r.cache.releaseBytes(written)
-		return fmt.Errorf("fs: fsync dir: %w", err)
+	if !r.noSync {
+		if err := fsyncDirHook(dir); err != nil {
+			// fsync каталога не удался — запись может быть не durable.
+			r.cache.releaseBytes(written)
+			return fmt.Errorf("fs: fsync dir: %w", err)
+		}
 	}
 	r.cache.releaseBytes(written)
 	r.cache.recordPublish(key, written)
@@ -453,9 +470,11 @@ func (r *ResultStore) Delete(ctx context.Context, key object.ObjectKey) error {
 	// Файл уже удалён: учёт квоты не должен расходиться с диском, поэтому
 	// запись из LRU-таблицы снимаем независимо от результата fsync.
 	r.cache.remove(key)
-	if err := fsyncDir(filepath.Dir(full)); err != nil {
-		// fsync каталога не удался — удаление может быть не durable.
-		return fmt.Errorf("fs: fsync dir: %w", err)
+	if !r.noSync {
+		if err := fsyncDirHook(filepath.Dir(full)); err != nil {
+			// fsync каталога не удался — удаление может быть не durable.
+			return fmt.Errorf("fs: fsync dir: %w", err)
+		}
 	}
 	return nil
 }
@@ -533,8 +552,10 @@ func (r *ResultStore) DeleteByPrefix(ctx context.Context, prefix object.ObjectKe
 	}
 	// Синхронизируем учёт квоты: снимаем все записи с данным префиксом.
 	r.cache.removePrefix(dirPrefix)
-	if err := fsyncDir(filepath.Dir(full)); err != nil {
-		return 0, fmt.Errorf("fs: delete by prefix: fsync dir: %w", err)
+	if !r.noSync {
+		if err := fsyncDirHook(filepath.Dir(full)); err != nil {
+			return 0, fmt.Errorf("fs: delete by prefix: fsync dir: %w", err)
+		}
 	}
 	return count, nil
 }

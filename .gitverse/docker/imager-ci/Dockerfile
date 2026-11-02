@@ -105,6 +105,14 @@ RUN go mod download -x
 RUN go install golang.org/x/vuln/cmd/govulncheck@latest \
     && ln -sf /root/.cache/go-tools/bin/govulncheck /usr/local/bin/govulncheck
 
+# --- staticcheck: предустановлен (джоба fast-ci) ----------------------------
+# Расширенный статический анализ (SA/S/U). Версия PINNED: анализатор должен
+# понимать синтаксис текущего toolchain (старые сборки не парсят новые версии
+# Go). Обновляется вместе с образом. В ci.yml есть fallback-установка той же
+# версии, поэтому workflow и образ можно обновлять независимо.
+RUN go install honnef.co/go/tools/cmd/staticcheck@2026.2.2 \
+    && ln -sf /root/.cache/go-tools/bin/staticcheck /usr/local/bin/staticcheck
+
 # --- ONNX-модели: предустановлены (тесты реального инференса) ---------------
 # YuNet (лица) + SSD MobileNet (объекты) + selfie.jpg (тестовое изображение).
 # Скачиваются один раз при сборке образа в /etc/imager/models; джоба test

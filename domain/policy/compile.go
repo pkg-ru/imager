@@ -94,7 +94,6 @@ type PresetConfig struct {
 	Trim          dynamic.Bool                     `yaml:"trim"`
 	Quality       dynamic.Uint32                   `yaml:"quality"`
 	Frames        dynamic.Uint32                   `yaml:"frames"`
-	Duration      dynamic.Uint32                   `yaml:"duration"`
 	Loop          dynamic.Nullable[dynamic.Bool]   `yaml:"loop"`
 	Watermark     dynamic.String                   `yaml:"watermark"`
 	AutoOrient    dynamic.Nullable[dynamic.Bool]   `yaml:"auto-orient"`
@@ -532,7 +531,6 @@ func compilePreset(name string, cfg PresetConfig, resolveWM func(string, string)
 		dprSet,
 		int(cfg.Quality.Unwrap()),
 		int(cfg.Frames.Unwrap()),
-		int(cfg.Duration.Unwrap()),
 		loopFromConfig(cfg.Loop),
 		encOverrides,
 	)
@@ -681,7 +679,6 @@ func compileCustom(name string, cfg PresetConfig, resolveWM func(string, string)
 		dprSet,
 		int(cfg.Quality.Unwrap()),
 		int(cfg.Frames.Unwrap()),
-		int(cfg.Duration.Unwrap()),
 		loopFromConfig(cfg.Loop),
 		encOverrides,
 	)

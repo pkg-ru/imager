@@ -343,6 +343,12 @@ type StorageYAML struct {
 	IdleConnTimeout dynamic.String `yaml:"idle-conn-timeout"`
 	// MetadataTTL — TTL кэша метаданных (S3; duration; 0 = кэш отключён).
 	MetadataTTL dynamic.String `yaml:"metadata-ttl"`
+	// Fsync — выполнять fsync temp-файла и каталога при публикации/удалении
+	// (только для FS-хранилища; default: true). false ускоряет публикацию
+	// (минус 2 syscall на объект) на сетевых дисках/EBS, но последние
+	// записи могут быть потеряны при аварийном завершении. Для кэша
+	// результатов, пересобираемого из исходников, это допустимый компромисс.
+	Fsync dynamic.Nullable[dynamic.Bool] `yaml:"fsync"`
 }
 
 // LibvipsYAML — YAML-представление конфигурации libvips.
@@ -586,9 +592,6 @@ type ApplicationLimitsYAML struct {
 	DPR dynamic.Uint32 `yaml:"dpr"`
 	// Frames — максимальное число кадров (0 = без ограничения).
 	Frames dynamic.Uint32 `yaml:"frames"`
-	// Duration — максимальная длительность в миллисекундах (0 = без
-	// ограничения).
-	Duration dynamic.Uint32 `yaml:"duration"`
 	// Concurrency — максимальное число одновременно выполняемых операций
 	// (0 = без ограничения). Валидируется, но НЕ подключается к HTTP-слою
 	// (admission control остаётся в httpapi).
@@ -999,7 +1002,6 @@ func buildApplicationLimits(raw ApplicationLimitsYAML) (generatev2.Limits, error
 		Height:      raw.Height.Unwrap(),
 		DPR:         raw.DPR.Unwrap(),
 		Frames:      raw.Frames.Unwrap(),
-		Duration:    raw.Duration.Unwrap(),
 		Concurrency: raw.Concurrency.Unwrap(),
 	}, nil
 }
@@ -1206,6 +1208,10 @@ func (s StorageYAML) toRemoteStorageConfig() (RemoteStorageConfig, error) {
 		Conn: remote.ConnOptions{
 			DialTimeout: 30 * time.Second,
 		},
+	}
+	// fsync по умолчанию включён: NoSync только при явном fsync: false.
+	if s.Fsync.Set {
+		cfg.NoSync = !s.Fsync.Value.Unwrap()
 	}
 	if s.TLSVerify.Set {
 		cfg.TLSVerify = s.TLSVerify.Value.Unwrap()

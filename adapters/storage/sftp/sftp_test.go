@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path"
 	"strings"
@@ -41,6 +42,18 @@ type fakeClient struct {
 	// statFailures — сколько раз Stat должен вернуть ошибку соединения
 	// перед успехом (для проверки retry).
 	statFailures int
+	// openFailures — сколько раз Open должен вернуть ошибку соединения.
+	openFailures int
+	// fileStatFailures — сколько раз Stat открытого файла вернёт ошибку.
+	fileStatFailures int
+	// readDirErr — если задана, ReadDir возвращает её.
+	readDirErr error
+	// removeErr / removeDirErr — если заданы, соответствующие операции
+	// возвращают их (кроме os.ErrNotExist-семантики).
+	removeErr    error
+	removeDirErr error
+	// closes — число вызовов Close (освобождение соединения).
+	closes int
 }
 
 func newFakeClient() *fakeClient {
@@ -61,33 +74,53 @@ func (c *fakeClient) Stat(p string) (os.FileInfo, error) {
 	return nil, os.ErrNotExist
 }
 
-// openTemp создаёт реальный temp-файл с данными и возвращает *sftp.File.
-func (c *fakeClient) openTemp(p string) (*sftp.File, error) {
+// fakeRemoteFile — in-memory remoteFile: поток, метаданные и закрытие.
+type fakeRemoteFile struct {
+	name     string
+	r        *bytes.Reader
+	isDir    bool
+	statErr  error
+	closeErr error
+	closed   bool
+}
+
+func (f *fakeRemoteFile) Read(p []byte) (int, error) { return f.r.Read(p) }
+
+func (f *fakeRemoteFile) Seek(offset int64, whence int) (int64, error) {
+	return f.r.Seek(offset, whence)
+}
+
+func (f *fakeRemoteFile) Close() error {
+	f.closed = true
+	return f.closeErr
+}
+
+func (f *fakeRemoteFile) Stat() (os.FileInfo, error) {
+	if f.statErr != nil {
+		return nil, f.statErr
+	}
+	return fakeFileInfo{name: f.name, size: int64(f.r.Size()), isDir: f.isDir}, nil
+}
+
+func (c *fakeClient) Open(p string) (remoteFile, error) {
+	if c.openFailures > 0 {
+		c.openFailures--
+		return nil, errors.New("connection reset")
+	}
+	if c.dirs[p] {
+		return &fakeRemoteFile{name: path.Base(p), r: bytes.NewReader(nil), isDir: true}, nil
+	}
 	data, ok := c.files[p]
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	f, err := os.CreateTemp("", "sftp-fake-*")
-	if err != nil {
-		return nil, err
+	f := &fakeRemoteFile{name: path.Base(p), r: bytes.NewReader(data)}
+	if c.fileStatFailures > 0 {
+		c.fileStatFailures--
+		f.statErr = errors.New("stat failed")
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	// sftp.File не имеет публичного конструктора; используем его через
-	// обёртку невозможно. Вместо этого возвращаем nil и тестируем через
-	// отдельный путь. Для полноты теста Open/OpenFile не используются
-	// напрямую в unit-сценариях ниже.
-	_ = f.Close()
-	return nil, nil
+	return f, nil
 }
-
-func (c *fakeClient) Open(p string) (*sftp.File, error) { return c.openTemp(p) }
 func (c *fakeClient) OpenFile(p string, f int) (io.WriteCloser, error) {
 	if f&os.O_EXCL != 0 {
 		if _, exists := c.files[p]; exists {
@@ -124,14 +157,23 @@ func (c *fakeClient) PosixRename(oldname, newname string) error {
 	return nil
 }
 func (c *fakeClient) Remove(p string) error {
+	if c.removeErr != nil {
+		return c.removeErr
+	}
 	delete(c.files, p)
 	return nil
 }
 func (c *fakeClient) RemoveDirectory(p string) error {
+	if c.removeDirErr != nil {
+		return c.removeDirErr
+	}
 	delete(c.dirs, p)
 	return nil
 }
 func (c *fakeClient) ReadDir(p string) ([]os.FileInfo, error) {
+	if c.readDirErr != nil {
+		return nil, c.readDirErr
+	}
 	var out []os.FileInfo
 	seenDir := map[string]bool{}
 	for k, v := range c.files {
@@ -161,7 +203,10 @@ func (c *fakeClient) ReadDir(p string) ([]os.FileInfo, error) {
 	}
 	return out, nil
 }
-func (c *fakeClient) Close() error { return nil }
+func (c *fakeClient) Close() error {
+	c.closes++
+	return nil
+}
 
 func TestSFTPConstructorValidation(t *testing.T) {
 	if _, err := NewSourceStore(Options{}); err == nil {
@@ -400,4 +445,432 @@ func TestSFTPDeleteByPrefix(t *testing.T) {
 	}
 }
 
-var _ = bytes.NewReader
+// TestClientAdapterOpenFile — clientAdapter делегирует Open/OpenFile
+// реальному *sftp.Client. Сервер — in-memory SFTP (pkg/sftp) поверх net.Pipe,
+// без сети и реального SSH.
+func TestClientAdapterOpenFile(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	srv := sftp.NewRequestServer(serverConn, sftp.InMemHandler())
+	go func() { _ = srv.Serve() }()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = clientConn.Close()
+	})
+
+	cl, err := sftp.NewClientPipe(clientConn, clientConn)
+	if err != nil {
+		t.Fatalf("NewClientPipe: %v", err)
+	}
+	t.Cleanup(func() { _ = cl.Close() })
+
+	a := &clientAdapter{Client: cl}
+
+	w, err := a.OpenFile("/hello.txt", os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := io.WriteString(w, "hi"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("WriteCloser.Close: %v", err)
+	}
+
+	f, err := a.Open("/hello.txt")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "hi" {
+		t.Errorf("read = %q, want hi", got)
+	}
+	if info, err := f.Stat(); err != nil {
+		t.Fatalf("Stat: %v", err)
+	} else if info.Size() != 2 {
+		t.Errorf("size = %d, want 2", info.Size())
+	}
+}
+
+// closeFunc — io.Closer на основе функции.
+type closeFunc func() error
+
+func (f closeFunc) Close() error { return f() }
+
+// TestSFTPOpenBuffered — SourceStore.Open материализует объект в
+// перематываемый буфер с метаданными.
+func TestSFTPOpenBuffered(t *testing.T) {
+	c := newFakeClient()
+	c.files["dir/file.bin"] = []byte("payload")
+	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	art, err := s.Open(context.Background(), "dir/file.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if meta := art.Metadata(); meta.Key != "dir/file.bin" || meta.Size != int64(len("payload")) {
+		t.Errorf("Metadata() = %+v", meta)
+	}
+	got, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "payload" {
+		t.Errorf("read = %q, want payload", got)
+	}
+	// Артефакт перематываемый.
+	if _, err := art.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+	again, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll after seek: %v", err)
+	}
+	if string(again) != "payload" {
+		t.Errorf("read after seek = %q, want payload", again)
+	}
+	if err := art.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestSFTPOpenRoot — Root добавляется к ключу при открытии.
+func TestSFTPOpenRoot(t *testing.T) {
+	c := newFakeClient()
+	c.files["base/x.bin"] = []byte("x")
+	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c, Root: "base"})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	art, err := s.Open(context.Background(), "x.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = art.Close() }()
+	got, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "x" {
+		t.Errorf("read = %q, want x", got)
+	}
+}
+
+// TestSFTPOpenNotFound — отсутствующий ключ и каталог дают ErrNotFound.
+func TestSFTPOpenNotFound(t *testing.T) {
+	c := newFakeClient()
+	c.dirs["folder"] = true
+	s, err := NewSourceStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := s.Open(ctx, "missing.bin"); !errors.Is(err, object.ErrNotFound) {
+		t.Errorf("Open(missing) err = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Open(ctx, "folder"); !errors.Is(err, object.ErrNotFound) {
+		t.Errorf("Open(dir) err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestSFTPOpenSpoolLimit — превышение spool-лимита даёт ErrQuota.
+func TestSFTPOpenSpoolLimit(t *testing.T) {
+	c := newFakeClient()
+	c.files["big.bin"] = []byte("0123456789")
+	s, err := NewSourceStore(Options{
+		Addr: "h:22", User: "u", Client: c, SpoolMaxBytes: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	if _, err := s.Open(context.Background(), "big.bin"); !errors.Is(err, object.ErrQuota) {
+		t.Fatalf("Open err = %v, want ErrQuota", err)
+	}
+}
+
+// TestSFTPOpenRetry — ошибка соединения при Open повторяется.
+func TestSFTPOpenRetry(t *testing.T) {
+	c := newFakeClient()
+	c.files["x.bin"] = []byte("data")
+	c.openFailures = 1
+	s, err := NewSourceStore(Options{
+		Addr: "h:22", User: "u", Client: c,
+		ConnOptions: remote.ConnOptions{MaxAttempts: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewSourceStore: %v", err)
+	}
+	art, err := s.Open(context.Background(), "x.bin")
+	if err != nil {
+		t.Fatalf("Open after retry: %v", err)
+	}
+	defer func() { _ = art.Close() }()
+}
+
+// TestSFTPResultOpen — ResultStore.Open работает через тот же буфер.
+func TestSFTPResultOpen(t *testing.T) {
+	c := newFakeClient()
+	c.files["r.bin"] = []byte("result")
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	art, err := r.Open(context.Background(), "r.bin")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = art.Close() }()
+	got, err := io.ReadAll(art)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "result" {
+		t.Errorf("read = %q, want result", got)
+	}
+}
+
+// TestSFTPReadStream — ReadStream отдаёт поток без материализации;
+// соединение живёт до Close и освобождается ровно один раз.
+func TestSFTPReadStream(t *testing.T) {
+	c := newFakeClient()
+	c.files["s.bin"] = []byte("stream")
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	st, err := r.ReadStream(context.Background(), "s.bin")
+	if err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+	if meta := st.Metadata(); meta.Key != "s.bin" || meta.Size != int64(len("stream")) {
+		t.Errorf("Metadata() = %+v", meta)
+	}
+	got, err := io.ReadAll(st)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "stream" {
+		t.Errorf("read = %q, want stream", got)
+	}
+	if err := st.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	// Повторное закрытие безопасно (sync.Once), соединение не закрывается дважды.
+	if err := st.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+	if c.closes != 1 {
+		t.Errorf("client closes = %d, want 1", c.closes)
+	}
+}
+
+// TestSFTPReadStreamNotFound — отсутствующий объект и каталог → ErrNotFound.
+func TestSFTPReadStreamNotFound(t *testing.T) {
+	c := newFakeClient()
+	c.dirs["folder"] = true
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := r.ReadStream(ctx, "missing.bin"); !errors.Is(err, object.ErrNotFound) {
+		t.Errorf("ReadStream(missing) err = %v, want ErrNotFound", err)
+	}
+	if _, err := r.ReadStream(ctx, "folder"); !errors.Is(err, object.ErrNotFound) {
+		t.Errorf("ReadStream(dir) err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestSFTPReadStreamStatError — ошибка Stat открытого файла маппится в
+// ErrUnavailable без ретрая.
+func TestSFTPReadStreamStatError(t *testing.T) {
+	c := newFakeClient()
+	c.files["s.bin"] = []byte("x")
+	c.fileStatFailures = 1
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r.ReadStream(context.Background(), "s.bin"); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("ReadStream err = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestSFTPReadStreamRetry — ошибка соединения при открытии повторяется.
+func TestSFTPReadStreamRetry(t *testing.T) {
+	c := newFakeClient()
+	c.files["s.bin"] = []byte("x")
+	c.openFailures = 1
+	r, err := NewResultStore(Options{
+		Addr: "h:22", User: "u", Client: c,
+		ConnOptions: remote.ConnOptions{MaxAttempts: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	st, err := r.ReadStream(context.Background(), "s.bin")
+	if err != nil {
+		t.Fatalf("ReadStream after retry: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestSFTPStreamCloserIdempotent — Close закрывает файл и освобождает
+// сессию ровно один раз; ошибка файла возвращается первому вызову.
+func TestSFTPStreamCloserIdempotent(t *testing.T) {
+	var fileCloses, sessionDiscards int
+	wantErr := errors.New("close failed")
+	f := closeFunc(func() error {
+		fileCloses++
+		return wantErr
+	})
+	sess := remote.NewDirectSession[client](nil, func(client) error {
+		sessionDiscards++
+		return nil
+	})
+	c := &sftpStreamCloser{f: f, session: sess}
+	if err := c.Close(); !errors.Is(err, wantErr) {
+		t.Errorf("first Close = %v, want %v", err, wantErr)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("second Close = %v, want nil", err)
+	}
+	if fileCloses != 1 {
+		t.Errorf("file closes = %d, want 1", fileCloses)
+	}
+	if sessionDiscards != 1 {
+		t.Errorf("session discards = %d, want 1", sessionDiscards)
+	}
+}
+
+// TestSFTPStats — рекурсивная агрегация объектов/байт; .tmp-* пропускаются.
+func TestSFTPStats(t *testing.T) {
+	c := newFakeClient()
+	c.dirs["sub"] = true
+	c.dirs["sub/deep"] = true
+	c.files["a.bin"] = []byte("aaa")
+	c.files["sub/b.bin"] = []byte("bbbb")
+	c.files["sub/deep/c.bin"] = []byte("ccccc")
+	c.files["sub/.tmp-partial"] = []byte(strings.Repeat("x", 100))
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	stats, err := r.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.Objects != 3 || stats.TotalBytes != 12 {
+		t.Errorf("Stats = %+v, want 3 objects / 12 bytes", stats)
+	}
+
+	// Root задаёт начало обхода.
+	c.files["base/x.bin"] = []byte("x")
+	r2, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c, Root: "base"})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	stats2, err := r2.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats(root): %v", err)
+	}
+	if stats2.Objects != 1 || stats2.TotalBytes != 1 {
+		t.Errorf("Stats(root) = %+v, want 1 object / 1 byte", stats2)
+	}
+}
+
+// TestSFTPStatsError — ошибка обхода маппится в ErrUnavailable.
+func TestSFTPStatsError(t *testing.T) {
+	c := newFakeClient()
+	c.readDirErr = errors.New("boom")
+	r, err := NewResultStore(Options{
+		Addr: "h:22", User: "u", Client: c,
+		ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+	})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r.Stats(context.Background()); !errors.Is(err, object.ErrUnavailable) {
+		t.Fatalf("Stats err = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestSFTPDeleteByPrefixNested — вложенные каталоги удаляются рекурсивно,
+// временные файлы публикации пропускаются.
+func TestSFTPDeleteByPrefixNested(t *testing.T) {
+	c := newFakeClient()
+	c.dirs["assets"] = true
+	c.dirs["assets/sub"] = true
+	c.files["assets/a.webp"] = []byte("a")
+	c.files["assets/sub/b.webp"] = []byte("b")
+	c.files["assets/.tmp-pub"] = []byte("t")
+	c.files["assets/sub/.tmp-pub"] = []byte("t")
+	r, err := NewResultStore(Options{Addr: "h:22", User: "u", Client: c})
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	n, err := r.DeleteByPrefix(context.Background(), object.ObjectKey("assets/"))
+	if err != nil {
+		t.Fatalf("DeleteByPrefix: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("deleted = %d, want 2", n)
+	}
+	for _, k := range []string{"assets/a.webp", "assets/sub/b.webp"} {
+		if _, ok := c.files[k]; ok {
+			t.Errorf("file %q not deleted", k)
+		}
+	}
+	// Временные файлы публикации не трогаются.
+	for _, k := range []string{"assets/.tmp-pub", "assets/sub/.tmp-pub"} {
+		if _, ok := c.files[k]; !ok {
+			t.Errorf("temp file %q unexpectedly deleted", k)
+		}
+	}
+	if c.dirs["assets/sub"] {
+		t.Error("subdirectory assets/sub not removed")
+	}
+}
+
+// TestSFTPDeleteByPrefixErrors — ошибки удаления файла/каталога маппятся в
+// ErrUnavailable.
+func TestSFTPDeleteByPrefixErrors(t *testing.T) {
+	ctx := context.Background()
+	opts := func(c *fakeClient) Options {
+		return Options{
+			Addr: "h:22", User: "u", Client: c,
+			ConnOptions: remote.ConnOptions{MaxAttempts: 1},
+		}
+	}
+
+	c1 := newFakeClient()
+	c1.files["assets/a.webp"] = []byte("a")
+	c1.removeErr = errors.New("remove failed")
+	r1, err := NewResultStore(opts(c1))
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r1.DeleteByPrefix(ctx, object.ObjectKey("assets/")); !errors.Is(err, object.ErrUnavailable) {
+		t.Errorf("remove error = %v, want ErrUnavailable", err)
+	}
+
+	c2 := newFakeClient()
+	c2.dirs["assets"] = true
+	c2.dirs["assets/sub"] = true
+	c2.files["assets/sub/b.webp"] = []byte("b")
+	c2.removeDirErr = errors.New("rmdir failed")
+	r2, err := NewResultStore(opts(c2))
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	if _, err := r2.DeleteByPrefix(ctx, object.ObjectKey("assets/")); !errors.Is(err, object.ErrUnavailable) {
+		t.Errorf("rmdir error = %v, want ErrUnavailable", err)
+	}
+}

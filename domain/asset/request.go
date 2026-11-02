@@ -18,7 +18,7 @@ import (
 //
 // Для segment-запроса заполняются SourceName, SourceFormat, SegmentName, DPR
 // (0 = @dpr в URL отсутствует) и OutputFormats. Поля crop/trim/size/quality/
-// frames/duration/loop/watermark/orientation заполняются при разрешении
+// frames/loop/watermark/orientation заполняются при разрешении
 // (PresetSet.Resolve / Policy.Resolve) и не влияют на Build(): канонический
 // URL строится из segmentName + dpr + outputFormat.
 //
@@ -38,7 +38,6 @@ type Request struct {
 	outputFormat Format
 	quality      int
 	frames       int
-	duration     int
 	loop         *bool
 	watermark    *processing.WatermarkSpec
 	orientation  *processing.OrientationSpec
@@ -138,10 +137,6 @@ func (r *Request) Quality() int { return r.quality }
 // Frames возвращает максимальное число кадров анимации (0 = без
 // ограничения). Заполняется при разрешении пресета.
 func (r *Request) Frames() int { return r.frames }
-
-// Duration возвращает максимальную длительность анимации в миллисекундах
-// (0 = без ограничения). Заполняется при разрешении пресета.
-func (r *Request) Duration() int { return r.duration }
 
 // Loop возвращает зацикливание анимации (nil = по умолчанию из processing).
 // Заполняется при разрешении пресета.
@@ -271,17 +266,16 @@ func (r *Request) String() string {
 }
 
 // WithProcessingOptions возвращает копию запроса с параметрами обработки
-// (quality/frames/duration/loop/watermark/encOverrides). Используется при
+// (quality/frames/loop/watermark/encOverrides). Используется при
 // разрешении пресета: параметры не являются частью URL-грамматики и не
 // влияют на Build().
-func (r *Request) WithProcessingOptions(quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, encOverrides map[string]map[string]any) *Request {
+func (r *Request) WithProcessingOptions(quality, frames int, loop *bool, watermark *processing.WatermarkSpec, encOverrides map[string]map[string]any) *Request {
 	if r == nil {
 		return nil
 	}
 	cp := *r
 	cp.quality = quality
 	cp.frames = frames
-	cp.duration = duration
 	cp.loop = loop
 	cp.watermark = watermark
 	cp.encOverrides = cloneEncOverrides(encOverrides)
@@ -305,7 +299,7 @@ func (r *Request) WithOrientation(o *processing.OrientationSpec) *Request {
 // пресета/custom. segmentName сохраняется: канонический URL строится из
 // него. resolved=true помечает запрос разрешённым (Authorize не резолвит
 // повторно).
-func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality, frames, duration int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec, encOverrides map[string]map[string]any) *Request {
+func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality, frames int, loop *bool, watermark *processing.WatermarkSpec, orientation *processing.OrientationSpec, encOverrides map[string]map[string]any) *Request {
 	if r == nil {
 		return nil
 	}
@@ -316,7 +310,6 @@ func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality
 	cp.dpr = dpr
 	cp.quality = quality
 	cp.frames = frames
-	cp.duration = duration
 	cp.loop = loop
 	cp.watermark = watermark
 	cp.orientation = orientation

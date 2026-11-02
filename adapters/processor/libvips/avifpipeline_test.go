@@ -34,7 +34,6 @@ type avifPipelineHarness struct {
 	// Наблюдения (защищены mu или атомарные).
 	mu           sync.Mutex
 	consumeOrder []int
-	discarded    []int
 	curDrain     atomic.Int64
 	maxDrain     atomic.Int64
 	curConsume   atomic.Int64
@@ -96,7 +95,7 @@ func TestAvifPipelineOrder(t *testing.T) {
 		return nil
 	}
 
-	if err := runAvifFramePipeline[int, int](nil, n, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); err != nil {
 		t.Fatalf("runAvifFramePipeline: %v", err)
 	}
@@ -154,7 +153,7 @@ func TestAvifPipelineInFlightLimit(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runAvifFramePipeline[int, int](nil, n, workers,
+		done <- runAvifFramePipeline[int, int](context.Background(), n, workers,
 			h.makeFrame, h.drain, h.consume, h.discard)
 	}()
 
@@ -203,7 +202,7 @@ func TestAvifPipelineDrainParallel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- runAvifFramePipeline[int, int](nil, n, workers,
+		done <- runAvifFramePipeline[int, int](context.Background(), n, workers,
 			h.makeFrame, h.drain, h.consume, h.discard)
 	}()
 
@@ -245,7 +244,7 @@ func TestAvifPipelineConsumeSingle(t *testing.T) {
 		return nil
 	}
 
-	if err := runAvifFramePipeline[int, int](nil, n, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); err != nil {
 		t.Fatalf("runAvifFramePipeline: %v", err)
 	}
@@ -272,7 +271,7 @@ func TestAvifPipelineMakeFrameError(t *testing.T) {
 		return nil
 	}
 
-	err := runAvifFramePipeline[int, int](nil, n, 4,
+	err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
@@ -302,7 +301,7 @@ func TestAvifPipelineDrainError(t *testing.T) {
 		return nil
 	}
 
-	err := runAvifFramePipeline[int, int](nil, n, 4,
+	err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
@@ -329,7 +328,7 @@ func TestAvifPipelineConsumeError(t *testing.T) {
 		return nil
 	}
 
-	err := runAvifFramePipeline[int, int](nil, n, 4,
+	err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want %v", err, wantErr)
@@ -360,7 +359,7 @@ func TestAvifPipelineDiscardOnStop(t *testing.T) {
 		mu.Unlock()
 	}
 
-	if err := runAvifFramePipeline[int, int](nil, n, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); err == nil {
 		t.Fatal("expected consume error")
 	}
@@ -384,7 +383,7 @@ func TestAvifPipelineSequentialPath(t *testing.T) {
 		order = append(order, i)
 		return nil
 	}
-	if err := runAvifFramePipeline[int, int](nil, 1, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), 1, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); err != nil {
 		t.Fatalf("n=1: %v", err)
 	}
@@ -403,7 +402,7 @@ func TestAvifPipelineSequentialPath(t *testing.T) {
 		seq = append(seq, i)
 		return nil
 	}
-	if err := runAvifFramePipeline[int, int](nil, 8, 1,
+	if err := runAvifFramePipeline[int, int](context.Background(), 8, 1,
 		h2.makeFrame, h2.drain, h2.consume, h2.discard); err != nil {
 		t.Fatalf("workers=1: %v", err)
 	}
@@ -427,21 +426,21 @@ func TestAvifPipelineSequentialPathError(t *testing.T) {
 
 	h := newAvifPipelineHarness()
 	h.makeFrame = func(i int) (int, error) { return 0, mkErr }
-	if err := runAvifFramePipeline[int, int](nil, 1, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), 1, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); !errors.Is(err, mkErr) {
 		t.Fatalf("makeFrame err = %v, want %v", err, mkErr)
 	}
 
 	h2 := newAvifPipelineHarness()
 	h2.drain = func(f, i int) (int, error) { return 0, drErr }
-	if err := runAvifFramePipeline[int, int](nil, 1, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), 1, 4,
 		h2.makeFrame, h2.drain, h2.consume, h2.discard); !errors.Is(err, drErr) {
 		t.Fatalf("drain err = %v, want %v", err, drErr)
 	}
 
 	h3 := newAvifPipelineHarness()
 	h3.consume = func(r, i int) error { return cnErr }
-	if err := runAvifFramePipeline[int, int](nil, 1, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), 1, 4,
 		h3.makeFrame, h3.drain, h3.consume, h3.discard); !errors.Is(err, cnErr) {
 		t.Fatalf("consume err = %v, want %v", err, cnErr)
 	}
@@ -505,7 +504,7 @@ func TestAvifPipelineWorkersClampedToN(t *testing.T) {
 		return nil
 	}
 
-	if err := runAvifFramePipeline[int, int](nil, n, 8,
+	if err := runAvifFramePipeline[int, int](context.Background(), n, 8,
 		h.makeFrame, h.drain, h.consume, h.discard); err != nil {
 		t.Fatalf("runAvifFramePipeline: %v", err)
 	}
@@ -533,7 +532,7 @@ func TestAvifPipelineSlowConsumer(t *testing.T) {
 		return nil
 	}
 
-	if err := runAvifFramePipeline[int, int](nil, n, 4,
+	if err := runAvifFramePipeline[int, int](context.Background(), n, 4,
 		h.makeFrame, h.drain, h.consume, h.discard); err != nil {
 		t.Fatalf("runAvifFramePipeline: %v", err)
 	}

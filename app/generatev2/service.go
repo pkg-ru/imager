@@ -659,7 +659,7 @@ func (s *Service) learningResolve(req *asset.Request) (*asset.Request, bool) {
 		false,
 		size,
 		dpr,
-		0, 0, 0, nil, nil, nil,
+		0, 0, nil, nil, nil,
 		nil, // learning-mode: без native overrides
 	), true
 }
@@ -977,7 +977,6 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	}
 	loop := req.Loop()
 	frames := req.Frames()
-	duration := req.Duration()
 	wm := s.resolveWatermark(req)
 	or := s.resolveOrientation(req)
 	encOverrides := req.EncodingOverrides()
@@ -987,7 +986,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 		plan, err := processing.NewProcessingPlan(
 			op, srcFmt, outFmt,
 			processing.Size{Original: true},
-			dpr, quality, loop, frames, duration,
+			dpr, quality, loop, frames,
 			encOverrides,
 		)
 		if err != nil {
@@ -1016,7 +1015,7 @@ func (s *Service) buildPlanForSource(req *asset.Request, srcFmt processing.Forma
 	plan, err := processing.NewProcessingPlan(
 		op, srcFmt, outFmt,
 		processing.Size{Width: w, Height: h},
-		dpr, quality, loop, frames, duration,
+		dpr, quality, loop, frames,
 		encOverrides,
 	)
 	if err != nil {
@@ -1433,8 +1432,9 @@ func (s *bufferStream) Metadata() object.ObjectMetadata { return s.meta }
 // jxl), векторы (svg) и видео (mp4/webm/mov/mkv/avi/m4v). Любые другие
 // форматы (HTML, метаданные, исходники и т.п.) не отдаются, даже если
 // файл существует. apng остаётся в списке для serveOriginal (отдача
-// APNG-исходника как есть); APNG-ВЫХОД при обработке отклоняется
-// маршрутизатором (запись требует libvips с libspng).
+// APNG-исходника как есть); APNG-ВЫХОД при обработке разрешён
+// маршрутизатором, но без libspng pngsave пишет статичный PNG (кадры
+// склеены в вертикальный холст) — анимация требует libvips с libspng.
 var mediaFormats = map[string]struct{}{
 	"jpeg": {}, "jpg": {}, "png": {}, "webp": {}, "gif": {},
 	"avif": {}, "heif": {}, "heic": {}, "apng": {}, "jxl": {},

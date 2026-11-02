@@ -57,7 +57,7 @@ func mustPlan(t *testing.T, src, out processing.Format) *processing.ProcessingPl
 	p, err := processing.NewProcessingPlan(
 		processing.OpResize, src, out,
 		processing.Size{Width: 100, Height: 100},
-		1, 85, nil, 0, 0,
+		1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -103,6 +103,7 @@ func TestProcessNilArgs(t *testing.T) {
 	}
 	defer p.Close()
 
+	//lint:ignore SA1012 проверяется именно обработка nil-контекста
 	if _, err := p.Process(nil, processor.Input{Source: strings.NewReader("x"), Plan: mustPlan(t, processing.FormatPNG, processing.FormatPNG)}, io.Discard); err == nil {
 		t.Error("nil ctx: want error")
 	}

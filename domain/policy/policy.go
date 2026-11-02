@@ -349,7 +349,6 @@ func (p *Policy) applyPreset(req *asset.Request, pr *asset.Preset, segment strin
 		dpr,
 		pr.Quality(),
 		pr.Frames(),
-		pr.Duration(),
 		pr.Loop(),
 		pr.Watermark(),
 		pr.Orientation(),

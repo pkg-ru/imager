@@ -281,13 +281,21 @@ var (
 
 // EnqueueGenerate ставит задачу генерации ассетов.
 //
+// ctx — контекст запроса: используется для проверки существования исходника
+// (Lookup) и как родитель контекста задачи в режиме wait=true. Отмена ctx
+// (обрыв соединения клиентом, таймаут сервера) прерывает генерацию, а не
+// оставляет её работать «в пустоту».
+//
 // source — путь исходника (режим A: генерируются ВСЕ ассеты по правилам);
 // assets — список канонических URL (режим B). Ровно одно из source/assets
 // должно быть задано (иначе ErrInvalidRequest).
 //
 // wait=true: блокирует до завершения всех ассетов (с таймаутом cfg.WaitTimeout)
 // и возвращает полный результат. wait=false: возвращает 202-результат сразу.
-func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*JobResult, error) {
+func (s *Service) EnqueueGenerate(ctx context.Context, source string, assets []string, wait bool) (*JobResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if (source == "") == (len(assets) == 0) {
 		return nil, ErrInvalidRequest
 	}
@@ -295,7 +303,7 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 	if source != "" {
 		// Режим A: проверяем существование исходника ДО постановки в очередь.
 		key := object.ObjectKey(source)
-		if _, err := s.sources.Lookup(context.Background(), key); err != nil {
+		if _, err := s.sources.Lookup(ctx, key); err != nil {
 			if object.IsNotFound(err) {
 				return nil, ErrSourceNotFound
 			}
@@ -341,9 +349,11 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 	}
 	if wait {
 		j.done = make(chan struct{})
-		// Контекст задачи: отменяется при таймауте ожидания клиента, чтобы
-		// воркер мог прервать генерацию (утечка при ErrWaitTimeout).
-		j.ctx, j.cancel = context.WithCancel(context.Background())
+		// Контекст задачи — дочерний от контекста запроса: отменяется при
+		// таймауте ожидания клиента или отмене самого запроса (обрыв
+		// соединения), чтобы воркер мог прервать генерацию (утечка при
+		// ErrWaitTimeout / ушедшем клиенте).
+		j.ctx, j.cancel = context.WithCancel(ctx)
 	}
 	if err := s.enqueue(&j); err != nil {
 		if j.cancel != nil {
@@ -372,6 +382,11 @@ func (s *Service) EnqueueGenerate(source string, assets []string, wait bool) (*J
 		// Отменяем контекст задачи, чтобы воркер мог прервать генерацию.
 		j.cancel()
 		return nil, ErrWaitTimeout
+	case <-ctx.Done():
+		// Клиент ушёл (обрыв соединения/таймаут сервера): прекращаем
+		// генерацию и возвращаем причину отмены.
+		j.cancel()
+		return nil, ctx.Err()
 	}
 }
 

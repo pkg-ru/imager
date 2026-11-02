@@ -98,7 +98,7 @@ func passthroughEligible(plan *processing.ProcessingPlan, src sourceInfo, colorM
 		return false
 	}
 	// Ограничение состава кадров анимации меняет выход.
-	if plan.Frames > 0 || plan.Duration > 0 {
+	if plan.Frames > 0 {
 		return false
 	}
 	// Явное переопределение loop меняет метаданные анимации.

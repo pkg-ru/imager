@@ -48,30 +48,6 @@ func newFakeGenerator() *fakeGenerator {
 	}
 }
 
-func (f *fakeGenerator) addResult(url string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.results[url] = &generatev2.Result{URL: url, Key: object.ObjectKey(url)}
-}
-
-func (f *fakeGenerator) setErr(url string, err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.errs[url] = err
-}
-
-func (f *fakeGenerator) setFallback(err error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.fallback = err
-}
-
-func (f *fakeGenerator) callCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls
-}
-
 func (f *fakeGenerator) Generate(_ context.Context, req *asset.Request) (*generatev2.Result, error) {
 	url, err := req.Build()
 	if err != nil {
@@ -205,7 +181,7 @@ func mustPreset(t *testing.T, name string, size string, outFmt string) *asset.Pr
 	if err != nil {
 		t.Fatalf("NewFormat(%q): %v", outFmt, err)
 	}
-	p, err := asset.NewPreset(name, asset.CropCenter, false, sz, []asset.Format{f}, 0, false, 0, 0, 0, nil, nil)
+	p, err := asset.NewPreset(name, asset.CropCenter, false, sz, []asset.Format{f}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPreset(%q): %v", name, err)
 	}
@@ -264,11 +240,11 @@ func TestEnqueueGenerateInvalidRequest(t *testing.T) {
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), &policy.Policy{})
 
 	// Ни одного.
-	_, err := svc.EnqueueGenerate("", nil, false)
+	_, err := svc.EnqueueGenerate(context.Background(), "", nil, false)
 	wantErr(t, err, ErrInvalidRequest)
 
 	// Оба.
-	_, err = svc.EnqueueGenerate("thumbs/photo.jpg", []string{"/thumbs/photo-jpg/200x200@2.webp"}, false)
+	_, err = svc.EnqueueGenerate(context.Background(), "thumbs/photo.jpg", []string{"/thumbs/photo-jpg/200x200@2.webp"}, false)
 	wantErr(t, err, ErrInvalidRequest)
 }
 
@@ -279,7 +255,7 @@ func TestEnqueueGenerateSourceNotFound(t *testing.T) {
 	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t, mustPreset(t, "thumb", "120x80", "webp")), safePolicy())
 
-	_, err := svc.EnqueueGenerate("thumbs/missing.jpg", nil, false)
+	_, err := svc.EnqueueGenerate(context.Background(), "thumbs/missing.jpg", nil, false)
 	wantErr(t, err, ErrSourceNotFound)
 }
 
@@ -292,7 +268,7 @@ func TestEnqueueGenerateUnsafeCannotEnumerate(t *testing.T) {
 	res := testutil.NewMemResultStore()
 	svc := newTestService(t, gen, src, res, mustPresetSet(t), unsafePolicy())
 
-	_, err := svc.EnqueueGenerate("thumbs/photo.jpg", nil, false)
+	_, err := svc.EnqueueGenerate(context.Background(), "thumbs/photo.jpg", nil, false)
 	wantErr(t, err, ErrInvalidRequest)
 }
 
@@ -308,7 +284,7 @@ func TestEnqueueGenerateWaitMode(t *testing.T) {
 	svc.Start(context.Background())
 	defer svc.Stop()
 
-	res2, err := svc.EnqueueGenerate("thumbs/photo.jpg", nil, true)
+	res2, err := svc.EnqueueGenerate(context.Background(), "thumbs/photo.jpg", nil, true)
 	if err != nil {
 		t.Fatalf("EnqueueGenerate: %v", err)
 	}
@@ -318,7 +294,7 @@ func TestEnqueueGenerateWaitMode(t *testing.T) {
 	if res2.Generated == 0 {
 		t.Error("expected at least one generated asset")
 	}
-	if res2.Failed != nil && len(res2.Failed) != 0 {
+	if len(res2.Failed) != 0 {
 		t.Errorf("unexpected failed: %+v", res2.Failed)
 	}
 }
@@ -337,7 +313,7 @@ func TestEnqueueGenerateSkipExisting(t *testing.T) {
 	svc.Start(context.Background())
 	defer svc.Stop()
 
-	res2, err := svc.EnqueueGenerate("thumbs/photo.jpg", nil, true)
+	res2, err := svc.EnqueueGenerate(context.Background(), "thumbs/photo.jpg", nil, true)
 	if err != nil {
 		t.Fatalf("EnqueueGenerate: %v", err)
 	}
@@ -357,7 +333,7 @@ func TestEnqueueGenerateAssetsMode(t *testing.T) {
 	defer svc.Stop()
 
 	url := "thumbs/photo-jpg/thumb@2.webp"
-	res2, err := svc.EnqueueGenerate("", []string{url}, true)
+	res2, err := svc.EnqueueGenerate(context.Background(), "", []string{url}, true)
 	if err != nil {
 		t.Fatalf("EnqueueGenerate: %v", err)
 	}
@@ -388,12 +364,12 @@ func TestEnqueueGenerateQueueFull(t *testing.T) {
 	}
 
 	// Первая задача занимает очередь (wait=false, воркеры не запущены).
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb@2.webp"}, false)
+	_, err = svc.EnqueueGenerate(context.Background(), "", []string{"thumbs/photo-jpg/thumb@2.webp"}, false)
 	if err != nil {
 		t.Fatalf("first enqueue: %v", err)
 	}
 	// Вторая — переполнение.
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb@3.webp"}, false)
+	_, err = svc.EnqueueGenerate(context.Background(), "", []string{"thumbs/photo-jpg/thumb@3.webp"}, false)
 	wantErr(t, err, ErrQueueFull)
 }
 
@@ -580,7 +556,6 @@ func TestDeleteBySourcePrefixDeleter(t *testing.T) {
 // blockingGenerator — Generator, который блокируется до отмены контекста.
 // Используется для проверки отмены задачи при wait-timeout.
 type blockingGenerator struct {
-	mu       sync.Mutex
 	started  chan struct{}
 	released chan struct{}
 }
@@ -619,7 +594,7 @@ func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
 	svc.Start(context.Background())
 	defer svc.Stop()
 
-	_, err = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb.webp"}, true)
+	_, err = svc.EnqueueGenerate(context.Background(), "", []string{"thumbs/photo-jpg/thumb.webp"}, true)
 	wantErr(t, err, ErrWaitTimeout)
 
 	// Воркер должен получить отмену контекста и завершиться.
@@ -634,6 +609,50 @@ func TestEnqueueGenerateWaitTimeoutCancels(t *testing.T) {
 		t.Fatal("generator was released manually, expected context cancellation")
 	case <-time.After(2 * time.Second):
 		// Ожидаем, что воркер завершился по отмене контекста.
+	}
+}
+
+// TestEnqueueGenerateCtxCancelCancelsJob — отмена контекста запроса (обрыв
+// соединения клиентом/таймаут сервера) в режиме wait=true прерывает
+// генерацию и возвращает причину отмены, не дожидаясь WaitTimeout.
+func TestEnqueueGenerateCtxCancelCancelsJob(t *testing.T) {
+	gen := newBlockingGenerator()
+	src := testutil.NewMemSourceStore()
+	res := testutil.NewMemResultStore()
+	svc, err := New(Deps{
+		Gen:     gen,
+		Sources: src,
+		Results: res,
+		Presets: mustPresetSet(t),
+		Policy:  &policy.Policy{},
+		Logger:  testutil.NopLogger{},
+	}, Config{Workers: 1, QueueSize: 4, WaitTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	svc.Start(context.Background())
+	defer svc.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.EnqueueGenerate(ctx, "", []string{"thumbs/photo-jpg/thumb.webp"}, true)
+		done <- err
+	}()
+
+	select {
+	case <-gen.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("generator never started")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		wantErr(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnqueueGenerate did not return after ctx cancellation")
 	}
 }
 
@@ -657,7 +676,7 @@ func TestConcurrentEnqueueStop(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_, _ = svc.EnqueueGenerate("", []string{"thumbs/photo-jpg/thumb.webp"}, false)
+					_, _ = svc.EnqueueGenerate(context.Background(), "", []string{"thumbs/photo-jpg/thumb.webp"}, false)
 				}
 			}
 		}()

@@ -412,3 +412,66 @@ func TestResultStoreDeleteByPrefix(t *testing.T) {
 		t.Fatalf("Stats objects = %d, want 2 (квота расходится с диском)", stats.Objects)
 	}
 }
+
+// TestResultStoreNoSyncOptOut — ResultStoreOptions.NoSync отключает
+// durability-операции (fsync temp + fsync каталога) при публикациях и
+// удалениях, не меняя видимый результат (атомарность rename сохраняется).
+// Счётчики подменяют точки вызова sync_hooks.go.
+func TestResultStoreNoSyncOptOut(t *testing.T) {
+	ctx := context.Background()
+
+	fileSyncs := 0
+	dirSyncs := 0
+	origFile, origDir := syncFile, fsyncDirHook
+	syncFile = func(f *os.File) error {
+		fileSyncs++
+		return origFile(f)
+	}
+	fsyncDirHook = func(dir string) error {
+		dirSyncs++
+		return origDir(dir)
+	}
+	t.Cleanup(func() {
+		syncFile, fsyncDirHook = origFile, origDir
+	})
+
+	// NoSync: публикация и удаление без fsync.
+	store, err := NewResultStoreWithOptions(t.TempDir(), ResultStoreOptions{NoSync: true})
+	if err != nil {
+		t.Fatalf("NewResultStoreWithOptions(NoSync): %v", err)
+	}
+	key := object.ObjectKey("a/b/c.jpg")
+	if err := store.Publish(ctx, key, strings.NewReader("data"), object.PublishOptions{}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// Файл появился атомарно и читается.
+	if _, err := store.Lookup(ctx, key); err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if err := store.Delete(ctx, key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if fileSyncs != 0 || dirSyncs != 0 {
+		t.Fatalf("NoSync: fileSyncs=%d, dirSyncs=%d, want 0/0", fileSyncs, dirSyncs)
+	}
+
+	// Дефолт: публикация и удаление вызывают fsync (1 × temp + 1 × dir
+	// каждая операция — см. Publish/Delete).
+	store2, err := NewResultStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewResultStore: %v", err)
+	}
+	fileSyncs, dirSyncs = 0, 0
+	if err := store2.Publish(ctx, key, strings.NewReader("data"), object.PublishOptions{}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := store2.Delete(ctx, key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if fileSyncs != 1 {
+		t.Errorf("durability: fileSyncs = %d, want 1", fileSyncs)
+	}
+	if dirSyncs < 1 {
+		t.Errorf("durability: dirSyncs = %d, want >= 1", dirSyncs)
+	}
+}

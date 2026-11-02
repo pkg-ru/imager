@@ -25,16 +25,18 @@
       fmt                gofmt -l -w .
       fmt-check          проверка форматирования без изменений
       vet                go vet ./...
+      staticcheck        staticcheck ./... (теги: $Tags)
       tags-check         все комбинации build tags на Windows (default/onnx)
       test-onnx          тесты реального инференса (тег onnx)
       test-onnx-all      полный прогон с тегом onnx
       test               go test ./... -count=1
       race               go test -race ./... -count=1
       fuzz               fuzz smoke-тесты (FuzzParse, FuzzParseSize)
-      check              fmt-check + vet + test + race
+      check              fmt-check + vet + staticcheck + test + race
       docker-test        go test (libvips,onnx) в CI-образе (Docker Desktop)
       docker-test-race   go test -race (libvips,onnx) в CI-образе
       docker-vet         go vet ./... в CI-образе
+      docker-staticcheck staticcheck (libvips,onnx) в CI-образе
       docker-tags-check  все комбинации tags в CI-образе
       docker-fmt-check   gofmt-check в CI-образе
       docker-govulncheck govulncheck ./... в CI-образе
@@ -60,7 +62,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('help', 'install', 'build', 'build-onnx', 'run', 'stop', 'restart', 'fmt', 'fmt-check', 'vet', 'tags-check', 'test-onnx', 'test-onnx-all', 'test', 'race', 'fuzz', 'check', 'docker-test', 'docker-test-race', 'docker-vet', 'docker-tags-check', 'docker-fmt-check', 'docker-govulncheck', 'docker-check', 'docker-build', 'docker-build-from-source', 'docker-up', 'docker-down')]
+    [ValidateSet('help', 'install', 'build', 'build-onnx', 'run', 'stop', 'restart', 'fmt', 'fmt-check', 'vet', 'staticcheck', 'tags-check', 'test-onnx', 'test-onnx-all', 'test', 'race', 'fuzz', 'check', 'docker-test', 'docker-test-race', 'docker-vet', 'docker-staticcheck', 'docker-tags-check', 'docker-fmt-check', 'docker-govulncheck', 'docker-check', 'docker-build', 'docker-build-from-source', 'docker-up', 'docker-down')]
     [string]$Target = 'help',
 
     [ValidateSet('', 'onnx')]
@@ -184,6 +186,18 @@ switch ($Target) {
         break
     }
 
+    'staticcheck' {
+        # staticcheck — расширенный статический анализ (SA/S/U). Установка:
+        #   go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+        # Теги — как у сборки: код под //go:build onnx виден только с ними.
+        if ($Tags) {
+            Exec { & staticcheck -tags $Tags ./... } "staticcheck -tags $Tags ./..."
+        } else {
+            Exec { & staticcheck ./... } 'staticcheck ./...'
+        }
+        break
+    }
+
     'tags-check' {
         # Windows: доступны default и onnx (libvips-теги только на Linux,
         # см. README.md). Прогон libvips,onnx — через docker-test* (CI-образ).
@@ -227,6 +241,7 @@ switch ($Target) {
     'check' {
         & $PSCommandPath fmt-check
         & $PSCommandPath vet
+        & $PSCommandPath staticcheck
         & $PSCommandPath test
         & $PSCommandPath race
         break
@@ -252,6 +267,14 @@ switch ($Target) {
         break
     }
 
+    'docker-staticcheck' {
+        # staticcheck предустановлен в CI-образе; fallback-установка — только
+        # если образ ещё без него. Без двойных кавычек (ограничение PowerShell
+        # 5.1 при передаче в docker.exe, см. комментарий выше).
+        Exec-CI 'if ! command -v staticcheck >/dev/null 2>&1; then go install honnef.co/go/tools/cmd/staticcheck@2026.2.2; export PATH=$(go env GOPATH)/bin:$PATH; fi; staticcheck -tags=libvips,onnx ./...' 'docker-staticcheck (libvips,onnx)'
+        break
+    }
+
     'docker-tags-check' {
         Exec-CI 'go build ./... && go vet ./... && go build -tags=onnx ./... && go vet -tags=onnx ./... && go build -tags=libvips,onnx ./... && go vet -tags=libvips,onnx ./...' 'docker-tags-check'
         break
@@ -271,6 +294,7 @@ switch ($Target) {
 
     'docker-check' {
         Exec-CI 'gofmt -l . | grep . && exit 1 || exit 0' 'docker-fmt-check'
+        Exec-CI 'if ! command -v staticcheck >/dev/null 2>&1; then go install honnef.co/go/tools/cmd/staticcheck@2026.2.2; export PATH=$(go env GOPATH)/bin:$PATH; fi; staticcheck -tags=libvips,onnx ./...' 'docker-staticcheck (libvips,onnx)'
         Exec-CI 'go test -tags=libvips,onnx ./... -count=1' 'docker-test (libvips,onnx)'
         Exec-CI 'go test -race -tags=libvips,onnx ./... -count=1' 'docker-test-race (libvips,onnx)'
         Exec-CI 'govulncheck ./...' 'docker-govulncheck'

@@ -196,6 +196,91 @@ func TestNextJPEGEmpyStream(t *testing.T) {
 	}
 }
 
+// repeatReader — io.Reader, бесконечно отдающий один и тот же байт.
+// Нужен для потока мусора размером больше maxFrameBytes без выделения
+// 64 МиБ в памяти теста.
+type repeatReader struct{ b byte }
+
+func (r repeatReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.b
+	}
+	return len(p), nil
+}
+
+// TestNextJPEGNoEOIExceedsLimit — регрессия OOM: кадр, не закрытый EOI
+// (мусорный поток/обрыв), раньше читался до EOF с неограниченным ростом
+// слайса. Теперь nextJPEG обязан вернуть ошибку по достижении maxFrameBytes.
+func TestNextJPEGNoEOIExceedsLimit(t *testing.T) {
+	// SOI + maxFrameBytes+1 байт данных без EOI.
+	stream := io.MultiReader(
+		bytes.NewReader([]byte{0xFF, 0xD8}),
+		io.LimitReader(repeatReader{b: 0x01}, maxFrameBytes+1),
+	)
+	br := bufio.NewReader(stream)
+
+	if _, err := nextJPEG(br); err == nil {
+		t.Fatal("nextJPEG on stream without EOI: want error, got nil")
+	}
+}
+
+// TestLimitedBuffer — буфер stderr внешнего процесса ограничен сверху:
+// при переполнении хранится только хвост + маркер усечения.
+func TestLimitedBuffer(t *testing.T) {
+	b := &limitedBuffer{max: 16}
+
+	// В пределах лимита — всё аккумулируется.
+	if _, err := b.Write([]byte("short")); err != nil {
+		t.Fatalf("write short: %v", err)
+	}
+	if got := b.String(); got != "short" {
+		t.Errorf("String() = %q, want %q", got, "short")
+	}
+	if b.truncated {
+		t.Error("truncated = true before overflow")
+	}
+
+	// Переполнение — остаётся хвост (последние max байт) + маркер.
+	prefix := strings.Repeat("A", 100)
+	if _, err := b.Write([]byte(prefix)); err != nil {
+		t.Fatalf("write overflow: %v", err)
+	}
+	got := b.String()
+	if !strings.HasPrefix(got, "[stderr truncated] ") {
+		t.Errorf("String() = %q, want truncated marker prefix", got)
+	}
+	if len(b.buf) > b.max {
+		t.Errorf("buffer size %d > max %d", len(b.buf), b.max)
+	}
+	// Хвост — последние 16 байт записанных данных: "short" + 100×'A',
+	// поэтому хвост состоит только из 'A'.
+	tail := got[len("[stderr truncated] "):]
+	written := "short" + prefix
+	want := written[len(written)-16:]
+	if tail != want {
+		t.Errorf("tail = %q, want %q", tail, want)
+	}
+
+	// Запись поверх — ограничение сохраняется.
+	if _, err := b.Write([]byte(prefix)); err != nil {
+		t.Fatalf("write again: %v", err)
+	}
+	if len(b.buf) > b.max {
+		t.Errorf("buffer size after second write %d > max %d", len(b.buf), b.max)
+	}
+	if !b.truncated {
+		t.Error("truncated = false after overflow")
+	}
+}
+
+// TestLimitedBufferEmpty — нулевой буфер ведёт себя как пустой String().
+func TestLimitedBufferEmpty(t *testing.T) {
+	b := &limitedBuffer{max: maxStderrBytes}
+	if got := b.String(); got != "" {
+		t.Errorf("String() = %q, want empty", got)
+	}
+}
+
 // TestProbeArgs — аргументы ffprobe: ограничение анализа и путь/pipe.
 func TestProbeArgs(t *testing.T) {
 	pathArgs := probeArgs("/tmp/video.mp4")

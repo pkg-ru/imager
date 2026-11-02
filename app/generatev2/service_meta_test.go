@@ -37,7 +37,7 @@ func testMetaPlan(t *testing.T, op processing.Operation) *processing.ProcessingP
 	t.Helper()
 	plan, err := processing.NewProcessingPlan(
 		op, processing.FormatJPEG, processing.FormatWebP,
-		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0,
+		processing.Size{Width: 100, Height: 100}, 1, 80, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("plan: %v", err)

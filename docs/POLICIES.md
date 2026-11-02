@@ -36,12 +36,13 @@ policy:
 | Параметр | Описание |
 |----------|----------|
 | `width`, `height` | Базовый (логический) размер; итоговый = `width × dpr`. `0` = не задан (вычисляется пропорционально). |
-| `output-formats` | **Обязательный** whitelist выходных форматов (`jpeg\|png\|webp\|gif\|avif\|heif\|jxl`). |
+| `output-formats` | **Обязательный** whitelist выходных форматов (`jpeg\|png\|webp\|gif\|avif\|heif\|apng\|jxl`; APNG-выход без libspng — статичный PNG). |
 | `quality` | Качество кодирования (0–100; `0` = `encoders.default-quality`). |
 | `crop` | Операция: `""`=resize, `center`, `smart`, `face`, `object`, `face-fix`, `object-fix`. |
 | `trim` | Независимый фильтр обрезки однотонных полей (bool). |
 | `dpr` | Множитель плотности пикселей (см. правила dpr). |
-| `frames` / `duration` | Лимиты анимации (0 = без ограничения). |
+| `frames` | Максимум кадров анимации (0 = без ограничения). |
+
 | `loop` | Зацикливание анимации (nil = `processing.default-loop`). |
 | `watermark` | Имя ватермарки из секции `watermarks`. |
 | `auto-orient` / `rotate` / `flip` | Ориентация (nil = глобальный дефолт). |

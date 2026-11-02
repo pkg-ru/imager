@@ -13,7 +13,7 @@ func mustPlanShrink(t *testing.T, mutate func(p *processing.ProcessingPlan)) *pr
 	t.Helper()
 	p, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatWebP,
-		processing.Size{Width: 100}, 1, 85, nil, 0, 0,
+		processing.Size{Width: 100}, 1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)

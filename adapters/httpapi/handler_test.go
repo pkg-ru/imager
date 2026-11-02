@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -522,6 +523,18 @@ func TestHandlerRedirectFallbackHeadNoBody(t *testing.T) {
 	if recG.Body.Len() == 0 {
 		t.Error("GET redirect body empty, want non-empty")
 	}
+
+	// Заголовки Content-Type/Content-Length обязаны попасть на провод —
+	// то есть быть выставлены ДО WriteHeader. Проверяем по снимку
+	// Result().Header (фиксируется в момент WriteHeader), а не по live-map.
+	hdr := recG.Result().Header
+	if ct := hdr.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Errorf("GET Content-Type = %q, want text/html; charset=utf-8", ct)
+	}
+	wantLen := strconv.Itoa(recG.Body.Len())
+	if cl := hdr.Get("Content-Length"); cl != wantLen {
+		t.Errorf("GET Content-Length = %q, want %q", cl, wantLen)
+	}
 }
 
 func TestHandlerCORSDeniedVaryOrigin(t *testing.T) {
@@ -557,21 +570,22 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 // при превышении max вытесняется наименее недавно использованный ключ.
 func TestEtagCacheLRUEviction(t *testing.T) {
 	c := newEtagCache(3)
+	k := func(name string, size int64) etagKey { return etagKey{url: name, size: size} }
 
-	c.Set("a", "1")
-	c.Set("b", "2")
-	c.Set("c", "3")
+	c.Set(k("a", 1), "1")
+	c.Set(k("b", 2), "2")
+	c.Set(k("c", 3), "3")
 	// Touch "a", затем добавляем "d" — должен вытесниться "b" (LRU).
-	_, _ = c.Get("a")
-	c.Set("d", "4")
+	_, _ = c.Get(k("a", 1))
+	c.Set(k("d", 4), "4")
 
-	if _, ok := c.Get("b"); ok {
+	if _, ok := c.Get(k("b", 2)); ok {
 		t.Fatal("expected b evicted (LRU)")
 	}
-	if v, ok := c.Get("a"); !ok || v != "1" {
+	if v, ok := c.Get(k("a", 1)); !ok || v != "1" {
 		t.Fatalf("a = %q ok=%v, want 1", v, ok)
 	}
-	if v, ok := c.Get("d"); !ok || v != "4" {
+	if v, ok := c.Get(k("d", 4)); !ok || v != "4" {
 		t.Fatalf("d = %q ok=%v, want 4", v, ok)
 	}
 	if n := c.Len(); n > 3 {
@@ -667,6 +681,53 @@ func TestGzipNotAppliedWithoutAcceptEncoding(t *testing.T) {
 	}
 	if cl := rec.Header().Get("Content-Length"); cl == "" {
 		t.Error("Content-Length should be present without gzip")
+	}
+}
+
+// TestGzipWriterPoolReuse — писатель gzip берётся из пула и возвращается
+// обратно. Многократные ответы подряд должны давать корректный поток
+// каждый раз (Reset полностью сбрасывает состояние), без утечки
+// состояния между ответами. Запускать с -race.
+func TestGzipWriterPoolReuse(t *testing.T) {
+	gen := newFakeGenerator()
+	h := newTestHandler(t, gen, baseConfig())
+	gh := gzipHandler(nil, h)
+
+	for i := 0; i < 200; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/img-png/thumb.png", nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		gh.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("iteration %d: status = %d, want 404", i, rec.Code)
+		}
+		zr, err := gzip.NewReader(rec.Body)
+		if err != nil {
+			t.Fatalf("iteration %d: gzip.NewReader: %v", i, err)
+		}
+		body, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatalf("iteration %d: read: %v", i, err)
+		}
+		_ = zr.Close()
+		var env errorEnvelope
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatalf("iteration %d: body not JSON: %v (body=%q)", i, err, body)
+		}
+		if env.Error.Code != "not_found" {
+			t.Fatalf("iteration %d: code = %q, want not_found", i, env.Error.Code)
+		}
+	}
+}
+
+// TestGzipWriterUnwrap — обёртка пробрасывает Unwrap, чтобы
+// http.ResponseController доходил до оригинального ResponseWriter.
+func TestGzipWriterUnwrap(t *testing.T) {
+	rec := httptest.NewRecorder()
+	gw := &gzipWriter{ResponseWriter: rec}
+	if got := gw.Unwrap(); got != rec {
+		t.Fatalf("Unwrap() = %v, want original recorder", got)
 	}
 }
 

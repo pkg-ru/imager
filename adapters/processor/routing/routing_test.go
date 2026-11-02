@@ -38,7 +38,7 @@ func plan(t *testing.T, src, out processing.Format, op processing.Operation) *pr
 	p, err := processing.NewProcessingPlan(
 		op, src, out,
 		processing.Size{Width: 100, Height: 100},
-		1, 85, nil, 0, 0,
+		1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)

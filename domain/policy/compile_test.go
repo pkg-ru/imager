@@ -31,17 +31,6 @@ func presetCfgWithDPR(name string, width, height uint32, dpr uint32, outFmts ...
 	return c
 }
 
-// presetsMap — хелпер построения map пресетов: имя = ключ.
-func presetsMap(pairs ...[2]any) map[string]PresetConfig {
-	m := make(map[string]PresetConfig, len(pairs))
-	for _, p := range pairs {
-		name, _ := p[0].(string)
-		cfg, _ := p[1].(PresetConfig)
-		m[name] = cfg
-	}
-	return m
-}
-
 func TestValidateConfig(t *testing.T) {
 	valid := &Config{
 		Presets: map[string]PresetConfig{
@@ -148,7 +137,7 @@ func TestValidateConfigValidNewFields(t *testing.T) {
 				Width: dynamic.Uint32(120), Height: dynamic.Uint32(80),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp"), dynamic.String("avif")},
 				DPR:           dynamic.NewNullable(dynamic.Uint32(1)),
-				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
+				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10),
 				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
 			},
 			"trim":   {Trim: dynamic.Bool(true), Height: dynamic.Uint32(50), OutputFormats: dynamic.StringSlice{dynamic.String("png")}},
@@ -372,7 +361,7 @@ func TestCompilePresetOptions(t *testing.T) {
 				Width: dynamic.Uint32(240), Height: dynamic.Uint32(160),
 				OutputFormats: dynamic.StringSlice{dynamic.String("webp")},
 				DPR:           dynamic.NewNullable(dynamic.Uint32(2)),
-				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10), Duration: dynamic.Uint32(5000),
+				Quality:       dynamic.Uint32(80), Frames: dynamic.Uint32(10),
 				Loop: dynamic.NewNullable(dynamic.Bool(loop)),
 			},
 		},
@@ -393,9 +382,6 @@ func TestCompilePresetOptions(t *testing.T) {
 	}
 	if p.Frames() != 10 {
 		t.Errorf("Frames = %d, want 10", p.Frames())
-	}
-	if p.Duration() != 5000 {
-		t.Errorf("Duration = %d, want 5000", p.Duration())
 	}
 	if p.Loop() == nil || !*p.Loop() {
 		t.Errorf("Loop = %v, want true", p.Loop())
@@ -614,9 +600,7 @@ func TestCompilePresetOrientationNilDefault(t *testing.T) {
 	}
 }
 
-func intPtr2(v int) *int           { return &v }
-func boolPtr2(v bool) *bool        { return &v }
-func floatPtr2(v float64) *float64 { return &v }
+func intPtr2(v int) *int { return &v }
 
 // TestCompileEncodingOverrides проверяет, что плоские native-ключи пресета
 // собираются в overrides (формат → нативные параметры реестра без префикса)
@@ -716,6 +700,39 @@ presets:
 	}
 }
 
+// TestCompileAPNGOutputFormat — APNG-выход валиден в output-formats и
+// поддержан пресетом: движок заявляет APNG в Formats (в стандартной сборке
+// без libspng результат — статичный PNG). APNG-ключи кодера пробрасываются
+// в overrides.
+func TestCompileAPNGOutputFormat(t *testing.T) {
+	level, interlace := 9, true
+	pcfg := presetCfg("anim", 320, 0, "apng")
+	pcfg.APNGCompressionLevel = &level
+	pcfg.APNGInterlace = &interlace
+
+	compiled, err := Compile(Config{Presets: map[string]PresetConfig{"anim": pcfg}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Compile error: %v", err)
+	}
+	p, ok := compiled.Presets.Get("anim")
+	if !ok {
+		t.Fatal("expected preset anim")
+	}
+	if !p.AllowsOutputFormat(asset.Format("apng"), asset.Format("gif")) {
+		t.Error("AllowsOutputFormat(apng, gif) = false, want true")
+	}
+	over := p.EncodingOverrides()
+	if over == nil || over["apng"] == nil {
+		t.Fatal("expected apng encoding overrides")
+	}
+	if over["apng"]["compression-level"] != 9 {
+		t.Errorf("apng compression-level = %v, want 9", over["apng"]["compression-level"])
+	}
+	if over["apng"]["interlace"] != true {
+		t.Errorf("apng interlace = %v, want true", over["apng"]["interlace"])
+	}
+}
+
 // TestValidateConfigInvalidEncodingOverrides проверяет fail-fast валидацию
 // native-параметров: выход за диапазон реестра — ошибка конфигурации.
 func TestValidateConfigInvalidEncodingOverrides(t *testing.T) {
@@ -746,12 +763,6 @@ func TestValidateConfigInvalidPresetOrientation(t *testing.T) {
 			t.Errorf("ValidateConfig(%+v) expected error", c)
 		}
 	}
-}
-
-// boolPtr — хелпер построения *bool для тестов.
-func boolPtr(b bool) *bool {
-	v := b
-	return &v
 }
 
 // TestConfigLearningModeYAML — парсинг yaml-поля learning-mode в Config.

@@ -311,8 +311,7 @@ func samePresetConfig(a, b policy.PresetConfig) bool {
 	if a.Crop != b.Crop || a.Trim != b.Trim {
 		return false
 	}
-	if a.Quality != b.Quality || a.Frames != b.Frames ||
-		a.Duration != b.Duration || a.Loop != b.Loop {
+	if a.Quality != b.Quality || a.Frames != b.Frames || a.Loop != b.Loop {
 		return false
 	}
 	if a.Watermark != b.Watermark || a.AutoOrient != b.AutoOrient {

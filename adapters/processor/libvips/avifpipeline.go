@@ -50,14 +50,6 @@ type avifPipelineResult[R any] struct {
 	result R
 }
 
-// avifFramePixels — материализованные пиксели кадра + метаданные для
-// enc.AddFrame (результат drain-фазы конвейера AVIF-экспорта).
-type avifFramePixels struct {
-	pixels   []byte
-	hasAlpha bool
-	duration uint32
-}
-
 // runAvifFramePipeline — конвейер покадровой обработки для анимированного
 // AVIF-экспорта.
 //

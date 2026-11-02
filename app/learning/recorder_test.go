@@ -492,3 +492,46 @@ func TestServiceObserveGatedByController(t *testing.T) {
 		t.Errorf("custom missing:\n%s", string(data))
 	}
 }
+
+// TestRecorderConcurrentObserveStop — регрессия panic "send on closed channel".
+// Service.Observe проверяет Enabled() (atomic) и затем отправляет req в канал;
+// Stop() в это время может закрыть канал. До исправления Observe отправлял
+// в канал без синхронизации с close — гонка приводила к панике (клиент получал
+// 500 на валидном запросе). Тест гоняет это окно под -race.
+func TestRecorderConcurrentObserveStop(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	svc := NewService(NewController(), rec)
+	svc.controller.Enable()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Имитация graceful shutdown: Disable + recorder.Stop() (close ch).
+		svc.Stop()
+	}()
+
+	// Шквал наблюдений во время остановки: любая отправка, попавшая в окно
+	// между Enabled() и фактической записью в канал, не должна паниковать.
+	for i := 0; i < 200; i++ {
+		svc.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+	}
+	<-done
+
+	// Наблюдения, успевшие попасть в буфер до close, дренируются и
+	// учтются в финальной записи (если буфер не переполнился — наблюдения
+	// отбрасываются по design, файл может отсутствовать). Главное —
+	// отсутствие паники; файл проверяем только при наличии.
+	if _, err := os.Stat(filepath.Join(dir, localFileName)); err == nil {
+		data, err := os.ReadFile(filepath.Join(dir, localFileName))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if !strings.Contains(string(data), "120x60:") {
+			t.Errorf("buffered observation lost after concurrent Stop:\n%s", string(data))
+		}
+	}
+}

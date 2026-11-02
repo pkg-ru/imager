@@ -2,7 +2,7 @@
 
 Документ описывает структуру проекта, сборку, тестирование и CI/CD для разработчиков Imager.
 
-Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYMENT.md](DEPLOYMENT.md), [TROUNLESHOOTING.md](TROUNLESHOOTING.md).
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md), [DEPLOYMENT.md](DEPLOYMENT.md), [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ## Структура проекта
 
@@ -43,7 +43,8 @@ docker/            # Скрипты установки и entrypoint
 | `make build` | Сборка (по умолчанию `TAGS=libvips onnx`) |
 | `make run` / `make stop` / `make restart` | Управление сервисом |
 | `make fmt` / `make fmt-check` | Форматирование / проверка |
-| `make vet` | Статический анализ |
+| `make vet` | `go vet` |
+| `make staticcheck` | Расширенный статический анализ (`staticcheck`, теги как у сборки) |
 | `make tags-check` | Проверка build-тегов |
 | `make build-onnx` | Сборка с ONNX |
 | `make test-onnx` / `make test-onnx-all` | Тесты ONNX |
@@ -54,10 +55,10 @@ docker/            # Скрипты установки и entrypoint
 | `make docker-build` / `docker-build-release` / `docker-push` / `docker-release` | Docker |
 | `make docker-build-from-source` | Docker из исходников |
 | `make docker-up` / `docker-down` | Docker Compose |
-| `make docker-test` / `docker-test-race` / `docker-vet` / `docker-tags-check` / `docker-fmt-check` / `docker-govulncheck` / `docker-check` | Проверки в Docker |
+| `make docker-test` / `docker-test-race` / `docker-vet` / `docker-staticcheck` / `docker-tags-check` / `docker-fmt-check` / `docker-govulncheck` / `docker-check` | Проверки в Docker |
 | `make check` | Полная проверка |
 
-Для Windows: `make.ps1` (аналог Makefile).
+Для Windows: `make.ps1` (аналог Makefile; цели `staticcheck` и `docker-staticcheck` доступны и там).
 
 ## Сборка
 
@@ -77,6 +78,7 @@ make test-onnx
 ## Тестирование
 
 - Юнит-тесты: `make test`.
+- Статический анализ: `make vet` и `make staticcheck` (расширенные проверки SA/S/U; запускается с production-тегами, иначе код под `//go:build onnx` невидим).
 - Тесты гонок: `make race`.
 - Фаззинг: `make fuzz` (цели `FuzzParse`, `FuzzParseSize` в `domain/asset`).
 - Интеграционные тесты: в `composition/` (сборка всего приложения).
@@ -85,11 +87,11 @@ make test-onnx
 
 ### GitVerse (тесты)
 
-`.gitverse/workflows/ci.yml` — три джобы в образе `imager-ci:v1`:
+`.gitverse/workflows/ci.yml` — три джобы в образе `imager-ci:v1` (Go, libvips, ONNX Runtime, gofmt, staticcheck, govulncheck, предзагруженный GOMODCACHE):
 
-1. **fast-ci**: `gofmt` + тесты.
+1. **fast-ci**: `gofmt` + `staticcheck` + тесты с тегами `libvips,onnx`.
 2. **race**: гонки.
-3. **security**: `govulncheck` + сборка.
+3. **security**: `govulncheck` + production-сборка.
 
 ### GitHub Actions (публикация Docker Hub)
 
@@ -130,5 +132,5 @@ make run
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — архитектура и слои.
 - [DEPLOYMENT.md](DEPLOYMENT.md) — развёртывание и Docker.
-- [TROUNLESHOOTING.md](TROUNLESHOOTING.md) — диагностика проблем.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — диагностика проблем.
 - [AI.md](AI.md) — сборка с ONNX.

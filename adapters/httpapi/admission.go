@@ -66,7 +66,7 @@ func (a *admissionControl) Wrap(next http.Handler, bypassCheck func(*http.Reques
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case a.sem <- struct{}{}:
-			defer func() { _ = <-a.sem }()
+			defer func() { <-a.sem }()
 			next.ServeHTTP(w, r)
 		default:
 			// Семафор переполнен. Если запрос может присоединиться к уже

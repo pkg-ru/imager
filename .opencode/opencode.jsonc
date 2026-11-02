@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "orchestrator",
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 12000 },
+    "buffer": "15%"
+  },
+  "warming": {
+    "prompt": "Do not perform any work. Reply with exactly: OK",
+    "interval": "4 minutes",
+    "duration": "30 minutes"
+  },
+  "experimental": {
+    "todo": true,
+    "subagent_depth": 2,
+    "background_compaction": true
+  },
+  "providers": {
+    "closerouter": {
+      "options": {
+        "setCacheKey": true
+      }
+    }
+  }
+}

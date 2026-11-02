@@ -36,9 +36,10 @@ policy:
   # Каждый пресет:
   #   width/height — размер (0 = не задан, вычисляется пропорционально);
   #   output-formats — МАССИВ выходных форматов (whitelist, непустой):
-  #     jpeg | png | webp | gif | avif | heif | jxl;
-  #     (APNG-запись НЕ поддерживается: требует libvips, собранного с
-  #     libspng; см. docs/INSTALLATION.md)
+  #     jpeg | png | webp | gif | avif | heif | apng | jxl;
+  #     (APNG-выход без libspng — статичный PNG: кадры склеены в
+  #     вертикальный холст; анимированный APNG требует libvips,
+  #     собранного с libspng; см. docs/INSTALLATION.md)
   #     Дополнительно допустим элемент "auto" (или пустая строка ""):
   #     разрешает ТОЛЬКО формат исходника запроса (для видео — jpg,
   #     т.к. ассет из видео строится из извлечённого JPEG-кадра). Может
@@ -77,7 +78,7 @@ policy:
   #     (jpeg/webp/avif/heif/jxl), переопределяет скалярный quality для этого
   #     формата; для lossless (png/gif) задавать его — ошибка конфига —
   #     их упаковка управляется скалярным quality.
-  #   frames/duration — макс. кадры/длительность анимации (0 = без лимита);
+  #   frames — макс. кадры анимации (0 = без лимита);
   #   loop — nil = processing.default-loop; true/false — явно;
   #   watermark — имя из секции watermarks (приоритет выше default-watermark);
   #   auto-orient — nil = глобальный дефолт; true/false — явно;
@@ -114,7 +115,6 @@ policy:
     #   output-formats: [webp, avif]
     #   quality: 80        # 0 = default-quality
     #   frames: 0          # 0 = без ограничения кадров
-    #   duration: 0        # 0 = без ограничения длительности
     #   loop: true         # зацикленная анимация (nil = по default-loop)
     #   dpr: 1
 
@@ -127,7 +127,6 @@ policy:
     #   output-formats: [webp, avif]
     #   quality: 80
     #   frames: 0
-    #   duration: 0
     #   loop: true
     #   dpr: 2
 
@@ -272,8 +271,9 @@ policy:
 #              (дефолт), 0 = полностью прозрачный (невидимый). Значения вне
 #              диапазона [0,100] трактуются как дефолт (100).
 # На анимированных выходах (GIF/WebP) ватермарка накладывается на
-# КАЖДЫЙ кадр с сохранением delay/loop. APNG-запись НЕ поддерживается
-# (требует libvips, собранного с libspng; см. docs/INSTALLATION.md).
+# КАЖДЫЙ кадр с сохранением delay/loop. APNG-выход без libspng — статичный
+# PNG (кадры склеены в вертикальный холст); анимированный APNG требует
+# libvips, собранного с libspng (см. docs/INSTALLATION.md).
 # Секция опциональна; примеры — docs/CONFIGURATION.md.
 ########################################
 watermarks: {}

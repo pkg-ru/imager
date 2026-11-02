@@ -13,7 +13,7 @@ func mustPlanFull(t *testing.T, mutate func(p *processing.ProcessingPlan)) *proc
 	t.Helper()
 	p, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatWebP, processing.FormatWebP,
-		processing.Size{Original: true}, 1, 85, nil, 0, 0,
+		processing.Size{Original: true}, 1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -160,13 +160,6 @@ func TestPassthroughEligibleNegative(t *testing.T) {
 			name: "frames limit set",
 			plan: mustPlanFull(t, func(p *processing.ProcessingPlan) {
 				p.Frames = 5
-			}),
-			src: staticSource(),
-		},
-		{
-			name: "duration limit set",
-			plan: mustPlanFull(t, func(p *processing.ProcessingPlan) {
-				p.Duration = 500
 			}),
 			src: staticSource(),
 		},
@@ -429,7 +422,7 @@ func TestResolveImportPlanFrameLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := processing.NewProcessingPlan(
 				processing.OpResize, tc.src, tc.out,
-				processing.Size{Width: 100}, 1, 85, nil, tc.frames, 0,
+				processing.Size{Width: 100}, 1, 85, nil, tc.frames,
 			)
 			if err != nil {
 				t.Fatalf("NewProcessingPlan: %v", err)
@@ -465,7 +458,7 @@ func TestResolveImportPlanSequentialAccess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := processing.NewProcessingPlan(
 				tc.op, processing.FormatJPEG, processing.FormatWebP,
-				processing.Size{Width: 100}, 1, 85, nil, 0, 0,
+				processing.Size{Width: 100}, 1, 85, nil, 0,
 			)
 			if err != nil {
 				t.Fatalf("NewProcessingPlan: %v", err)

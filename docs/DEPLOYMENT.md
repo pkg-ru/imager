@@ -1,6 +1,6 @@
 # Production-развёртывание
 
-Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (общая архитектура), [CONFIGURATION.md](CONFIGURATION.md) (параметры), [STORAGE.md](STORAGE.md) (хранилища), [OBSERVABILITY.md](OBSERVABILITY.md) (метрики и логи), [TROUNLESHOOTING.md](TROUNLESHOOTING.md) (диагностика), [DEVELOPMENT.md](DEVELOPMENT.md) (сборка и CI). Установка и сборка — [INSTALLATION.md](INSTALLATION.md), настройка nginx — [NGINX.md](NGINX.md).
+Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (общая архитектура), [CONFIGURATION.md](CONFIGURATION.md) (параметры), [STORAGE.md](STORAGE.md) (хранилища), [OBSERVABILITY.md](OBSERVABILITY.md) (метрики и логи), [TROUBLESHOOTING.md](TROUBLESHOOTING.md) (диагностика), [DEVELOPMENT.md](DEVELOPMENT.md) (сборка и CI). Установка и сборка — [INSTALLATION.md](INSTALLATION.md), настройка nginx — [NGINX.md](NGINX.md).
 
 ## Запуск
 

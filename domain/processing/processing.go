@@ -118,7 +118,9 @@ func ParseFormat(s string) (Format, error) {
 //   - GIF/WebP/APNG/JXL/AVIF — анимированный вход И выход: для выхода
 //     загружаются все кадры (NumPages=-1), экспортёр пишет анимацию
 //     (gifsave/webpsave/pngsave/jxlsave; AVIF — через нативный libheif
-//     sequence encoder, см. exportAnimatedAvif).
+//     sequence encoder, см. exportAnimatedAvif). Ограничение APNG: без
+//     libspng pngsave пишет статичный PNG из склеенных кадров, анимация
+//     возможна только при libvips с libspng (см. docs/INSTALLATION.md).
 //   - HEIF/HEIC — анимированный ВХОД поддерживается (libvips heifload
 //     читает все кадры), но анимированный ВЫХОД НЕ поддерживается: libvips
 //     heifsave пишет multi-page HEIF как отдельные items БЕЗ animation track
@@ -282,9 +284,6 @@ type ProcessingPlan struct {
 	Loop *bool
 	// Frames — максимальное число кадров анимации (0 = без ограничения).
 	Frames int
-	// Duration — максимальная длительность анимации в миллисекундах
-	// (0 = без ограничения).
-	Duration int
 	// Watermark — спецификация ватермарки (nil = не применяется).
 	// Заполняется из конфигурации (пресет → path-policy → default);
 	// НЕ является частью URL-грамматики. Спецификация приходит из
@@ -314,7 +313,7 @@ type ProcessingPlan struct {
 //
 // encOverrides (необязательный variadic-параметр) — native-параметры
 // кодирования по форматам; единственный экземпляр (или nil) допускается.
-func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool, frames, duration int, encOverrides ...map[string]map[string]any) (*ProcessingPlan, error) {
+func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Size, dpr, quality int, loop *bool, frames int, encOverrides ...map[string]map[string]any) (*ProcessingPlan, error) {
 	if !ValidOperation(op) {
 		return nil, fmt.Errorf("processing plan: invalid operation %q", op)
 	}
@@ -336,9 +335,6 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 	if frames < 0 {
 		return nil, fmt.Errorf("processing plan: frames must be non-negative, got %d", frames)
 	}
-	if duration < 0 {
-		return nil, fmt.Errorf("processing plan: duration must be non-negative, got %d", duration)
-	}
 	var enc map[string]map[string]any
 	if len(encOverrides) > 0 {
 		enc = encOverrides[0]
@@ -352,7 +348,6 @@ func NewProcessingPlan(op Operation, sourceFormat, outputFormat Format, size Siz
 		Quality:           quality,
 		Loop:              loop,
 		Frames:            frames,
-		Duration:          duration,
 		EncodingOverrides: enc,
 	}, nil
 }
@@ -382,9 +377,6 @@ func (p *ProcessingPlan) Validate() error {
 	}
 	if p.Frames < 0 {
 		return fmt.Errorf("processing plan: frames must be non-negative, got %d", p.Frames)
-	}
-	if p.Duration < 0 {
-		return fmt.Errorf("processing plan: duration must be non-negative, got %d", p.Duration)
 	}
 	if p.Watermark != nil {
 		wm := p.Watermark

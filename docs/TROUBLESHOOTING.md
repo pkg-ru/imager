@@ -32,7 +32,7 @@
 ### Ошибки кодирования формата
 
 - Проверьте, что формат поддерживается libvips (`vips --list formats`).
-- APNG-запись требует libspng (см. [FORMATS.md](FORMATS.md)).
+- APNG-выход без libspng — статичный PNG (кадры склеены в вертикальный холст); анимированный APNG требует libspng (см. [FORMATS.md](FORMATS.md)).
 - Анимированный HEIF/HEIC не поддерживается (баг libheif 1.23) — используйте AVIF.
 
 ### «Осиротевшие» операции (orphan ops)
@@ -82,7 +82,7 @@
 - Проверьте `libvips.limits.concurrency` (shipped: 8) — слоты ограничивают параллельную обработку.
 - Проверьте `source-bytes` / `output-bytes` лимиты.
 - Метрики vips: `imager_vips_tracked_memory_bytes`, `imager_vips_mem_highwater_bytes`.
-- Проверьте `application.limits` (pixels, frames, duration).
+- Проверьте `application.limits` (pixels, frames).
 
 ### Утечка памяти
 

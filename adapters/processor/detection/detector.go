@@ -35,30 +35,13 @@ type Detector interface {
 // observability.Logger и bootstrap.Logger: достаточно Infof/Warnf).
 // Используется для INFO-сообщения при успешной АВТОДЕТЕКЦИИ библиотеки
 // ONNX Runtime и предупреждений при fallback с конфиг-пути.
+//
+// Реализация хранения логгера различается по сборке: с "onnx && cgo"
+// (ortlog_cgo.go) сообщения выводятся, без неё SetLogger — no-op
+// (ortlog_stub.go), чтобы bootstrap мог вызывать его безусловно.
 type Logger interface {
 	Infof(format string, args ...any)
 	Warnf(format string, args ...any)
-}
-
-// ortLogger — опциональный логгер (nil = логирование отключено).
-// Устанавливается через SetLogger (см. bootstrap).
-var ortLogger Logger
-
-// SetLogger устанавливает опциональный логгер детектора. Передавайте
-// observability.Logger / bootstrap.Logger — интерфейс совместим.
-func SetLogger(l Logger) { ortLogger = l }
-
-// logORTInfo / logORTWarn — обёртки: не паникуют при nil-логгере.
-func logORTInfo(format string, args ...any) {
-	if ortLogger != nil {
-		ortLogger.Infof(format, args...)
-	}
-}
-
-func logORTWarn(format string, args ...any) {
-	if ortLogger != nil {
-		ortLogger.Warnf(format, args...)
-	}
 }
 
 // DetectorInfo — описание конфигурации детектора. Зеркало

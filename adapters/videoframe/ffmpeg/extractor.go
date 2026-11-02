@@ -6,7 +6,6 @@ package ffmpeg
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +20,49 @@ import (
 // defaultFPS — частота кадров по умолчанию, если ffprobe не смог её
 // определить.
 const defaultFPS = 25
+
+// maxStderrBytes — верхняя граница сбора stderr ffmpeg/ffprobe. Буфер
+// ограничен, чтобы «болтливый» ffmpeg на повреждённом файле не лил
+// предупреждения неограниченно (рост памяти процесса imager).
+const maxStderrBytes = 64 << 10 // 64 KiB
+
+// maxFrameBytes — верхняя граница одного JPEG-кадра из потока ffmpeg.
+// 64 MiB с большим запасом покрывают 8K-кадры (7680×4320 в JPEG ~5-15 MiB);
+// всё, что больше, — мусорный поток без EOI, который раньше (без лимита)
+// читался в память целиком.
+const maxFrameBytes = 64 << 20
+
+// limitedBuffer — io.Writer для сбора stderr внешнего процесса с верхней
+// границей: при переполнении хранит только хвост (последние max байт) и
+// помечает вывод маркером усечения. Хвост полезнее начала для диагностики —
+// финальная причина ошибки ffmpeg идёт в конце. Реализует String(), чтобы
+// существующее форматирование ошибок ("%s", cmd.Stderr) работало как с
+// *bytes.Buffer.
+type limitedBuffer struct {
+	buf       []byte
+	max       int
+	truncated bool
+}
+
+// Write копирует p в буфер, удерживая размер ≤ max.
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.max {
+		// Оставляем только хвост: первые байты (часто много Warning'ов
+		// одного типа) жертвуются ради финальной ошибки.
+		b.buf = append(b.buf[:0], b.buf[len(b.buf)-b.max:]...)
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+// String возвращает накопленный stderr; при усечении предваряет маркером.
+func (b *limitedBuffer) String() string {
+	if b.truncated {
+		return "[stderr truncated] " + string(b.buf)
+	}
+	return string(b.buf)
+}
 
 // pathProvider — опциональный интерфейс источника, позволяющий получить
 // путь к файлу на диске. Если источник реализует его, ffmpeg читает файл
@@ -148,14 +190,15 @@ func (e *Extractor) probe(ctx context.Context, source io.ReadSeeker) (probeInfo,
 	}
 
 	cmd := exec.CommandContext(ctx, e.ffprobePath, probeArgs(input)...)
-	cmd.Stderr = &bytes.Buffer{}
+	stderr := &limitedBuffer{max: maxStderrBytes}
+	cmd.Stderr = stderr
 	if input == "pipe:0" {
 		cmd.Stdin = source
 	}
 
 	out, err := cmd.Output()
 	if err != nil {
-		return probeInfo{}, fmt.Errorf("ffprobe failed: %w: %s", err, cmd.Stderr)
+		return probeInfo{}, fmt.Errorf("ffprobe failed: %w: %s", err, stderr)
 	}
 	return parseProbeJSON(out)
 }
@@ -225,7 +268,8 @@ func (e *Extractor) extractFrames(ctx context.Context, source io.ReadSeeker, tim
 	args := batchFrameArgs(input, times[0], int64(len(times)), step)
 
 	cmd := exec.CommandContext(ctx, e.ffmpegPath, args...)
-	cmd.Stderr = &bytes.Buffer{}
+	stderr := &limitedBuffer{max: maxStderrBytes}
+	cmd.Stderr = stderr
 	if input == "pipe:0" {
 		cmd.Stdin = source
 	}
@@ -273,7 +317,7 @@ func (e *Extractor) extractFrames(ctx context.Context, source io.ReadSeeker, tim
 	waitErr := cmd.Wait()
 	if delivered == 0 {
 		if waitErr != nil {
-			return fmt.Errorf("ffmpeg extract failed: %w: %s", waitErr, cmd.Stderr)
+			return fmt.Errorf("ffmpeg extract failed: %w: %s", waitErr, stderr)
 		}
 		return errors.New("ffmpeg produced no frame")
 	}
@@ -353,9 +397,21 @@ func selectExpr(attempts, step int64) string {
 // (byte stuffing), поэтому пара 0xFF 0xD9 внутри сжатых данных кадра не
 // встречается. Байты до первого SOI пропускаются. Возвращает ошибку
 // (в т.ч. io.EOF), если кадр не найден до конца потока.
+//
+// Тело кадра читается блоками через ReadSlice(0xD9): bufio читает свой
+// внутренний буфер целиком и возвращает его слайс (memmove, без побайтового
+// цикла), потребляя при этом данные ровно до 0xD9 включительно — следующий
+// вызов nextJPEG начнётся строго после EOI. Кандидат на EOI проверяется
+// предшествующим байтом (он доступен в конце накопленного кадра, т.к. кадр
+// содержит все прочитанные байты по порядку): ложные 0xD9 без 0xFF перед
+// собой просто продолжают накопление. При ErrBufferFull (delim не влез в
+// bufio-буфер) накопление продолжается следующим блоком.
+//
+// Размер кадра ограничен maxFrameBytes: поток без EOI (мусор/обрыв) раньше
+// читался до EOF без верхней границы и мог исчерпать память.
 func nextJPEG(br *bufio.Reader) ([]byte, error) {
+	// Поиск SOI.
 	for {
-		// Поиск SOI.
 		b, err := br.ReadByte()
 		if err != nil {
 			return nil, err
@@ -371,19 +427,33 @@ func nextJPEG(br *bufio.Reader) ([]byte, error) {
 			continue
 		}
 
-		// SOI найден — читаем до EOI.
-		frame := []byte{0xFF, 0xD8}
-		prev := byte(0)
+		// SOI найден — читаем до EOI блоками.
+		frame := make([]byte, 2, 32<<10)
+		frame[0], frame[1] = 0xFF, 0xD8
 		for {
-			b, err := br.ReadByte()
-			if err != nil {
-				return nil, err
+			if len(frame) > maxFrameBytes {
+				return nil, fmt.Errorf("ffmpeg: frame exceeds %d bytes (no EOI marker)", maxFrameBytes)
 			}
-			frame = append(frame, b)
-			if prev == 0xFF && b == 0xD9 {
+			chunk, rerr := br.ReadSlice(0xD9)
+			if len(chunk) > 0 {
+				frame = append(frame, chunk...)
+			}
+			if rerr == bufio.ErrBufferFull {
+				// 0xD9 не найден в пределах bufio-буфера — копим кадр дальше.
+				continue
+			}
+			if rerr != nil {
+				// EOF/ошибка: кадр не завершён.
+				return nil, rerr
+			}
+			// chunk оканчивается на 0xD9. Это EOI, только если ему
+			// непосредственно предшествует 0xFF (последний байт кадра
+			// перед 0xD9 — frame[len-2]; сюда же входит случай, когда
+			// 0xFF пришёл в предыдущем блоке).
+			if len(frame) >= 2 && frame[len(frame)-2] == 0xFF {
 				return frame, nil
 			}
-			prev = b
+			// Ложный кандидат: 0xD9 без 0xFF перед собой — продолжаем кадр.
 		}
 	}
 }

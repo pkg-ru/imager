@@ -54,8 +54,10 @@ var (
 // lifecycle-методы Start/Stop/Close, управляемые composition root).
 type Service interface {
 	// EnqueueGenerate ставит задачу генерации: ровно одно из source|assets.
-	// wait=true блокирует до завершения всех ассетов (или таймаута сервиса).
-	EnqueueGenerate(source string, assets []string, wait bool) (*JobResult, error)
+	// ctx — контекст HTTP-запроса: используется для проверки исходника и
+	// (в режиме wait=true) как родитель контекста задачи, чтобы отмена
+	// запроса клиентом прерывала генерацию.
+	EnqueueGenerate(ctx context.Context, source string, assets []string, wait bool) (*JobResult, error)
 	// DeleteBySource удаляет все ассеты, производные от исходника.
 	DeleteBySource(ctx context.Context, source string) (int, error)
 	// DeleteAssets удаляет ассеты по списку canonical URL.

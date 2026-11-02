@@ -10,8 +10,10 @@
 // Адаптер реализует порт processor.Processor (ports/
 // processor). Используется как primary-движок в routing.Processor. libvips
 // (≥ 8.16; в Alpine-сборке пинится 8.18) поддерживает все форматы. Чтение
-// APNG-входов работает (как multi-page PNG); запись APNG требует libvips,
-// собранного с libspng, и маршрутизатором не заявляется.
+// APNG-входов работает (как multi-page PNG). Выход APNG поддержан: в
+// стандартной сборке (libvips без libspng) pngsave пишет СТАТИЧНЫЙ PNG
+// (кадры склеиваются в вертикальный холст), анимированный APNG-выход
+// требует libvips, собранного с libspng (см. docs/INSTALLATION.md).
 package libvips
 
 import (

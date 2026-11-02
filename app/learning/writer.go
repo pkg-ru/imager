@@ -478,16 +478,6 @@ func presetConfigNode(cfg policy.PresetConfig) *yaml.Node {
 	return m
 }
 
-// hasKey проверяет наличие ключа в mapping-узле.
-func hasKey(m *yaml.Node, key string) bool {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			return true
-		}
-	}
-	return false
-}
-
 // appendScalarKey добавляет в mapping пару key/scalar-значение.
 func appendScalarKey(m *yaml.Node, key, value string) {
 	k := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}

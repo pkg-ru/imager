@@ -133,7 +133,7 @@ func TestOrientationSpecValidate(t *testing.T) {
 }
 
 func TestProcessingPlanOrientationValidation(t *testing.T) {
-	plan, err := NewProcessingPlan(OpResize, FormatJPEG, FormatWebP, Size{Width: 100, Height: 100}, 1, 80, nil, 0, 0)
+	plan, err := NewProcessingPlan(OpResize, FormatJPEG, FormatWebP, Size{Width: 100, Height: 100}, 1, 80, nil, 0)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
 	}

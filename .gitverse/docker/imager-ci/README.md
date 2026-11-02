@@ -14,6 +14,7 @@
 | ffmpeg / ffprobe | 8.1 | Alpine 3.24 (mirror.yandex.ru) |
 | gofmt | встроен в Go 1.27 | `/usr/local/go/bin/gofmt` |
 | govulncheck | latest | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
+| staticcheck | 2026.2.2 (pinned) | `go install honnef.co/go/tools/cmd/staticcheck@2026.2.2` |
 | ONNX-модели | YuNet + SSD MobileNet + selfie.jpg | `/etc/imager/models` (download-models.sh) |
 | GOMODCACHE | из `go.sum` | `go mod download` |
 | nodejs / git | 24.x / latest | Alpine 3.24 (для GitHub Actions-действий) |

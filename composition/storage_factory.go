@@ -103,6 +103,9 @@ type RemoteStorageConfig struct {
 	Conn remote.ConnOptions
 	// MetadataTTL — TTL кэша метаданных (S3; 0 = кэш отключён).
 	MetadataTTL time.Duration
+	// NoSync — не выполнять fsync при публикации/удалении (FS-хранилище).
+	// false (по умолчанию) = durability включена.
+	NoSync bool
 }
 
 // BuildSourceStore создаёт SourceStore по конфигурации. При пустом Kind
@@ -236,11 +239,11 @@ func buildS3Client(ctx context.Context, cfg RemoteStorageConfig) (*awss3.Client,
 	conn := cfg.Conn
 
 	// Явный HTTP-клиент с пулом соединений, keep-alive и bounded
-	// connect/read таймаутами.
+	// connect/read таймаутами. DualStack не задаётся: deprecated с Go 1.12,
+	// Fast Fallback (Happy Eyeballs) включён по умолчанию.
 	dialer := &net.Dialer{
 		Timeout:   conn.DialTimeoutOrDefault(),
 		KeepAlive: remote.DefaultKeepAlive,
-		DualStack: true,
 	}
 	transport := &stdhttp.Transport{
 		Proxy:                 stdhttp.ProxyFromEnvironment,
@@ -332,7 +335,7 @@ func ensureFSStores(ctx context.Context, sourceDir, resultDir string, srcCfg, re
 		if dir == "" {
 			return nil, nil, fmt.Errorf("composition: result dir is empty")
 		}
-		r, err := fs.NewResultStore(dir)
+		r, err := fs.NewResultStoreWithOptions(dir, fs.ResultStoreOptions{NoSync: resCfg.NoSync})
 		if err != nil {
 			return nil, nil, fmt.Errorf("composition: result store: %w", err)
 		}

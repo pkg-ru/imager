@@ -372,7 +372,7 @@ detection:
 |--------|--------------------|--------------------|
 | GIF | да | да |
 | WebP | да | да |
-| APNG | да | **нет** — запись требует libvips, собранного с libspng (см. [docs/INSTALLATION.md](docs/INSTALLATION.md)) |
+| APNG | да | только при libspng; без него — статичный PNG (кадры склеены в вертикальный холст), см. [docs/INSTALLATION.md](docs/INSTALLATION.md) |
 | JPEG XL | да | да |
 | AVIF | да | **да** — нативный libheif sequence encoder (настоящий animation track, libheif ≥ 1.23) |
 | HEIF/HEIC | да | **нет** — выход содержит только первый кадр (ограничение libheif 1.23, не ошибка входа) |
@@ -507,7 +507,7 @@ timing). Лимиты кадров/длительности задаются в 
 | [docs/AI.md](docs/AI.md) | AI-кропы, детекция лиц и объектов (ONNX) |
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Метрики, логи, health-эндпоинты |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Разработка, сборка, тестирование, CI/CD |
-| [docs/TROUNLESHOOTING.md](docs/TROUNLESHOOTING.md) | Диагностика типичных проблем |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Диагностика типичных проблем |
 
 ---
 

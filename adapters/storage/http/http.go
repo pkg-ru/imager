@@ -104,7 +104,8 @@ func NewSourceStore(opts Options) (*SourceStore, error) {
 		dialer := &net.Dialer{
 			Timeout:   opts.DialTimeoutOrDefault(),
 			KeepAlive: remote.DefaultKeepAlive,
-			DualStack: true,
+			// DualStack не задаётся: deprecated с Go 1.12, Fast Fallback
+			// (Happy Eyeballs) включён по умолчанию.
 		}
 		transport := &http.Transport{
 			Proxy:                 http.ProxyFromEnvironment,

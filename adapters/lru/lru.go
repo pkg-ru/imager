@@ -12,10 +12,15 @@ import (
 // Cache — потокобезопасный LRU-кэш с ограничением по числу записей.
 type Cache[K comparable, V any] struct {
 	mu    sync.Mutex
-	m     map[K]V
-	elems map[K]*list.Element // key -> элемент списка (для O(1) touch)
-	lru   *list.List          // для eviction (элементы = ключи)
+	items map[K]*item[V] // key -> значение + элемент списка (одна map)
+	lru   *list.List     // порядок использования (элементы = ключи)
 	max   int
+}
+
+// item — запись кэша: значение и позиция в списке порядка.
+type item[V any] struct {
+	value V
+	elem  *list.Element
 }
 
 // New создаёт кэш с лимитом max записей. Значения max <= 0 заменяются
@@ -25,8 +30,7 @@ func New[K comparable, V any](max int) *Cache[K, V] {
 		max = 4096
 	}
 	return &Cache[K, V]{
-		m:     make(map[K]V),
-		elems: make(map[K]*list.Element),
+		items: make(map[K]*item[V]),
 		lru:   list.New(),
 		max:   max,
 	}
@@ -36,35 +40,31 @@ func New[K comparable, V any](max int) *Cache[K, V] {
 func (c *Cache[K, V]) Get(key K) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.m[key]
-	if ok {
-		// Перемещаем ключ в конец списка (недавно использованный).
-		if n := c.elems[key]; n != nil {
-			c.lru.MoveToBack(n)
-		}
+	it, ok := c.items[key]
+	if !ok {
+		var zero V
+		return zero, false
 	}
-	return v, ok
+	// Перемещаем ключ в конец списка (недавно использованный).
+	c.lru.MoveToBack(it.elem)
+	return it.value, true
 }
 
 // Set сохраняет значение по ключу. При превышении max вытесняет LRU-запись.
 func (c *Cache[K, V]) Set(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.m[key]; ok {
-		c.m[key] = value
-		if n := c.elems[key]; n != nil {
-			c.lru.MoveToBack(n)
-		}
+	if it, ok := c.items[key]; ok {
+		it.value = value
+		c.lru.MoveToBack(it.elem)
 		return
 	}
-	c.m[key] = value
-	c.elems[key] = c.lru.PushBack(key)
+	c.items[key] = &item[V]{value: value, elem: c.lru.PushBack(key)}
 	if c.lru.Len() > c.max {
 		if front := c.lru.Front(); front != nil {
 			old := front.Value.(K)
 			c.lru.Remove(front)
-			delete(c.elems, old)
-			delete(c.m, old)
+			delete(c.items, old)
 		}
 	}
 }
@@ -73,10 +73,9 @@ func (c *Cache[K, V]) Set(key K, value V) {
 func (c *Cache[K, V]) Delete(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.m, key)
-	if n := c.elems[key]; n != nil {
-		c.lru.Remove(n)
-		delete(c.elems, key)
+	if it, ok := c.items[key]; ok {
+		c.lru.Remove(it.elem)
+		delete(c.items, key)
 	}
 }
 
@@ -84,7 +83,7 @@ func (c *Cache[K, V]) Delete(key K) {
 func (c *Cache[K, V]) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.m)
+	return len(c.items)
 }
 
 // DeletePrefix удаляет все записи, ключи которых начинаются с prefix.
@@ -96,13 +95,10 @@ func (c *Cache[K, V]) DeletePrefix(prefix K) int {
 	// Собираем совпавшие ключи отдельно, чтобы безопасно удалять во время
 	// итерации по map (удаление во время range по map допустимо в Go, но
 	// сбор явного списка упрощает логику и не завязан на эту особенность).
-	for k := range c.m {
+	for k, it := range c.items {
 		if c.matchesPrefix(k, prefix) {
-			if n := c.elems[k]; n != nil {
-				c.lru.Remove(n)
-				delete(c.elems, k)
-			}
-			delete(c.m, k)
+			c.lru.Remove(it.elem)
+			delete(c.items, k)
 			removed++
 		}
 	}

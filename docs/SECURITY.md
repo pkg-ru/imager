@@ -33,7 +33,7 @@
 
 Дополнительно `libvips.limits.output-bytes` ограничивает выход на уровне движка, `libvips.limits.source-bytes` — вход (дефолт 10 MiB).
 
-Поля `frames`/`duration` и `concurrency` валидируются конфигурацией, но на application-уровне НЕ проверяются: кадры/длительность анимаций контролируются лимитами движка (`libvips.limits`), а `concurrency` используется только как база fallback-лимита admission control (`application.limits.concurrency × 4`, когда `http.max-concurrent-requests` не задан — см. [HTTP hardening](#http-hardening)).
+Поля `frames` и `concurrency` валидируются конфигурацией, но на application-уровне НЕ проверяются: кадры анимаций контролируются `frames` пресета (лимит на этапе загрузки), а `concurrency` используется только как база fallback-лимита admission control (`application.limits.concurrency × 4`, когда `http.max-concurrent-requests` не задан — см. [HTTP hardening](#http-hardening)).
 
 ## Безопасность URL
 

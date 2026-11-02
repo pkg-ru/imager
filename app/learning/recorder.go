@@ -32,7 +32,8 @@ type Recorder struct {
 	dirty      bool        // есть незаписанные изменения
 	lastWrite  time.Time   // время последней записи
 	writeTimer *time.Timer // отложенная запись (дебаунс)
-	stopped    bool
+	stopped    bool        // Stop завершён: новые записи больше не планируются
+	closed     bool        // канал ch закрыт: Observe больше не отправляет
 
 	// writeMu сериализует ВЕСЬ flush (снятие snapshot + запись файла), чтобы
 	// два конкурентных flush не теряли наблюдения: без него оба могли снять
@@ -98,8 +99,19 @@ func NewRecorder(d Deps) (*Recorder, error) {
 //   - сегмент — имя пресета из Deps.PresetNames → пресетное наблюдение
 //     (AddPresetObservation);
 //   - иначе наблюдение игнорируется.
+//
+// Отправка выполняется под r.mu — тем же мьютексом, который держит Stop при
+// закрытии канала. Это исключает panic "send on closed channel" в окне между
+// проверкой Enabled() в Service.Observe и фактической отправкой (гонка на
+// graceful shutdown). select с default не блокирует, поэтому удержание
+// мьютекса на время отправки безопасно.
 func (r *Recorder) Observe(req *asset.Request) {
 	if req == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
 		return
 	}
 	select {
@@ -128,8 +140,19 @@ func (r *Recorder) persistLearningMode(enabled bool) {
 // Stop останавливает потребителя: drain канала + финальная запись.
 func (r *Recorder) Stop() {
 	r.stopOnce.Do(func() {
+		// Закрываем канал под r.mu — тем же мьютексом, под которым идёт
+		// отправка в Observe. Паттерн аналогичен adminsvc.enqueue:
+		// проверка флага и close выполняются атомарно относительно
+		// отправителей, поэтому "send on closed channel" невозможен.
+		// stopped ещё не выставлен: buffered-наблюдения должны быть
+		// дренированы потребителем и учтены в финальной записи.
+		r.mu.Lock()
+		r.closed = true
 		close(r.ch)
+		r.mu.Unlock()
+
 		r.wg.Wait()
+
 		r.mu.Lock()
 		r.stopped = true
 		r.stopTimerLocked()

@@ -470,7 +470,12 @@ func NewBufferPool(maxBytes int64) *BufferPool {
 }
 
 // Max возвращает максимальный бюджет пула.
-func (p *BufferPool) Max() int64 { return p.max }
+func (p *BufferPool) Max() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.max
+}
 
 // Close сбрасывает учёт занятых байт. Используется при пересоздании
 // приложения, чтобы старый пул не удерживал память (доп. замечание).

@@ -124,19 +124,12 @@ const (
 
 // yunetBackend — YuNet face detector поверх ort-сессии.
 type yunetBackend struct {
-	sess  *ort.DynamicAdvancedSession
-	mu    sync.Mutex // ort-сессии не потокобезопасны
-	inW   int        // ширина канвы (letterbox)
-	padX  float64
-	padY  float64
-	scale float64 // масштаб letterbox (original -> канва)
-	winW  int     // ширина исходного кадра при создании бэкенда
-	winH  int
+	sess *ort.DynamicAdvancedSession
+	mu   sync.Mutex // ort-сессии не потокобезопасны
 }
 
-// newYuNetBackend загружает YuNet и вычисляет параметры letterbox для
-// исходного кадра (используются при run; сами кадры могут быть другого
-// размера, но параметры пересчитываются в run под фактический кадр).
+// newYuNetBackend загружает YuNet. Параметры letterbox не хранятся в
+// бэкенде: они пересчитываются в run под размеры фактического кадра.
 func newYuNetBackend(path string) (*yunetBackend, error) {
 	names := []string{"cls_8", "cls_16", "cls_32", "obj_8", "obj_16", "obj_32", "bbox_8", "bbox_16", "bbox_32"}
 	sess, err := ort.NewDynamicAdvancedSession(path, []string{"input"}, names, nil)

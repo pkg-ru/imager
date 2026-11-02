@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
 )
 
 // buildFSApp собирает полный production pipeline с реальными FS-хранилищами
@@ -206,10 +205,9 @@ func TestIntegrationSourceStoreContractFS(t *testing.T) {
 	app, srcDir, _ := buildFSApp(t)
 	seedSource(t, srcDir, "bucket/img.jpg", []byte("SRC"))
 
-	ss, ok := app.Sources.(storage.SourceStore)
-	if !ok {
-		t.Fatalf("Sources is not SourceStore: %T", app.Sources)
-	}
+	// app.Sources уже имеет тип storage.SourceStore: соответствие контракту
+	// проверяется компилятором, runtime-assertion не нужен.
+	ss := app.Sources
 	art, err := ss.Open(context.Background(), object.ObjectKey("bucket/img.jpg"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)

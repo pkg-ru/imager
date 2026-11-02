@@ -106,7 +106,7 @@ func TestFormatSupportsAlpha(t *testing.T) {
 // проходит Validate(), пустое значение допустимо (прозрачность, где
 // возможна), невалидный hex — ошибка.
 func TestProcessingPlanBackground(t *testing.T) {
-	plan, err := NewProcessingPlan(OpResize, FormatPNG, FormatPNG, Size{Width: 200, Height: 100}, 1, 80, nil, 0, 0)
+	plan, err := NewProcessingPlan(OpResize, FormatPNG, FormatPNG, Size{Width: 200, Height: 100}, 1, 80, nil, 0)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan error: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestProcessingPlanBackground(t *testing.T) {
 
 func TestNewProcessingPlan(t *testing.T) {
 	loop := true
-	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 80, &loop, 10, 5000)
+	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 80, &loop, 10)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan error: %v", err)
 	}
@@ -143,9 +143,6 @@ func TestNewProcessingPlan(t *testing.T) {
 	if plan.Frames != 10 {
 		t.Errorf("Frames = %d, want 10", plan.Frames)
 	}
-	if plan.Duration != 5000 {
-		t.Errorf("Duration = %d, want 5000", plan.Duration)
-	}
 	if err := plan.Validate(); err != nil {
 		t.Errorf("Validate error: %v", err)
 	}
@@ -153,29 +150,27 @@ func TestNewProcessingPlan(t *testing.T) {
 
 func TestNewProcessingPlanInvalid(t *testing.T) {
 	invalid := []struct {
-		name     string
-		op       Operation
-		sf       Format
-		of       Format
-		size     Size
-		dpr      int
-		q        int
-		frames   int
-		duration int
+		name   string
+		op     Operation
+		sf     Format
+		of     Format
+		size   Size
+		dpr    int
+		q      int
+		frames int
 	}{
-		{"invalid op", "bogus", FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, 0, 0},
-		{"invalid source format", OpCrop, "bogus", FormatWebP, Size{Width: 120, Height: 80}, 1, 80, 0, 0},
-		{"invalid output format", OpCrop, FormatJPEG, "bogus", Size{Width: 120, Height: 80}, 1, 80, 0, 0},
-		{"empty size", OpCrop, FormatJPEG, FormatWebP, Size{}, 1, 80, 0, 0},
-		{"negative dpr", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, -1, 80, 0, 0},
-		{"quality too high", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 101, 0, 0},
-		{"quality too low", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, -1, 0, 0},
-		{"negative frames", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, -1, 0},
-		{"negative duration", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, 0, -1},
+		{"invalid op", "bogus", FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, 0},
+		{"invalid source format", OpCrop, "bogus", FormatWebP, Size{Width: 120, Height: 80}, 1, 80, 0},
+		{"invalid output format", OpCrop, FormatJPEG, "bogus", Size{Width: 120, Height: 80}, 1, 80, 0},
+		{"empty size", OpCrop, FormatJPEG, FormatWebP, Size{}, 1, 80, 0},
+		{"negative dpr", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, -1, 80, 0},
+		{"quality too high", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 101, 0},
+		{"quality too low", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, -1, 0},
+		{"negative frames", OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, -1},
 	}
 	for _, tt := range invalid {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := NewProcessingPlan(tt.op, tt.sf, tt.of, tt.size, tt.dpr, tt.q, nil, tt.frames, tt.duration); err == nil {
+			if _, err := NewProcessingPlan(tt.op, tt.sf, tt.of, tt.size, tt.dpr, tt.q, nil, tt.frames); err == nil {
 				t.Errorf("NewProcessingPlan(%s) expected error", tt.name)
 			}
 		})
@@ -191,7 +186,7 @@ func TestProcessingPlanEncodingOverrides(t *testing.T) {
 		"webp": {"quality": 90, "reduction-effort": 6},
 		"png":  {"compression-level": 9},
 	}
-	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 85, &loop, 0, 0, over)
+	plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 2, 85, &loop, 0, over)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan error: %v", err)
 	}
@@ -223,7 +218,7 @@ func TestProcessingPlanEncodingOverridesInvalid(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, nil, 0, 0, tt.over)
+			plan, err := NewProcessingPlan(OpCrop, FormatJPEG, FormatWebP, Size{Width: 120, Height: 80}, 1, 80, nil, 0, tt.over)
 			if err != nil {
 				t.Fatalf("NewProcessingPlan error: %v", err)
 			}

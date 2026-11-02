@@ -97,7 +97,7 @@ func mustPreset(t *testing.T, name string, crop asset.Crop, size string, outFmt 
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
-	p, err := asset.NewPreset(name, crop, false, sz, []asset.Format{of}, 0, false, 0, 0, 0, nil, nil)
+	p, err := asset.NewPreset(name, crop, false, sz, []asset.Format{of}, 0, false, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("preset: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestBuildPlanEncodingOverrides(t *testing.T) {
 	}
 	// quality == 0 → default-quality (Deps.Quality = 85); overrides
 	// прокидываются как есть (валидация — на уровне построения плана).
-	req = req.WithProcessingOptions(0, 0, 0, nil, nil, over)
+	req = req.WithProcessingOptions(0, 0, nil, nil, over)
 	plan, err := env.svc.buildPlan(req)
 	if err != nil {
 		t.Fatalf("buildPlan error: %v", err)

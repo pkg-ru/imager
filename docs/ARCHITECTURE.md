@@ -189,4 +189,4 @@ AI-детекция (ONNX) использует отдельный семафо�
 - [AI.md](AI.md) — AI-возможности.
 - [OBSERVABILITY.md](OBSERVABILITY.md) — наблюдаемость.
 - [DEVELOPMENT.md](DEVELOPMENT.md) — разработка и тестирование.
-- [TROUNLESHOOTING.md](TROUNLESHOOTING.md) — диагностика проблем.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — диагностика проблем.

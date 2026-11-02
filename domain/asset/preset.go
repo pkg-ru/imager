@@ -33,7 +33,6 @@ type Preset struct {
 	dprSet      bool
 	quality     int
 	frames      int
-	duration    int
 	loop        *bool
 	watermark   *processing.WatermarkSpec
 	orientation *processing.OrientationSpec
@@ -52,14 +51,13 @@ type Preset struct {
 // значением 0/1): в этом случае @dpr-суффикс в URL запрещён.
 // quality — качество сжатия (0 = default-quality из секции encoders).
 // frames — максимальное число кадров анимации (0 = без ограничения).
-// duration — максимальная длительность анимации в мс (0 = без ограничения).
 // loop — зацикливание анимации (nil = default-loop из processing).
 // encOverrides — native-параметры форматов (формат → нативные параметры в
 // kebab-case, без префикса формата). nil = не заданы. per-format quality
 // (lossy-форматы) хранится под ключом "quality". Значения копируются
 // (поверхностное копирование вложенных map), чтобы пресет не разделял
 // состояние с конфигурацией.
-func NewPreset(name string, crop Crop, trim bool, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames, duration int, loop *bool, encOverrides map[string]map[string]any) (*Preset, error) {
+func NewPreset(name string, crop Crop, trim bool, size Size, outputFormat []Format, dpr DPR, dprSet bool, quality, frames int, loop *bool, encOverrides map[string]map[string]any) (*Preset, error) {
 	if name == "" {
 		return nil, fmt.Errorf("preset: empty name")
 	}
@@ -97,9 +95,6 @@ func NewPreset(name string, crop Crop, trim bool, size Size, outputFormat []Form
 	if frames < 0 {
 		return nil, fmt.Errorf("preset %q: frames must be non-negative, got %d", name, frames)
 	}
-	if duration < 0 {
-		return nil, fmt.Errorf("preset %q: duration must be non-negative, got %d", name, duration)
-	}
 	return &Preset{
 		name:         name,
 		crop:         crop,
@@ -110,7 +105,6 @@ func NewPreset(name string, crop Crop, trim bool, size Size, outputFormat []Form
 		dprSet:       dprSet,
 		quality:      quality,
 		frames:       frames,
-		duration:     duration,
 		loop:         loop,
 		encOverrides: cloneEncOverrides(encOverrides),
 	}, nil
@@ -266,9 +260,6 @@ func (p *Preset) EncodingOverrides() map[string]map[string]any {
 // Frames возвращает максимальное число кадров (0 = без ограничения).
 func (p *Preset) Frames() int { return p.frames }
 
-// Duration возвращает максимальную длительность в мс (0 = без ограничения).
-func (p *Preset) Duration() int { return p.duration }
-
 // Loop возвращает зацикливание анимации (nil = default-loop).
 func (p *Preset) Loop() *bool { return p.loop }
 
@@ -332,7 +323,7 @@ func (e *ResolveError) Error() string {
 //     — ошибка разрешения;
 //   - иначе dpr берётся из URL (default 1).
 //
-// Параметры обработки пресета (quality/frames/duration/loop) пробрасываются
+// Параметры обработки пресета (quality/frames/loop) пробрасываются
 // в результирующий запрос через WithProcessingOptions.
 func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 	if req == nil {
@@ -477,7 +468,7 @@ func (s *PresetSet) Resolve(req *Request) (*Request, error) {
 			Reason:      err.Error(),
 		}
 	}
-	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.duration, p.loop, p.watermark, p.encOverrides)
+	resolved = resolved.WithProcessingOptions(p.quality, p.frames, p.loop, p.watermark, p.encOverrides)
 	if p.orientation != nil {
 		resolved = resolved.WithOrientation(p.orientation)
 	}

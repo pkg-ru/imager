@@ -2,12 +2,28 @@ package httpapi
 
 import (
 	"compress/gzip"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gitverse.ru/pkg-ru/imager/observability"
 )
+
+// gzipPool — пул gzip.Writer. gzip.NewWriter аллоцирует ~640 КиБ на писатель
+// (в compress/flate это hashHead 512 КиБ + hashPrev 128 КиБ), а сжимаются
+// только короткие JSON error-envelope. Пул с Reset убирает эту аллокацию
+// с каждого 4xx/5xx ответа (типичный трафик image-сервера — 404 на битые URL
+// и сканеры).
+var gzipPool = sync.Pool{
+	New: func() any {
+		// Уровень по умолчанию; Reset подставит реальный writer и сбросит
+		// состояние. Ошибка невозможна для валидного уровня.
+		z, _ := gzip.NewWriterLevel(io.Discard, gzip.DefaultCompression)
+		return z
+	},
+}
 
 // gzipWriter — обёртка ResponseWriter, сжимающая ответ gzip, если клиент
 // поддерживает Accept-Encoding: gzip и Content-Type — application/json.
@@ -38,7 +54,9 @@ func (w *gzipWriter) WriteHeader(code int) {
 			w.Header().Del("Content-Length")
 			w.Header().Set("Content-Encoding", "gzip")
 			w.Header().Add("Vary", "Accept-Encoding")
-			w.gz = gzip.NewWriter(w.ResponseWriter)
+			gz := gzipPool.Get().(*gzip.Writer)
+			gz.Reset(w.ResponseWriter)
+			w.gz = gz
 		}
 	}
 	w.ResponseWriter.WriteHeader(code)
@@ -79,13 +97,26 @@ func (w *gzipWriter) Flush() {
 }
 
 // Close завершает gzip-поток. Вызывается после завершения ответа.
+// Writer возвращается в пул: Close пишет footer, а Reset при следующем
+// использовании полностью сбрасывает состояние, поэтому переиспользование
+// безопасно.
 func (w *gzipWriter) Close() error {
-	if w.enabled {
+	if w.enabled && w.gz != nil {
 		if err := w.gz.Close(); err != nil {
 			w.logGzipError("close", err)
 		}
+		gzipPool.Put(w.gz)
+		w.gz = nil
 	}
 	return nil
+}
+
+// Unwrap возвращает нижележащий ResponseWriter, чтобы http.ResponseController
+// мог добраться до оригинального writer'а через цепочку обёрток (так же, как
+// statusWriter в observability). Без этого SetWriteDeadline/Hijack/
+// EnableFullDuplex недоступны.
+func (w *gzipWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // logGzipError логирует ошибку gzip-потока. Поведение не меняется: после

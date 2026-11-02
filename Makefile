@@ -54,6 +54,16 @@ fmt-check:
 vet:
 	go vet ./...
 
+# staticcheck — расширенный статический анализ (SA/S/U). Установка:
+#   go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+# Теги — как у production-сборки: код под //go:build onnx/cgo виден только
+# с ними (иначе staticcheck даёт ложные U1000 на используемых функциях).
+STATICCHECK ?= staticcheck
+
+.PHONY: staticcheck
+staticcheck:
+	$(STATICCHECK) -tags "$(TAGS)" ./...
+
 # Проверка всех комбинаций build tags: stub-ветки (!libvips/!onnx) и полные.
 # Комбинация с libvips требует установленного libvips + cgo; при отсутствии
 # зависимостей используйте `make tags-check` на машине с libvips или CI.
@@ -199,6 +209,12 @@ docker-test-race:
 docker-vet:
 	$(CI_RUN) sh -c 'go vet ./...'
 
+# staticcheck: предустановлен в образе (см. .gitverse/docker/imager-ci/);
+# fallback-установка — только если образ ещё без него.
+.PHONY: docker-staticcheck
+docker-staticcheck:
+	$(CI_RUN) sh -c 'if ! command -v staticcheck >/dev/null 2>&1; then go install honnef.co/go/tools/cmd/staticcheck@2026.2.2; export PATH="$$(go env GOPATH)/bin:$$PATH"; fi; staticcheck -tags "libvips onnx" ./...'
+
 # Проверка всех комбинаций build tags (как локальный tags-check, но внутри
 # CI-образа — не требует libvips/onnxruntime на хосте).
 .PHONY: docker-tags-check
@@ -216,8 +232,8 @@ docker-govulncheck:
 
 # Полный прогон в CI-образе, эквивалентный CI-пайплайну (без fuzz).
 .PHONY: docker-check
-docker-check: docker-fmt-check docker-test docker-test-race docker-govulncheck
+docker-check: docker-fmt-check docker-staticcheck docker-test docker-test-race docker-govulncheck
 
 # Полный локальный прогон, эквивалентный CI (без fuzz).
 .PHONY: check
-check: fmt-check vet test race
+check: fmt-check vet staticcheck test race

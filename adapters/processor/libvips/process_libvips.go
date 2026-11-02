@@ -1634,15 +1634,15 @@ func translateBoxes(boxes []filemeta.PixelBox, W, H, offsetX, offsetY int) []det
 // выходных форматов (GIF, WebP, HEIF, APNG, AVIF).
 //
 // TODO(libvips-animation): ограничение plan.Frames (максимальное число
-// кадров) и plan.Duration (максимальная длительность) требует обрезки
-// массива кадров после загрузки (Pages/PageDelay) и переноса задержек.
-// В текущей версии govips-биндинга безопасное ограничение кадров на этапе
-// загрузки (Page/NumPages) не покрывает диапазон "первые N кадров" —
-// реализация оставлена на будущее. Loop применяется ниже.
+// кадров) требует обрезки массива кадров после загрузки (Pages/PageDelay) и
+// переноса задержек. Лимит кадров применяется на этапе загрузки
+// (importopts.go: NumPages), поэтому здесь не дублируется; полная обрезка
+// произвольного диапазона кадров оставлена на будущее.
+//
+// plan.Duration здесь не используется: обрезка по длительности не
+// реализована, и ненулевое значение отклоняется валидацией плана
+// (processing.NewProcessingPlan/Validate), а не игнорируется молча.
 func (b *libvipsBackend) applyAnimation(_ context.Context, img *vips.ImageRef, plan *processing.ProcessingPlan) error {
-	_ = plan.Frames
-	_ = plan.Duration
-
 	// Loop: nil = оставить как есть (по умолчанию исходника).
 	if plan.Loop != nil {
 		loop := 0 // 0 = бесконечно
@@ -1859,8 +1859,12 @@ func (b *libvipsBackend) exportImage(img *vips.ImageRef, plan *processing.Proces
 		out, _, err := img.ExportJxl(p)
 		return out, err
 	case processing.FormatAPNG:
-		// APNG — надмножество PNG: pngsave автоматически пишет анимацию
-		// (acTL/fcTL/fdAT чанки) для multi-page изображений (кадры загружены
+		// APNG — надмножество PNG. В стандартной сборке (libvips без
+		// libspng) pngsave пишет СТАТИЧНЫЙ PNG: кадры склеиваются в один
+		// вертикальный холст (page-height сохраняется, но acTL/fcTL/fdAT
+		// не пишутся). Анимированный APNG-выход возможен только при
+		// libvips, собранном с libspng: тогда pngsave пишет анимацию
+		// (acTL/fcTL/fdAT) для multi-page изображений (кадры загружены
 		// с NumPages=-1, page-height < высоты стека). Для одиночного
 		// изображения результат — статичный PNG, который также является
 		// валидным APNG (без анимации). Метаданные анимации (delay/loop)

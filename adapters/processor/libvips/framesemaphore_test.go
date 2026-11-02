@@ -61,7 +61,7 @@ func TestFrameSemaphoreOptsNormalized(t *testing.T) {
 func TestRunFramesParallelOrder(t *testing.T) {
 	const n = 16
 	sem := newFrameSemaphore(FrameSemaphoreOpts{Workers: 4})
-	frames, err := runFramesParallel[int](nil, n, 4, sem,
+	frames, err := runFramesParallel[int](context.Background(), n, 4, sem,
 		func(i int) (int, error) { return i, nil },
 		func(f int, i int) error {
 			if f != i {
@@ -91,7 +91,7 @@ func TestRunFramesParallelSemaphoreLimit(t *testing.T) {
 	)
 	sem := newFrameSemaphore(FrameSemaphoreOpts{Workers: workers})
 	var cur, maxCur atomic.Int64
-	_, err := runFramesParallel[int](nil, n, workers, sem,
+	_, err := runFramesParallel[int](context.Background(), n, workers, sem,
 		func(i int) (int, error) { return i, nil },
 		func(f int, i int) error {
 			c := cur.Add(1)
@@ -126,7 +126,7 @@ func TestRunFramesParallelError(t *testing.T) {
 	sem := newFrameSemaphore(FrameSemaphoreOpts{Workers: workers})
 	wantErr := errors.New("boom frame 5")
 	var processed atomic.Int64
-	_, err := runFramesParallel[int](nil, n, workers, sem,
+	_, err := runFramesParallel[int](context.Background(), n, workers, sem,
 		func(i int) (int, error) { return i, nil },
 		func(f int, i int) error {
 			processed.Add(1)
@@ -150,7 +150,7 @@ func TestRunFramesParallelError(t *testing.T) {
 func TestRunFramesParallelSequentialPath(t *testing.T) {
 	sem := newFrameSemaphore(FrameSemaphoreOpts{Workers: 1})
 	// n = 1.
-	frames, err := runFramesParallel[int](nil, 1, 4, sem,
+	frames, err := runFramesParallel[int](context.Background(), 1, 4, sem,
 		func(i int) (int, error) { return i * 10, nil },
 		func(f int, i int) error { return nil })
 	if err != nil {
@@ -161,7 +161,7 @@ func TestRunFramesParallelSequentialPath(t *testing.T) {
 	}
 	// workers = 1: последовательный путь даже при n > 1.
 	var order []int
-	frames, err = runFramesParallel[int](nil, 8, 1, sem,
+	frames, err = runFramesParallel[int](context.Background(), 8, 1, sem,
 		func(i int) (int, error) { return i, nil },
 		func(f int, i int) error {
 			order = append(order, i)
@@ -186,7 +186,7 @@ func TestRunFramesParallelMakeFrameError(t *testing.T) {
 	const n = 8
 	sem := newFrameSemaphore(FrameSemaphoreOpts{Workers: 4})
 	wantErr := errors.New("copy frame 3")
-	frames, err := runFramesParallel[int](nil, n, 4, sem,
+	frames, err := runFramesParallel[int](context.Background(), n, 4, sem,
 		func(i int) (int, error) {
 			if i == 3 {
 				return 0, wantErr
@@ -262,7 +262,7 @@ func TestRunFramesParallelConcurrentRuns(t *testing.T) {
 	for r := 0; r < runs; r++ {
 		go func() {
 			defer wg.Done()
-			_, err := runFramesParallel[int](nil, n, workers, sem,
+			_, err := runFramesParallel[int](context.Background(), n, workers, sem,
 				func(i int) (int, error) { return i, nil },
 				func(f int, i int) error {
 					c := cur.Add(1)
