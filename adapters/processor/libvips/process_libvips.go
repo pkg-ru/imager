@@ -270,7 +270,7 @@ func (b *libvipsBackend) prepareRGB(ctx context.Context, data []byte) (*processo
 	// Загружаем без изменений: только для извлечения RGB в исходных размерах.
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatJPEG,
-		processing.Size{Original: true}, 1, 80, nil, 0, 0,
+		processing.Size{Original: true}, 1, 80, nil, 0,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("libvips: prepareRGB: plan: %w", err)
@@ -2225,4 +2225,3 @@ func (b *libvipsBackend) compositeWatermarkPerFrame(img *vips.ImageRef, wmImg *v
 		return nil
 	})
 }
-

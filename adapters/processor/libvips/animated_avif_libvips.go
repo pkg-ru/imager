@@ -21,6 +21,15 @@ import (
 	"github.com/pkg-ru/imager/domain/encoding"
 )
 
+// avifFramePixels — результат материализации кадра: пиксели, флаг альфа,
+// duration в мс. Используется в конвейере runAvifFramePipeline как тип
+// промежуточного значения (drain → consume).
+type avifFramePixels struct {
+	pixels   []byte
+	hasAlpha bool
+	duration uint32
+}
+
 // isAnimatedImage сообщает, является ли изображение анимацией (наличие
 // frame timing): Pages() > 1 && len(delay) > 0. Обычный multipage (кадры
 // без задержек) НЕ считается анимацией — уходит в static path.
@@ -167,4 +176,3 @@ func (b *libvipsBackend) exportAnimatedAvif(img *vips.ImageRef, resolved encodin
 	}
 	return out, nil
 }
-

@@ -14,14 +14,20 @@
 # Requires Alpine Linux with /etc/apk. Edge-фиксы CVE (EDGE_PACKAGES) требуют
 # edge-репозиториев: они должны быть добавлены в /etc/apk/repositories ДО
 # вызова install-runtime / install-edge.
-set -u
+# set -e критично: без него провал apk add (например, конфликт version
+# constraint) не прерывал сборку — образ собирался «успешно», но без
+# libvips/libheif, и бинарь падал при старте (Error loading shared library).
+set -eu
 
 # Builder-stage dev packages (golang:1.27.0-alpine3.24 builder).
-BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev~1.0 libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
+BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev~1 libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
 
 # Runtime-stage packages (alpine:3.24 runtime). onnxruntime теперь в стабильном
 # community-репозитории 3.24 — edge-репозиторий для него не нужен.
-RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1.0 libjxl~=0.11 poppler-utils libraw~=0.22 librsvg~=2.62 ghostscript~=10.07 ffmpeg~=8.1 tzdata~=2026 ca-certificates onnxruntime"
+# ghostscript: ~10 (major pin), а не ~=10.07. В 3.24/community вышел 10.08.0,
+# а ~=10.07 — minor pin (>=10.07.0,<10.08.0) → "breaks: world[ghostscript~10.07]"
+# и установка runtime-пакетов падала целиком (образ оставался без vips/libheif).
+RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1 libjxl~=0.11 poppler-utils libraw~=0.22 librsvg~=2.62 ghostscript~10 ffmpeg~=8.1 tzdata~=2026 ca-certificates onnxruntime"
 
 # Edge packages: фиксы CVE, которых ещё нет в стабильном 3.24 (ffmpeg 8.1.2-r1,
 # libraw 0.22.2, libass 0.17.5, nghttp2 1.70.0). Устанавливаются
@@ -30,11 +36,11 @@ RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1.0 libjxl~
 # (например, vips~=8.18 собран против libde265 1.0.x; ffmpeg 9.x — несовместим).
 # libde265 умышленно НЕ в edge: в Alpine ~=1.0 — minor pin (>=1.0.0,<1.1.0),
 # поэтому 1.1.x из стабильного 3.24 (CVE-апгрейд) не проходит constraint и apk
-# не может выбрать пакет. Используем ~1.0 — major pin (>=1.0.0,<2.0.0):
-# 1.1.x обратно совместим с 1.0.x (ABI-стабильный), проходит constraint.
-# Оставляем libde265 только в стабильном репозитории — там версия 1.0.x/1.1.x,
-# ABI-совместимая с vips~=8.18.
-EDGE_PACKAGES="ffmpeg=8.1.2-r1 libraw=0.22.2-r0 libass=0.17.5-r0 nghttp2=1.70.0-r0"
+# не может выбрать пакет ("breaks: world"). Используем ~1 — major pin
+# (>=1.0.0,<2.0.0): 1.1.x обратно совместим с 1.0.x (ABI-стабильный),
+# проходит constraint. Оставляем libde265 только в стабильном репозитории —
+# там версия 1.0.x/1.1.x, ABI-совместимая с vips~=8.18.
+EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70"
 
 case "${1:-}" in
     install-builder)

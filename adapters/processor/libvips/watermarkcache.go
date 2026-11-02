@@ -286,3 +286,11 @@ func (c *watermarkCache) totalBytes() int64 {
 	defer c.mu.Unlock()
 	return c.bytes
 }
+
+// stats возвращает метрики кэша: количество записей, суммарный размер в байтах,
+// количество попаданий и промахов. Потокобезопасно.
+func (c *watermarkCache) stats() (entries int, bytes int64, hits, misses int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lru.Len(), c.bytes, c.hits, c.misses
+}
