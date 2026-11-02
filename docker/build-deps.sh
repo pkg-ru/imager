@@ -28,7 +28,11 @@ RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~=1.0 libjxl
 # с --upgrade после включения edge-репозиториев. ~= constraint держит апгрейд внутри
 # той же линейки версий, чтобы не сломать ABI-совместимость с пакетами из 3.24
 # (например, vips~=8.18 собран против libde265 1.0.x; ffmpeg 9.x — несовместим).
-EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libde265~=1.0 libass~=0.17 nghttp2~=1.70"
+# libde265 умышленно НЕ в edge: ~=1.0 в Alpine — major pin (>=1.0,<2.0),
+# поэтому 1.1.x проходит constraint, но конфликтует с точным pin ~1.0 из
+# RUNTIME_PACKAGES (установлен из стабильного 3.24). Оставляем libde265
+# только в стабильном репозитории — там версия 1.0.x, ABI-совместимая с vips.
+EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70"
 
 case "${1:-}" in
     install-builder)
