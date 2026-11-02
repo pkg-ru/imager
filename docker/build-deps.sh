@@ -25,8 +25,10 @@ RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~=1.0 libjxl
 
 # Edge packages: фиксы CVE, которых ещё нет в стабильном 3.24 (ffmpeg 8.1.2-r1,
 # libraw 0.22.2, libde265 1.1.2, libass 0.17.5, nghttp2 1.70.0). Устанавливаются
-# с --upgrade после включения edge-репозиториев.
-EDGE_PACKAGES="ffmpeg libraw libde265 libass nghttp2"
+# с --upgrade после включения edge-репозиториев. ~= constraint держит апгрейд внутри
+# той же линейки версий, чтобы не сломать ABI-совместимость с пакетами из 3.24
+# (например, vips~=8.18 собран против libde265 1.0.x; ffmpeg 9.x — несовместим).
+EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libde265~=1.0 libass~=0.17 nghttp2~=1.70"
 
 case "${1:-}" in
     install-builder)
