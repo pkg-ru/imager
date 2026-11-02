@@ -126,6 +126,13 @@ jobs:
       # создаёт DT_TEXTREL в read-only .go.func, musl не применяет их в PIE ->
       # segfault тестов cgo-пакетов. -no-pie отключает PIE (исправление).
       CGO_LDFLAGS: "-no-pie"
+      # govulncheck определяет версию stdlib по toolchain, а не по go.mod:
+      # образ imager-ci:v1 собран на go1.27.0, и govulncheck рапортует 10
+      # stdlib-уязвимостей (GO-2026-6809/6617/6613/6612/6611/6610/6608/6607/
+      # 6605/6603), исправленных в 1.27.2-1.27.3. Production-образ собирается
+      # на go1.27.3 (см. Dockerfile) — здесь приводим CI к той же версии.
+      # Toolchain-модуль скачивается в GOMODCACHE при первом запуске джобы.
+      GOTOOLCHAIN: go1.27.3
 
     steps:
       - name: Checkout
