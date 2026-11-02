@@ -91,13 +91,14 @@ ARG IMAGER_RELEASE=dev
 # Pinned версии пакетов для воспроизводимости. onnxruntime — runtime для
 # бинаря с -tags onnx; в Alpine 3.24 он есть в стабильном community.
 # Edge-репозитории включаются для edge-фиксов CVE (см. build-deps.sh:
-# EDGE_PACKAGES — ffmpeg/libraw/libde265/libass/nghttp2).
+# EDGE_PACKAGES — ffmpeg/libraw/libass/nghttp2).
 COPY docker/build-deps.sh /tmp/build-deps.sh
 RUN echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/main" > /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/v3.24/community" >> /etc/apk/repositories \
+    && sh /tmp/build-deps.sh install-runtime \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/main" >> /etc/apk/repositories \
     && echo "https://mirror.yandex.ru/mirrors/alpine/edge/community" >> /etc/apk/repositories \
-    && sh /tmp/build-deps.sh install-runtime \
+    && sh /tmp/build-deps.sh install-edge \
     && addgroup -S -g 10001 imager \
     && adduser -S -D -H -u 10001 -G imager imager
 
