@@ -32,8 +32,21 @@ type Recorder struct {
 	dirty      bool        // есть незаписанные изменения
 	lastWrite  time.Time   // время последней записи
 	writeTimer *time.Timer // отложенная запись (дебаунс)
-	stopped    bool        // Stop завершён: новые записи больше не планируются
-	closed     bool        // канал ch закрыт: Observe больше не отправляет
+	// stopping: Stop начался — новые записи больше не планируются (таймер
+	// погашен). Наблюдения, уже лежащие в канале, ВСЁ РАВНО обрабатываются
+	// потребителем: дренаж — часть контракта durability (Stop обязан их
+	// записать). Фильтр "после Stop ничего не принимаем" — finished.
+	stopping bool
+	// finished: дренаж завершён, Stop сделал финальную запись. Записи,
+	// пришедшие после Stop, игнорируются (поздний flush затёр бы финальное
+	// состояние — например, learning-mode: false от ResetLearningMode).
+	finished bool
+	closed   bool // канал ch закрыт: Observe больше не отправляет
+	// drainedCount — число наблюдений, дошедших до потребителя (не
+	// отброшенных фильтрами record). Только для диагностики/тестов:
+	// "наблюдение потеряно" должно быть отличимо от "наблюдение вообще не
+	// дошло до потребителя". Инкремент под r.mu — гонок нет.
+	drainedCount int
 
 	// writeMu сериализует ВЕСЬ flush (снятие snapshot + запись файла), чтобы
 	// два конкурентных flush не теряли наблюдения: без него оба могли снять
@@ -138,27 +151,54 @@ func (r *Recorder) persistLearningMode(enabled bool) {
 }
 
 // Stop останавливает потребителя: drain канала + финальная запись.
+//
+// Гарантия (durability contract): каждое наблюдение, принятое Observe до
+// начала Stop и не отброшенное переполнением буфера, учтено в состоянии
+// Recorder и попадает в generate-local.yaml после возврата Stop.
+//
+//   - сначала под r.mu: stopping=true (новые записи не планируются,
+//     scheduleWriteLocked выходит) и гасится таймер дебаунса. Если callback
+//     таймера уже стартовал, он ждёт r.mu и либо сработает до финального
+//     flush (тогда финальный flush увидит dirty=false и просто выйдет —
+//     данные уже на диске), либо после (тогда финальный flush запишет всё
+//     сам, а поздний callback найдёт dirty=false). То есть потеря
+//     наблюдения при любом межпотоковом раскладе невозможна;
+//   - затем close(ch) под тем же r.mu — атомарно относительно Observe
+//     ("send on closed channel" невозможен);
+//   - затем wg.Wait() — дренаж буфера потребителем (фоновых flush в wg
+//     нет: единственный источник асинхронной записи — дебаунс-таймер,
+//     синхронизированный через r.mu/writeMu);
+//   - затем финальный flush под writeMu: snapshot снимается с полного
+//     состояния;
+//   - затем finished=true: LAST-запись. Она нужна, чтобы опоздавший
+//     callback таймера (или позднее наблюдение) не затёр финальное
+//     состояние — например, learning-mode: false от ResetLearningMode.
+//
+// Порядок блокировок: r.mu -> (release) -> wg.Wait() -> writeMu. Держать
+// writeMu одновременно с ожиданием wg нельзя: callback таймера берёт r.mu
+// перед writeMu (см. onTimer/flush) — взаимная блокировка.
 func (r *Recorder) Stop() {
 	r.stopOnce.Do(func() {
-		// Закрываем канал под r.mu — тем же мьютексом, под которым идёт
-		// отправка в Observe. Паттерн аналогичен adminsvc.enqueue:
-		// проверка флага и close выполняются атомарно относительно
-		// отправителей, поэтому "send on closed channel" невозможен.
-		// stopped ещё не выставлен: buffered-наблюдения должны быть
-		// дренированы потребителем и учтены в финальной записи.
 		r.mu.Lock()
+		r.stopping = true
+		r.stopTimerLocked()
 		r.closed = true
 		close(r.ch)
 		r.mu.Unlock()
 
+		// Дренаж буфера потребителем.
 		r.wg.Wait()
 
-		r.mu.Lock()
-		r.stopped = true
-		r.stopTimerLocked()
-		r.mu.Unlock()
-		// Финальная запись.
+		// Финальная запись — dirty отражает ВСЕ дренированные наблюдения.
 		r.flush()
+
+		// finished выставляется только после финального flush: то, что
+		// попало в state до этого момента, уже на диске. Записи, пришедшие
+		// после, игнорируются (иначе поздний flush затёр бы финальное
+		// состояние — например, learning-mode: false от ResetLearningMode).
+		r.mu.Lock()
+		r.finished = true
+		r.mu.Unlock()
 	})
 }
 
@@ -168,6 +208,14 @@ func (r *Recorder) consume() {
 	for req := range r.ch {
 		r.record(req)
 	}
+}
+
+// drained возвращает число наблюдений, дошедших до потребителя (только для
+// тестов и диагностики) — см. поле drainedCount.
+func (r *Recorder) drained() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.drainedCount
 }
 
 // record обрабатывает одно наблюдение: извлекает path/size/format,
@@ -182,9 +230,10 @@ func (r *Recorder) record(req *asset.Request) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.stopped {
+	if r.finished {
 		return
 	}
+	r.drainedCount++
 	// Размер-грамматика ("120x60", "x200", "200x", "x") — custom-наблюдение.
 	if _, err := asset.ParseSize(size); err == nil {
 		if format == "" {
@@ -222,24 +271,49 @@ func pathPrefix(canonicalPath string) string {
 
 // scheduleWriteLocked планирует запись с учётом дебаунса: если с последней
 // записи прошло >= writeInterval — писать сразу; иначе отложить таймером.
+//
+// Асинхронная запись делается ТОЛЬКО дебаунс-таймером (никаких фоновых
+// горутин). Причина: фоновая горутина, не участвующая в r.wg, обгоняет
+// wg.Wait() в Stop — снимает snapshot (dirty=false), ещё не записав файл,
+// а финальный flush из Stop видит dirty=false и выходит, оставляя на
+// диске усечённое состояние (потеря наблюдения — флейк CI). Вариант
+// "участвовать в r.wg" тоже не годится: Stop, ожидая wg, не может
+// выставить маркер "после Stop" раньше дренажа, а потребитель,
+// дренирующий канал, при активном маркере молча выбрасывает наблюдения
+// (тот самый флейк: на диске оставался только learning-mode: false, ни
+// одно observation не дошло до state). Таймер синхронизирован через r.mu
+// и writeMu: callback либо успевает до финального flush, либо после —
+// потеря невозможна ни в каком раскладе (см. Stop).
 func (r *Recorder) scheduleWriteLocked() {
-	if r.writeTimer != nil {
-		return // запись уже запланирована
+	if r.stopping || r.writeTimer != nil {
+		return // Stop начался (финальная запись сделает flush) или запись уже запланирована
 	}
 	elapsed := time.Since(r.lastWrite)
 	if elapsed >= writeInterval {
-		go r.flush()
+		// С последней записи прошло много времени: писать нужно сразу, но
+		// не фоновой горутиной (см. выше) — запланируем flush "немедленно".
+		r.writeTimer = time.AfterFunc(0, r.onTimer)
 		return
 	}
-	r.writeTimer = time.AfterFunc(writeInterval-elapsed, func() {
-		r.mu.Lock()
-		r.writeTimer = nil
-		r.mu.Unlock()
-		r.flush()
-	})
+	r.writeTimer = time.AfterFunc(writeInterval-elapsed, r.onTimer)
 }
 
-// stopTimerLocked останавливает отложенный таймер (если есть).
+// onTimer — callback дебаунс-таймера: сбрасывает маркер таймера и делает
+// запись. Обе операции берут r.mu по отдельности — держать r.mu в flush
+// нельзя (flush проверяет finished под r.mu, а r.mu удерживается во время
+// отправки в Observe; см. комментарий к Stop о порядке блокировок).
+func (r *Recorder) onTimer() {
+	r.mu.Lock()
+	r.writeTimer = nil
+	r.mu.Unlock()
+	r.flush()
+}
+
+// stopTimerLocked останавливает отложенный таймер (если есть), не ожидая
+// его завершения. Вызывается под r.mu: если callback уже стартовал и
+// ждёт r.mu, Stop гарантированно не пропустит dirty (callback либо
+// успеет снять snapshot до финального flush, либо после — при любом
+// раскладе данные попадут на диск, см. комментарий к Stop).
 func (r *Recorder) stopTimerLocked() {
 	if r.writeTimer != nil {
 		r.writeTimer.Stop()
@@ -248,14 +322,25 @@ func (r *Recorder) stopTimerLocked() {
 }
 
 // flush выполняет запись state в generate-local.yaml (если есть изменения).
+//
 // Весь flush (снятие snapshot + запись файла) сериализуется через writeMu:
 // конкурентные flush (дебаунс-таймер и Stop) не могут снять snapshot
 // одновременно и перезаписать более новый snapshot более старым.
+//
+// Если Stop уже проставил finished — запись невозможна: опоздавший
+// callback таймера (или flush после ResetLearningMode) затёр бы финальное
+// состояние файла, где learning-mode уже сброшен в false.
 func (r *Recorder) flush() {
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 
 	r.mu.Lock()
+	if r.finished {
+		// Stop завершён: state зафиксирован на диске, поздние записи
+		// (callback таймера, гонка с ResetLearningMode) запрещены.
+		r.mu.Unlock()
+		return
+	}
 	if !r.dirty {
 		r.mu.Unlock()
 		return

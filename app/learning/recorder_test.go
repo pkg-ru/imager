@@ -493,11 +493,32 @@ func TestServiceObserveGatedByController(t *testing.T) {
 	}
 }
 
-// TestRecorderConcurrentObserveStop — регрессия panic "send on closed channel".
-// Service.Observe проверяет Enabled() (atomic) и затем отправляет req в канал;
-// Stop() в это время может закрыть канал. До исправления Observe отправлял
-// в канал без синхронизации с close — гонка приводила к панике (клиент получал
-// 500 на валидном запросе). Тест гоняет это окно под -race.
+// TestRecorderConcurrentObserveStop — регрессия двух дефектов на graceful
+// shutdown:
+//
+//  1. panic "send on closed channel": Service.Observe проверяет Enabled()
+//     (atomic) и затем отправляет req в канал, а Stop() в это время закрывает
+//     канал. До исправления Observe отправлял в канал без синхронизации с
+//     close — гонка приводила к панике (клиент получал 500 на валидном
+//     запросе).
+//
+//  2. Потеря наблюдения при Stop (флейк CI). Реальный отказ в CI выглядел
+//     так: тест завершился за 0.00s, а в generate-local.yaml остались только
+//     строки `version: "1"` и `learning-mode: false` — ни одного
+//     path-policy. Это ровно два дефекта в Stop:
+//     a) фоновый flush не участвовал в wg (или, наоборот, участие в wg
+//     вынуждало выставлять "стоп-маркер" до дренажа) — потребитель,
+//     дренирующий канал, видел маркер и молча выбрасывал наблюдения;
+//     b) SetLearningMode(true|false) не создаёт секцию path-policies, поэтому
+//     файл от ResetLearningMode и есть тот самый "усечённый" документ.
+//     Исправление: асинхронная запись только дебаунс-таймером (без фоновых
+//     горутин), finished выставляется ПОСЛЕ финального flush, flush под
+//     finished ничего не пишет.
+//
+// Контракт durability (проверяется здесь в детерминированном виде):
+// наблюдение, доставленное в Observe ДО начала Stop, гарантированно
+// попадает в generate-local.yaml после возврата Stop. Тест гоняет это окно
+// под -race и повторяет сценарий: гонка с close(ch), конкурентные flush.
 func TestRecorderConcurrentObserveStop(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Deps{ConfigDir: dir, Logger: observability.NopLogger()})
@@ -507,6 +528,12 @@ func TestRecorderConcurrentObserveStop(t *testing.T) {
 	svc := NewService(NewController(), rec)
 	svc.controller.Enable()
 
+	// Наблюдение, гарантированно принятое до Stop. lastWrite выставлен в
+	// NewRecorder, поэтому elapsed < writeInterval: scheduleWriteLocked
+	// ставит таймер дебаунса. Stop обязан погасить таймер и записать
+	// dirty-состояние финальным flush.
+	svc.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -515,23 +542,33 @@ func TestRecorderConcurrentObserveStop(t *testing.T) {
 	}()
 
 	// Шквал наблюдений во время остановки: любая отправка, попавшая в окно
-	// между Enabled() и фактической записью в канал, не должна паниковать.
+	// между Enabled() и записью в канал, не должна паниковать.
 	for i := 0; i < 200; i++ {
 		svc.Observe(newTestRequest(t, "a/b/img-jpg", "img", "jpg", "120x60", "webp"))
 	}
 	<-done
 
-	// Наблюдения, успевшие попасть в буфер до close, дренируются и
-	// учтются в финальной записи (если буфер не переполнился — наблюдения
-	// отбрасываются по design, файл может отсутствовать). Главное —
-	// отсутствие паники; файл проверяем только при наличии.
-	if _, err := os.Stat(filepath.Join(dir, localFileName)); err == nil {
-		data, err := os.ReadFile(filepath.Join(dir, localFileName))
-		if err != nil {
-			t.Fatalf("read: %v", err)
-		}
-		if !strings.Contains(string(data), "120x60:") {
-			t.Errorf("buffered observation lost after concurrent Stop:\n%s", string(data))
-		}
+	// Если файл содержит только learning-mode (без path-policies), значит
+	// драйвер остановки снова выбросил наблюдения — диагностируем это
+	// отдельно, до проверки custom: иначе сообщение будет нечитаемым.
+	if got := rec.drained(); got == 0 {
+		t.Fatalf("consumer drained 0 observations under -race: shutdown drops buffered observations")
+	}
+
+	// Детерминированная проверка durability: наблюдение, принятое до Stop,
+	// обязано быть на диске. Не «если файл есть» — файл ДОЛЖЕН быть.
+	file := filepath.Join(dir, localFileName)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("observation not durable to Stop: read %s: %v", file, err)
+	}
+	if !strings.Contains(string(data), "/a/b/img-jpg:") {
+		t.Errorf("path-policy missing after concurrent Stop:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "120x60:") {
+		t.Errorf("observation lost after concurrent Stop:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "learning-mode: false") {
+		t.Errorf("learning-mode must be reset on shutdown:\n%s", string(data))
 	}
 }
