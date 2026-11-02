@@ -19,7 +19,7 @@
 # libvips/libheif, и бинарь падал при старте (Error loading shared library).
 set -eu
 
-# Builder-stage dev packages (golang:1.27.0-alpine3.24 builder).
+# Builder-stage dev packages (golang:1.27.3-alpine3.24 builder).
 BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev~1 libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
 
 # Runtime-stage packages (alpine:3.24 runtime). onnxruntime теперь в стабильном

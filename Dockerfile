@@ -24,7 +24,7 @@ RUN IMAGER_VERSION=${IMAGER_VERSION} INSTALL_DIR=/out sh /tmp/install-imager.sh
 # есть в стабильном community Alpine 3.24; edge-репозиторий используется
 # только для точечных фиксов CVE (см. docker/build-deps.sh: EDGE_PACKAGES).
 ###############################################################################
-FROM golang:1.27.0-alpine3.24 AS source-builder
+FROM golang:1.27.3-alpine3.24 AS source-builder
 
 # Воспроизводимая сборка: фиксируем версию Go toolchain из образа.
 ARG GOFLAGS="-buildvcs=false"
