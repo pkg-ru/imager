@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestDoDedupSameKey(t *testing.T) {
@@ -371,3 +371,4 @@ func TestInFlightTrueDuringGenerationFalseAfter(t *testing.T) {
 		t.Fatal("InFlight = true after generation, want false")
 	}
 }
+

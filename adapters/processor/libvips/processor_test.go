@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeBackend — тестовый движок без cgo: возвращает данные или ошибку.
@@ -394,3 +394,4 @@ func TestOrphanMetricsGlobal(t *testing.T) {
 		t.Errorf("orphan inflight after decrement = %d, want 0", got)
 	}
 }
+

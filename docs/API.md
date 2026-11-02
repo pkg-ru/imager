@@ -2,7 +2,7 @@
 
 Сервис отдаёт изображения по каноническим (custom) и preset URL. Тела запросов не принимает (кроме админ-эндпоинтов, лимит 1 МБ); лимит тела обычных запросов — `server.max-body-bytes` (по умолчанию 4 KiB, превышение → `413`). Используются только методы `GET`, `HEAD`, `OPTIONS`.
 
-Живой пример работы сервиса и клиентской части — [онлайн-демо](https://altuh.ru/demo/imager). Клиент для формирования asset URL и обращения к сервису — [imager-client](https://gitverse.ru/pkg-ru/imager-client).
+Живой пример работы сервиса и клиентской части — [онлайн-демо](https://altuh.ru/demo/imager). Клиент для формирования asset URL и обращения к сервису — [imager-client](https://github.com/pkg-ru/imager-client).
 
 Связанные документы: [ARCHITECTURE.md](ARCHITECTURE.md) (жизненный цикл запроса), [POLICIES.md](POLICIES.md) (правила генерации), [FORMATS.md](FORMATS.md) (поддерживаемые форматы), [PROCESSING.md](PROCESSING.md), [CONFIGURATION.md](CONFIGURATION.md), [SECURITY.md](SECURITY.md), [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -343,3 +343,4 @@ curl -X DELETE http://localhost:8080/admin/assets/delete \
   -H "Content-Type: application/json" \
   -d '{"assets": ["/thumbs/photo-jpg/thumb.webp"]}'
 # → 200 {"status":"completed","deleted":1}
+

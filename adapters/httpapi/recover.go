@@ -6,7 +6,7 @@ import (
 	dbg "runtime/debug"
 	"strconv"
 
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // Recover — middleware panic-recovery на уровне корневого mux.
@@ -124,3 +124,4 @@ type recoverDetail struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+

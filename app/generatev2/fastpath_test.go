@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // mustReqSize строит канонический Request с произвольным Size (в т.ч.
@@ -196,3 +196,4 @@ func TestIsMediaFormat(t *testing.T) {
 		}
 	}
 }
+

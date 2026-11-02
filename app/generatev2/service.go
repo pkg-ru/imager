@@ -9,22 +9,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/bounded"
-	"gitverse.ru/pkg-ru/imager/ports/buffer"
-	"gitverse.ru/pkg-ru/imager/ports/coordinator"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/generation"
-	"gitverse.ru/pkg-ru/imager/ports/metadata"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/bounded"
+	"github.com/pkg-ru/imager/ports/buffer"
+	"github.com/pkg-ru/imager/ports/coordinator"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/generation"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // Logger — единый интерфейс логирования из observability.
@@ -1519,3 +1519,4 @@ func (s *artifactStream) Read(p []byte) (int, error) { return s.art.Read(p) }
 func (s *artifactStream) Close() error { return s.art.Close() }
 
 func (s *artifactStream) Metadata() object.ObjectMetadata { return s.art.Metadata() }
+

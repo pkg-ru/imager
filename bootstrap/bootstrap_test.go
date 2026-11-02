@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/composition"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/composition"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeRGBProcessor — processor.Processor, реализующий RGBPreparer, для
@@ -252,3 +252,4 @@ func TestFatalExits(t *testing.T) {
 		t.Fatalf("output = %q, want mention of 'bootstrap boom: 42'", out)
 	}
 }
+

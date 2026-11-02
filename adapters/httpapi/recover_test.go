@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // captureLogger — тестовый логгер, накапливающий сообщения уровня error.
@@ -211,3 +211,4 @@ func panicMetricValue(name string) int64 {
 	}
 	return iv.Value()
 }
+

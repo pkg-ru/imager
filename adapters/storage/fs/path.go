@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // reservedSegmentPrefix — сегменты, зарезервированные хранилищем для
@@ -176,3 +176,4 @@ func hasPrefixBoundary(key, prefix string) bool {
 	}
 	return key[len(prefix)] == '/'
 }
+

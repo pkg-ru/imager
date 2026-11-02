@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // FuzzCleanRelContainment проверяет, что cleanRel никогда не паникует и что
@@ -40,3 +40,4 @@ func FuzzCleanRelContainment(f *testing.F) {
 		}
 	})
 }
+

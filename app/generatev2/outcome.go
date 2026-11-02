@@ -17,7 +17,7 @@
 package generatev2
 
 import (
-	"gitverse.ru/pkg-ru/imager/ports/generation"
+	"github.com/pkg-ru/imager/ports/generation"
 )
 
 // OutcomeKind — категория исхода генерации для маппинга в HTTP-статусы.
@@ -52,3 +52,4 @@ type OutcomeError = generation.OutcomeError
 func outcome(kind OutcomeKind, reason string, cause error) *OutcomeError {
 	return &OutcomeError{Kind: kind, Reason: reason, Cause: cause}
 }
+

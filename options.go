@@ -5,16 +5,16 @@ import (
 	"net/http"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/app/adminsvc"
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
-	"gitverse.ru/pkg-ru/imager/composition"
-	"gitverse.ru/pkg-ru/imager/config"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/adapters/httpapi"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/app/adminsvc"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/composition"
+	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // Options — параметры программной сборки pipeline без YAML (New).
@@ -127,3 +127,4 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		AdminHandler: app.AdminHandler,
 	}, nil
 }
+

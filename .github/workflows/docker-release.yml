@@ -10,9 +10,9 @@ name: Docker Hub Release
 #   GitHub Actions использует полноценные виртуальные машины, где docker build
 #   и docker push работают штатно.
 #
-# GitHub — зеркало gitverse.ru/pkg-ru/imager: refs (ветки и теги) синхронизирует
-# .gitverse/workflows/mirror.yml, поэтому push тега v* приходит сюда
-# автоматически и запускает публикацию.
+# GitHub — основной репозиторий pkg-ru/imager: refs (ветки и теги)
+# синхронизируются в GitVerse (зеркало) через .github/workflows/mirror.yml,
+# поэтому push тега v* приходит сюда автоматически и запускает публикацию.
 #
 # Секрет DOCKERHUB_TOKEN (учётка altrap, права Read & Write):
 #   GitHub → Settings → Secrets and variables → Actions → New repository secret.

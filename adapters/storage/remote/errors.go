@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // MapError маппит низкоуровневую ошибку удалённого хранилища в типизированную
@@ -51,3 +51,4 @@ func Unsafe(key object.ObjectKey, err error) error {
 	}
 	return fmt.Errorf("unsafe path for key %q: %w", key, object.ErrUnsafePath)
 }
+

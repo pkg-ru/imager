@@ -20,7 +20,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makeBasePng создаёт простой PNG 4x4 (сплошной красный).
@@ -211,3 +211,4 @@ func hasField(fields []string, name string) bool {
 	}
 	return false
 }
+

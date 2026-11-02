@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Preset — immutable именованный набор параметров обработки.
@@ -513,3 +513,4 @@ func SplitPresetNameDPR(name string) (string, DPR, error) {
 	}
 	return name[:at], DPR(v), nil
 }
+

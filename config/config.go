@@ -24,9 +24,9 @@ import (
 	"fmt"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Config — typed DTO конфигурации конвейера ассетов.
@@ -336,3 +336,4 @@ func (c *Config) Compile() (*Compiled, error) {
 		DefaultVideoAttempts:     c.Processing.DefaultVideoAttempts.Unwrap(),
 	}, nil
 }
+

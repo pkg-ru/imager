@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // TestLoadConfigDirBaseOnly проверяет, что загрузка одного обязательного
@@ -796,3 +796,4 @@ application:
 		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
 	}
 }
+

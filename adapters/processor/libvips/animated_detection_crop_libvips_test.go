@@ -27,8 +27,8 @@ import (
 	"testing"
 
 	"github.com/davidbyttow/govips/v2/vips"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // detBackend создаёт движок с fakeDetector (бокс на весь кадр) для
@@ -229,3 +229,4 @@ func TestDetectionCropAnimatedWithWatermark(t *testing.T) {
 		}
 	}
 }
+

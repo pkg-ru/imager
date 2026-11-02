@@ -148,7 +148,7 @@ jobs:
   # ограничения). GitHub Actions использует полноценные VM, где docker build
   # и docker push работают штатно.
   #
-  # GitHub — зеркало gitverse.ru/pkg-ru/imager: refs (ветки и теги)
-  # синхронизирует .gitverse/workflows/mirror.yml, поэтому push тега v*
-  # приходит в GitHub автоматически и запускает публикацию.
+  # GitHub — основной репозиторий pkg-ru/imager: refs (ветки и теги)
+  # синхронизируются в GitVerse через .github/workflows/mirror.yml,
+  # поэтому push тега v* запускает публикацию автоматически.
   # ===========================================================================

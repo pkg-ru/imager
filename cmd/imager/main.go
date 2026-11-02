@@ -2,7 +2,7 @@
 //
 // Вся логика (загрузка YAML-конфига из трёх слоёв — server/generate/failback,
 // сборка pipeline, запуск HTTP-сервера, graceful shutdown) вынесена в
-// библиотечный фасад gitverse.ru/pkg-ru/imager.
+// библиотечный фасад github.com/pkg-ru/imager.
 // Здесь остаётся только чтение env-переменной IMAGER_CONFIG_DIR и вызов
 // imager.NewServer + imager.Server.Run.
 package main
@@ -11,7 +11,7 @@ import (
 	"context"
 	"os"
 
-	"gitverse.ru/pkg-ru/imager"
+	"github.com/pkg-ru/imager"
 )
 
 func main() {
@@ -33,3 +33,4 @@ func main() {
 		imager.Fatal("imager: %v", err)
 	}
 }
+

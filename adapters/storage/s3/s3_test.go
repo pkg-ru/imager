@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/aws/smithy-go/middleware"
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // fakeS3Handler — минимальный in-memory S3 backend для тестов.
@@ -706,3 +706,4 @@ func TestS3DeleteByPrefix(t *testing.T) {
 		t.Fatalf("second deleted = %d, want 0", n)
 	}
 }
+

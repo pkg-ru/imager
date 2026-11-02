@@ -10,7 +10,7 @@ package detector
 import (
 	"context"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // DetectorInfo — описание конфигурации детектора (для sidecar-метаданных:
@@ -45,3 +45,4 @@ type Detector interface {
 	// Describe returns detector configuration for sidecar metadata.
 	Describe() DetectorInfo
 }
+

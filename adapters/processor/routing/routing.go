@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"io"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // ErrEngineUnavailable — сигнал, что для запрошенного формата/операции нет
@@ -145,3 +145,4 @@ func (p *Processor) primaryCovered(plan *processing.ProcessingPlan) bool {
 	}
 	return true
 }
+

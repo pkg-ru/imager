@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 func newTestMetaStore(t *testing.T) (*MetadataStore, string) {
@@ -654,3 +654,4 @@ func TestMetadataDelete(t *testing.T) {
 		t.Fatalf("Delete idempotent: %v", err)
 	}
 }
+

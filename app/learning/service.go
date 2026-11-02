@@ -1,6 +1,6 @@
 package learning
 
-import "gitverse.ru/pkg-ru/imager/domain/asset"
+import "github.com/pkg-ru/imager/domain/asset"
 
 // Service связывает Controller (runtime-флаг) и Recorder (сборщик
 // наблюдений) learning-mode.
@@ -50,3 +50,4 @@ func (s *Service) Stop() {
 		s.recorder.Stop()
 	}
 }
+

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // TestBufferPathInMemory — in-RAM буфер возвращает пустой путь (fallback на
@@ -175,3 +175,4 @@ func TestBufferPoolCloseGuard(t *testing.T) {
 		t.Fatalf("Used() after release = %d, want 0 (clamped)", pool.Used())
 	}
 }
+

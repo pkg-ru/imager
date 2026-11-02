@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestResultStoreNotFound(t *testing.T) {
@@ -475,3 +475,4 @@ func TestResultStoreNoSyncOptOut(t *testing.T) {
 		t.Errorf("durability: dirSyncs = %d, want >= 1", dirSyncs)
 	}
 }
+

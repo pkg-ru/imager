@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // copyBufPool — переиспользуемый буфер для io.CopyBuffer в writeTemp.
@@ -73,3 +73,4 @@ func writeTemp(tmp *os.File, src io.Reader, ctx context.Context) (int64, error) 
 	n, err := io.CopyBuffer(tmp, src, *bufp)
 	return n, err
 }
+

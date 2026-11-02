@@ -11,7 +11,7 @@
 package libvips
 
 import (
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/domain/encoding"
 )
 
 // defaultQuality — дефолт encoders.default-quality при 0
@@ -214,3 +214,4 @@ func resolvePNGQuantize(r encoding.ResolvedParams) pngQuantizeDecision {
 		Bitdepth: r.PaletteBitDepth,
 	}
 }
+

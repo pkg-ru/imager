@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // TestHealthHeadNoBody проверяет, что для HEAD health-эндпоинты пишут только
@@ -227,3 +227,4 @@ func TestWriteTimeoutTooSmall(t *testing.T) {
 		t.Errorf("WriteTimeoutTooSmall(0, 30s) = true, want false (0 = дефолт runtime)")
 	}
 }
+

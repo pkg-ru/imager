@@ -23,7 +23,7 @@
 package libvips
 
 import (
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // importPlan — решённые import-параметры (платформенно-независимые).
@@ -81,3 +81,4 @@ func sequentialSafe(plan *processing.ProcessingPlan) bool {
 		return false
 	}
 }
+

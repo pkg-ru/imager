@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // stateOf — хелпер построения state.
@@ -861,3 +861,4 @@ func TestUpdatePathPoliciesEmptyState(t *testing.T) {
 		t.Errorf("path-policies key must remain:\n%s", got)
 	}
 }
+

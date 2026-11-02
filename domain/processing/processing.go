@@ -16,7 +16,7 @@ import (
 	"math"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/domain/encoding"
 )
 
 // Operation — допустимая enum операций обработки кропа/ресайза.
@@ -413,3 +413,4 @@ func (p *ProcessingPlan) Validate() error {
 	}
 	return nil
 }
+

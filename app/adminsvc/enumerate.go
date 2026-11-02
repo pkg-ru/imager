@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // SourceRef — разобранный путь исходника (path/name.format).
@@ -182,3 +182,4 @@ func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSe
 
 	return urls, nil
 }
+

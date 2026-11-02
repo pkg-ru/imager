@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/config"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/internal/testutil"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // testConfigYAML — валидная конфигурация с path-policy "/" (разрешает пресет
@@ -333,3 +333,4 @@ func TestBuildSingleflightWaitTimeoutDisabled(t *testing.T) {
 	<-waiterDone
 	<-ownerDone
 }
+

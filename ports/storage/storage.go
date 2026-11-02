@@ -12,7 +12,7 @@ import (
 	"context"
 	"io"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // SourceStore открывает исходные объекты по ключу. Реализации могут быть
@@ -119,3 +119,4 @@ type ArtifactFactory interface {
 	// NewArtifact создаёт Artifact поверх открытого ресурса.
 	NewArtifact(meta object.ObjectMetadata, closer io.Closer, seeker io.Seeker) object.Artifact
 }
+

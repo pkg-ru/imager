@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Request — immutable типизированное представление asset URL.
@@ -317,3 +317,4 @@ func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality
 	cp.resolved = true
 	return &cp
 }
+

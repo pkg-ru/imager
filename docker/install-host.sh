@@ -34,17 +34,17 @@ if [ -f "${SCRIPT_DIR}/lib.sh" ] && [ -f "${SCRIPT_DIR}/install-imager.sh" ]; th
     REPO_DIR="$SCRIPT_DIR"
     log "running from repository clone: $REPO_DIR"
 else
-    log "not running from a clone - cloning gitverse.ru/pkg-ru/imager..."
+    log "not running from a clone - cloning github.com/pkg-ru/imager..."
     TMP_REPO=$(mktemp -d)
     trap 'rm -rf "$TMP_REPO"' EXIT
     if command -v git >/dev/null 2>&1; then
-        # Primary: gitverse.ru/pkg-ru/imager; fallback: GitHub mirror.
-        if ! git clone --depth 1 https://gitverse.ru/pkg-ru/imager.git "$TMP_REPO" 2>/dev/null; then
-            log "gitverse clone failed - falling back to github.com/pkg-ru/imager..."
-            git clone --depth 1 https://github.com/pkg-ru/imager.git "$TMP_REPO"
+        # Primary: github.com/pkg-ru/imager; fallback: GitVerse mirror.
+        if ! git clone --depth 1 https://github.com/pkg-ru/imager.git "$TMP_REPO" 2>/dev/null; then
+            log "github clone failed - falling back to gitverse.ru/pkg-ru/imager..."
+            git clone --depth 1 https://gitverse.ru/pkg-ru/imager.git "$TMP_REPO"
         fi
         if [ ! -f "$TMP_REPO/docker/install-host.sh" ]; then
-            die "failed to clone gitverse.ru/pkg-ru/imager or github.com/pkg-ru/imager; clone the repo manually"
+            die "failed to clone github.com/pkg-ru/imager or gitverse.ru/pkg-ru/imager; clone the repo manually"
         fi
     else
         die "git not found; cannot clone the install scripts. Clone the repo manually and run docker/install-host.sh"

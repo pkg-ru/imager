@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // PathPolicy — скомпилированная path-policy для конкретного префикса пути.
@@ -437,3 +437,4 @@ func (p *Policy) PathNames() []string {
 	sort.Strings(names)
 	return names
 }
+

@@ -6,7 +6,7 @@ package libvips
 import (
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 func mustPlanFull(t *testing.T, mutate func(p *processing.ProcessingPlan)) *processing.ProcessingPlan {
@@ -470,3 +470,4 @@ func TestResolveImportPlanSequentialAccess(t *testing.T) {
 		})
 	}
 }
+

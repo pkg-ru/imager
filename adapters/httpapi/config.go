@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // DefaultGenerateTimeout — таймаут генерации ассета по умолчанию.
@@ -396,3 +396,4 @@ func DefaultWriteTimeoutFor(generateTimeout time.Duration) time.Duration {
 func WriteTimeoutTooSmall(writeTimeout, generateTimeout time.Duration) bool {
 	return writeTimeout > 0 && writeTimeout <= generateTimeout
 }
+

@@ -48,7 +48,7 @@ detect_arch() {
 
 # -- Release version resolution ----------------------------------------------
 RELEASE_REPO="${IMAGER_RELEASE_REPO:-github.com/pkg-ru/imager}"
-RELEASE_GIT_URL="${IMAGER_RELEASE_GIT_URL:-https://gitverse.ru/pkg-ru/imager}"
+RELEASE_GIT_URL="${IMAGER_RELEASE_GIT_URL:-https://github.com/pkg-ru/imager}"
 
 # get_latest_release_api: query GitHub "releases/latest", print tag "v1.2.3"
 # or empty string.
@@ -79,7 +79,7 @@ get_latest_release_git() {
     if ! command -v git >/dev/null 2>&1; then
         return 0
     fi
-    for _repo in "${RELEASE_GIT_URL}" "https://${RELEASE_REPO}"; do
+    for _repo in "${RELEASE_GIT_URL}" "https://gitverse.ru/pkg-ru/imager"; do
         _tags=$(git ls-remote --tags --sort=-v:refname "$_repo" 2>/dev/null | \
             sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' | head -n 1)
         case "$_tags" in

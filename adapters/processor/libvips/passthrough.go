@@ -13,7 +13,7 @@
 package libvips
 
 import (
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // sourceInfo — лёгкие метаданные исходника, достаточные для решения о
@@ -170,3 +170,4 @@ func sizeMatches(s processing.Size, w, h int) bool {
 		return false
 	}
 }
+

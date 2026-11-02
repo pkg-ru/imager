@@ -15,7 +15,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makePalettePng создаёт PNG с ограниченной палитрой (8 уникальных цветов),
@@ -204,3 +204,4 @@ func absFloat(v float64) float64 {
 	}
 	return v
 }
+

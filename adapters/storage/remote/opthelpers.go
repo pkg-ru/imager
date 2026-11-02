@@ -1,7 +1,7 @@
 package remote
 
 import (
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // IsConnErr отличает ошибки соединения (требуют переподключения/discard и
@@ -19,3 +19,4 @@ func IsConnErr(err error) bool {
 	}
 	return err != nil
 }
+

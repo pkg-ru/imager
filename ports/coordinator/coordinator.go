@@ -6,7 +6,7 @@ package coordinator
 import (
 	"context"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // Keyed — интерфейс keyed координации. Гарантирует, что для одного и того же
@@ -37,3 +37,4 @@ type KeyedLocker interface {
 	// отмены контекста.
 	Acquire(ctx context.Context, key object.ObjectKey) (Unlock, error)
 }
+

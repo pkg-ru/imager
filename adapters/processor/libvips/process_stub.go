@@ -6,9 +6,9 @@ import (
 	"context"
 	"fmt"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 func init() {
@@ -42,3 +42,4 @@ func (s *stubBackend) prepareRGB(_ context.Context, _ []byte) (*processor.RGBFra
 }
 
 func (s *stubBackend) close() error { return nil }
+

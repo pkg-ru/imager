@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/coordinator"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/coordinator"
 )
 
 // Ограничения по умолчанию.
@@ -228,3 +228,4 @@ func (g *Group) Acquire(ctx context.Context, key object.ObjectKey) (coordinator.
 }
 
 var _ coordinator.Keyed = (*Group)(nil)
+

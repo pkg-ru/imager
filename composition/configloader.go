@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/observability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -179,3 +179,4 @@ func deepMerge(base, override map[string]any) map[string]any {
 	}
 	return base
 }
+

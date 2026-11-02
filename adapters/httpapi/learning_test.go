@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // fakeRecorder — управляемый fake PolicyRecorder: запоминает последний req.
@@ -79,3 +79,4 @@ func TestHandlerNilRecorderNoPanic(t *testing.T) {
 		t.Errorf("body = %q, want PNGDATA", body)
 	}
 }
+

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
+	"github.com/pkg-ru/imager/adapters/httpapi"
 )
 
 // TestEffectiveAdmissionLimitFallback проверяет fallback-логику:
@@ -1484,3 +1484,4 @@ func ptrOr(v *int, def int) int {
 	}
 	return *v
 }
+

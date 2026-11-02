@@ -11,8 +11,8 @@ import (
 	"context"
 	"fmt"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // OutcomeKind — категория исхода генерации для маппинга в HTTP-статусы.
@@ -86,3 +86,4 @@ func (r *Result) Close() error {
 type Generator interface {
 	Generate(ctx context.Context, req *asset.Request) (*Result, error)
 }
+

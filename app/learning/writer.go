@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/policy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -564,3 +564,4 @@ func sortedCustomNames(m map[string]policy.PresetConfig) []string {
 	sort.Strings(keys)
 	return keys
 }
+

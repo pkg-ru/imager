@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/pkg-ru/imager/main/docker/install-h
 ```
 
 `install-host.sh` — оркестратор: при запуске не из клона репозитория он
-выполняет `git clone --depth 1 https://gitverse.ru/pkg-ru/imager.git` во
+выполняет `git clone --depth 1 https://github.com/pkg-ru/imager.git` во
 временный каталог (fallback: `https://github.com/pkg-ru/imager.git`) и
 запускается оттуда, затем:
 
@@ -183,7 +183,7 @@ docker pull altrap/imager
 ### Сборка образа из релиза (GitHub releases)
 
 `altrap/imager` — образ на Docker Hub (учётка `altrap`, не репозиторий кода).
-Релизы кода публикуются в `gitverse.ru/pkg-ru/imager` (основной) и
+Релизы кода публикуются в `github.com/pkg-ru/imager` (основной) и
 `github.com/pkg-ru/imager` (зеркало).
 
 ```bash
@@ -198,7 +198,7 @@ docker build --target from-release -t altrap/imager .
 Target `from-release`: бинарь скачивается fetcher-стадией
 (`alpine:3.24` + `ca-certificates`/`curl` + `docker/install-imager.sh` +
 `docker/lib.sh`) из GitHub releases (`github.com/pkg-ru/imager`, fallback
-теги `gitverse.ru/pkg-ru/imager`) — Go toolchain и исходники не нужны.
+теги `github.com/pkg-ru/imager`) — Go toolchain и исходники не нужны.
 
 HEALTHCHECK образа опрашивает `http://127.0.0.1:8080/healthz`.
 
@@ -235,7 +235,7 @@ make docker-build-from-source                    # сборка из исход�
 
 `VERSION_TAG` резолвится тем же механизмом, что и `docker/install-imager.sh`
 (`docker/lib.sh`: GitHub API `releases/latest` на `github.com/pkg-ru/imager`
-→ fallback `git ls-remote --tags` на `gitverse.ru/pkg-ru/imager`).
+→ fallback `git ls-remote --tags` на `github.com/pkg-ru/imager`).
 
 ## Docker Compose
 
@@ -331,3 +331,4 @@ meson install -C build
 Затем соберите imager с `-tags libvips` (см. [Сборка](#сборка)) — `pngsave`
 будет писать APNG-чанки (acTL/fcTL/fdAT) для multi-page изображений, то есть
 анимированный APNG-выход.
+

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestNewSourceStoreValidation(t *testing.T) {
@@ -355,3 +355,4 @@ func TestRetryBackoffJitter(t *testing.T) {
 		t.Fatalf("retryBackoff(0) deterministic over 50 calls: %d distinct values", len(seen))
 	}
 }
+

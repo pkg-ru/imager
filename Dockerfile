@@ -4,7 +4,7 @@ ARG IMAGER_VERSION=latest
 
 ###############################################################################
 # Fetcher (from-release): скачивает production binary из GitHub releases
-# (github.com/pkg-ru/imager — зеркало; fallback gitverse.ru/pkg-ru/imager).
+# (github.com/pkg-ru/imager — зеркало; fallback github.com/pkg-ru/imager).
 # Используется default target'ом from-release — сборка не требует исходников/
 # Go toolchain: install-imager.sh резолвит версию ("latest" через GitHub API/
 # git ls-remote) и кладёт бинарь в /out/imager.
@@ -201,3 +201,4 @@ VOLUME ["/data/source", "/data/result", "/etc/imager/models"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/local/bin/imager"]
+

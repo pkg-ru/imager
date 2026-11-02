@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // recoverProcProcessor — processor.Processor + RGBPreparer со счётчиком
@@ -107,3 +107,4 @@ func TestGeneratePublishLossRecalRecalizesFromMetadata(t *testing.T) {
 		t.Fatalf("processor calls after recovery = %d, want 2 (regenerated)", got)
 	}
 }
+

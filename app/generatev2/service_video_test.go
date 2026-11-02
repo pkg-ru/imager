@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/metadata"
 )
 
 // videoEnv собирает testEnv с включённым VideoExtractor и метаданными.
@@ -641,3 +641,4 @@ func (nilMetaStore) Exists(context.Context, string) (bool, error)               
 func (nilMetaStore) Save(context.Context, string, *filemeta.FileMetadata) error   { return nil }
 func (nilMetaStore) Update(context.Context, string, metadata.UpdateFn) error      { return nil }
 func (nilMetaStore) Delete(context.Context, string) error                         { return nil }
+

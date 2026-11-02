@@ -4,7 +4,7 @@ import (
 	"io"
 	"os"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // fileArtifact — object.Artifact поверх открытого os.File. Инкапсулирует
@@ -61,3 +61,4 @@ func (a *fileStream) Close() error { return a.file.Close() }
 func (a *fileStream) Metadata() object.ObjectMetadata { return a.meta }
 
 var _ object.Stream = (*fileStream)(nil)
+

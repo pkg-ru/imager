@@ -23,9 +23,9 @@ import (
 	"time"
 
 	"github.com/jlaffaye/ftp"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // conn — узкий интерфейс FTP-соединения, используемый адаптером. Выделен,
@@ -553,3 +553,4 @@ func (r *ResultStore) deleteDir(c conn, dir string) (int64, error) {
 
 var _ storage.ResultStore = (*ResultStore)(nil)
 var _ storage.PrefixDeleter = (*ResultStore)(nil)
+

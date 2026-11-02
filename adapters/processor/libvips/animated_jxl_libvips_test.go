@@ -18,7 +18,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // TestAnimatedGifToJxlKeepsAnimation — главный регрессионный тест:
@@ -147,3 +147,4 @@ func TestAnimatedJxlToWebpKeepsAnimation(t *testing.T) {
 		t.Errorf("pages = %d, want 2 (animation preserved through jxl roundtrip)", n)
 	}
 }
+

@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/internal/testutil"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/ports/detector"
 )
 
 // requireLocalhostTCP пропускает тест, если localhost TCP недоступен.
@@ -192,3 +192,4 @@ func (fakeDetector) Available() bool { return true }
 func (fakeDetector) Describe() detector.DetectorInfo { return detector.DetectorInfo{Kind: "fake"} }
 
 var _ detector.Detector = (*fakeDetector)(nil)
+

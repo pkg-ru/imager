@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/app/generatev2"
 )
 
 // newTestHandler создаёт handler с fake generator и базовой конфигурацией.
@@ -791,3 +791,4 @@ func TestHandlerGenerateDetachedFromClientCancel(t *testing.T) {
 		t.Errorf("body = %q, want PNGDATA", body)
 	}
 }
+

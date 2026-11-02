@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // fakeLearning — управляемый fake LearningController для тестов.
@@ -244,3 +244,4 @@ func TestLearningConcurrentRequests(t *testing.T) {
 		t.Fatalf("result objects = %d, want 0", stats.Objects)
 	}
 }
+

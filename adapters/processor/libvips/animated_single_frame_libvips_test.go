@@ -19,7 +19,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makeJpegBackend создаёт реальный govips-движок для интеграционных тестов.
@@ -167,3 +167,4 @@ func TestAnimatedGifToGifKeepsAnimation(t *testing.T) {
 		t.Errorf("frame 1 center = (%d,%d,%d), want blue", r, g, bl)
 	}
 }
+

@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // Config — конфигурация политики (DTO, не связан с YAML).
@@ -850,3 +850,4 @@ func sortStrings(s []string) {
 		}
 	}
 }
+

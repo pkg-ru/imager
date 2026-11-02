@@ -30,7 +30,7 @@ import (
 	"runtime"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
 )
 
 // MaxFrameWorkers — жёсткий верхний лимит кадровых воркеров: каждый воркер
@@ -231,3 +231,4 @@ func runFramesParallel[T any](ctx context.Context, n, workers int, sem *shared.S
 	// (Достижимо только при отмене ctx между итерациями пула.)
 	return frames, nil
 }
+

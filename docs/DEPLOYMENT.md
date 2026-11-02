@@ -150,7 +150,7 @@ docker pull altrap/imager:1.0.0
 Образ `altrap/imager` берётся с Docker Hub (учётка `altrap`, не репозиторий
 кода) и собирается из релизов (`Dockerfile`, target `from-release`):
 бинарь `imager` скачивается fetcher-стадией с GitHub releases
-`github.com/pkg-ru/imager` (основной; GitVerse `gitverse.ru/pkg-ru/imager`
+`github.com/pkg-ru/imager` (основной; GitVerse `github.com/pkg-ru/imager`
 используется только как fallback при резолве версии `latest` через
 `git ls-remote`) (`IMAGER_VERSION`, см. [INSTALLATION.md](INSTALLATION.md#build-args)).
 Теги публикуются через `make docker-release IMAGER_VERSION=<tag>` или
@@ -399,3 +399,4 @@ GitVerse — основной репозиторий, GitHub — зеркало:
 настройках репозитория **GitHub** как environment secret окружения `Imager`
 (Settings → Environments → Imager → Environment secrets); джоба `publish`
 объявляет `environment: Imager`, чтобы получить к нему доступ.
+

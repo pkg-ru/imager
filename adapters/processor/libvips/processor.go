@@ -26,13 +26,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
-	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/bounded"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/adapters/processor/detection"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/bounded"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // ErrTooManyConcurrency — сигнал переполнения очереди ожидания слота (bounded
@@ -554,3 +554,4 @@ type watchdogResult[T any] struct {
 	out T
 	err error
 }
+

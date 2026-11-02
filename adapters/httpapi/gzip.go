@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // gzipPool — пул gzip.Writer. gzip.NewWriter аллоцирует ~640 КиБ на писатель
@@ -172,3 +172,4 @@ func gzipHandler(log observability.Logger, next http.Handler) http.Handler {
 		next.ServeHTTP(gw, r)
 	})
 }
+

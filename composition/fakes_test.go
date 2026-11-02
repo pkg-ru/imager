@@ -7,9 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeProcessor — fake processor.Processor: копирует исходник в out.
@@ -77,3 +77,4 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+

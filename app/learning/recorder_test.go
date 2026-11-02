@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // newTestRequest — segment-запрос для тестов.
@@ -535,3 +535,4 @@ func TestRecorderConcurrentObserveStop(t *testing.T) {
 		}
 	}
 }
+

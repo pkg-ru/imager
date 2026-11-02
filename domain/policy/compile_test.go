@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/processing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -808,3 +808,4 @@ func TestConfigLearningModeYAML(t *testing.T) {
 		})
 	}
 }
+

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // wantOutcome проверяет, что err является *OutcomeError с указанной
@@ -93,3 +93,4 @@ func (f *fakeProcessor) setErr(err error) {
 	defer f.mu.Unlock()
 	f.procErr = err
 }
+

@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // defaultFPS — частота кадров по умолчанию, если ffprobe не смог её
@@ -462,3 +462,4 @@ func nextJPEG(br *bufio.Reader) ([]byte, error) {
 func formatSeconds(t float64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", t), "0"), ".")
 }
+

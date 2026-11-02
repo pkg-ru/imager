@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // SourceStore — filesystem-реализация storage.SourceStore. Читает исходные
@@ -640,3 +640,4 @@ func metaFromInfo(key object.ObjectKey, info os.FileInfo) object.ObjectMetadata 
 		ModTime: info.ModTime(),
 	}
 }
+

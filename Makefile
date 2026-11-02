@@ -111,8 +111,8 @@ fuzz:
 
 # Имя образа и версия для docker-build-release/docker-push/docker-release.
 # IMAGER_IMAGE — образ на Docker Hub (altrap/imager); это УЧЁТКА Docker Hub,
-# не репозиторий кода. Репозитории кода: gitverse.ru/pkg-ru/imager (основной)
-# и github.com/pkg-ru/imager (зеркало).
+# не репозиторий кода. Репозитории кода: github.com/pkg-ru/imager (основной)
+# и gitverse.ru/pkg-ru/imager (зеркало).
 # IMAGER_VERSION принимает тег релиза ("v1.2.3", "1.0.0") или "latest" —
 # конкретная версия резолвится тем же механизмом, что docker/install-imager.sh
 # (docker/lib.sh: GitHub API releases/latest github.com/pkg-ru/imager,

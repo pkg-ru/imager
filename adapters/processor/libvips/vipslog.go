@@ -20,7 +20,7 @@
 package libvips
 
 import (
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // Зеркало G_LOG_LEVEL_* (битовое поле glib; значения важны: govips фильтрует
@@ -86,3 +86,4 @@ func RouteVipsLog(log observability.Logger, domain string, glibLevel int, messag
 		log.Debugf("%s", msg)
 	}
 }
+

@@ -16,12 +16,12 @@ import (
 	"strings"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/adapters/lru"
-	"gitverse.ru/pkg-ru/imager/adapters/processor/routing"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/generation"
+	"github.com/pkg-ru/imager/adapters/lru"
+	"github.com/pkg-ru/imager/adapters/processor/routing"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/generation"
 )
 
 // PixelGenerator — генератор прозрачного 1x1 пикселя в заданном формате.
@@ -877,3 +877,4 @@ func outputFormat(escapedPath string) string {
 	}
 	return ext
 }
+

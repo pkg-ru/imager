@@ -24,10 +24,10 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/processor/detection"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/adapters/processor/detection"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // makeTrimPng генерирует PNG WxH: белый фон и сплошной красный прямоугольник
@@ -605,3 +605,4 @@ func TestOpObjectCropTrimReadyBoxesPosition(t *testing.T) {
 		t.Error("output lost the red object after trim+object-crop with ready boxes; trim-offset not applied to ready boxes")
 	}
 }
+

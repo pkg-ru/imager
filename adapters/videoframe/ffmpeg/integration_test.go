@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // requireFFmpeg проверяет доступность ffmpeg/ffprobe и пропускает тест,
@@ -163,3 +163,4 @@ func (f *fileSource) Read(p []byte) (int, error) {
 func (f *fileSource) Seek(offset int64, whence int) (int64, error) {
 	return f.file.Seek(offset, whence)
 }
+

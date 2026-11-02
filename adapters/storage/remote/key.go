@@ -10,7 +10,7 @@ package remote
 import (
 	"strings"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // CanonicalKey нормализует ObjectKey в безопасный канонический ключ для
@@ -56,3 +56,4 @@ func CanonicalKey(key object.ObjectKey) (string, error) {
 	}
 	return strings.Join(out, "/"), nil
 }
+

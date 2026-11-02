@@ -14,8 +14,8 @@ import (
 	"io"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // TestProcessRewindsConsumedSource проверяет, что Process перематывает
@@ -63,3 +63,4 @@ func TestProcessRewindsConsumedSource(t *testing.T) {
 		t.Errorf("res.Size = %d, want %d", res.Size, out.Len())
 	}
 }
+

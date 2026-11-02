@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/metadata"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // fakeMetadataStore — in-memory metadata.Store со счётчиками вызовов.
@@ -211,3 +211,4 @@ func (f *fakeMetaProcessorSized) Process(_ context.Context, _ processor.Input, _
 
 var _ processor.Processor = (*fakeMetaProcessorSized)(nil)
 var _ processor.RGBPreparer = (*fakeMetaProcessorSized)(nil)
+

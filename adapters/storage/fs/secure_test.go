@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // TestResultStoreContractFS — контрактные тесты ResultStore против продового
@@ -504,3 +504,4 @@ func TestUnsafeErrorTyped(t *testing.T) {
 		t.Fatalf("expected unsafe path error, got %v", err)
 	}
 }
+

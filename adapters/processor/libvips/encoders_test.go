@@ -7,7 +7,7 @@ package libvips
 import (
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/domain/encoding"
 )
 
 // testCfg возвращает EncodersConfig с заданными глобальными параметрами
@@ -257,3 +257,4 @@ func TestResolvePNGQuantizeFromResolved(t *testing.T) {
 }
 
 func intp(v int) *int { return &v }
+

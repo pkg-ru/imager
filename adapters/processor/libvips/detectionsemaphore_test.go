@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
 )
 
 func newTestGate(vipsMax, detMax int, detMaxWait time.Duration) *detectionGate {
@@ -282,3 +282,4 @@ func TestGateConcurrentHandoff(t *testing.T) {
 		t.Errorf("detection waiting after completion = %d, want 0", w)
 	}
 }
+

@@ -27,7 +27,7 @@ docker/            # Скрипты установки и entrypoint
 
 ## Требования
 
-- Go 1.27.0 (модуль `gitverse.ru/pkg-ru/imager`).
+- Go 1.27.0 (модуль `github.com/pkg-ru/imager`).
 - libvips ≥ 8.16 (CGO, govips), тег сборки `libvips`.
 - ONNX Runtime (опционально), тег сборки `onnx`.
 - ffmpeg/ffprobe (для видео).

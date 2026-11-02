@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/ports/storage"
 )
 
 // MemArtifact — object.Artifact поверх []byte (потокобезопасный).
@@ -279,3 +279,4 @@ func (NopLogger) Errorf(string, ...any) {}
 func EmptyReader() io.Reader {
 	return strings.NewReader("")
 }
+

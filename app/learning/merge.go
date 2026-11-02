@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // Чистые функции слияния наблюдений в состояние path-policies.
@@ -355,3 +355,4 @@ func sortedKeys(m map[string]policy.PathPolicyConfig) []string {
 	sort.Strings(keys)
 	return keys
 }
+

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestCleanRelContainment(t *testing.T) {
@@ -91,3 +91,4 @@ func TestCleanRelRejectsUnsafeKeys(t *testing.T) {
 		}
 	}
 }
+

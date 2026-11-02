@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // buildFSApp собирает полный production pipeline с реальными FS-хранилищами
@@ -302,3 +302,4 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 		t.Errorf("error code = %q, want %q", env.Error.Code, want)
 	}
 }
+

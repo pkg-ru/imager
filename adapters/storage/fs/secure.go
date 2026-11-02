@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // errSymlinkEscape — внутренняя ошибка: компонент пути является символьной
@@ -113,3 +113,4 @@ func isSymlink(info os.FileInfo) bool {
 func errUnsafeContainment() error {
 	return &unsafePathError{msg: "fs: key escapes root"}
 }
+

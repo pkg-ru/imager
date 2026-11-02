@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 func mustReq(t *testing.T, url string) *asset.Request {
@@ -502,3 +502,4 @@ func TestPresetsAccessor(t *testing.T) {
 		t.Error("expected preset banner in global set")
 	}
 }
+

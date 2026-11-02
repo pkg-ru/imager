@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/jlaffaye/ftp"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // fakeConn — минимальный in-memory FTP-сервер, реализующий интерфейс conn.
@@ -925,3 +925,4 @@ func TestServerConnAdapterFeature(t *testing.T) {
 		}
 	}
 }
+

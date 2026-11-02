@@ -1,4 +1,4 @@
-// Package imager — публичный фасад библиотеки gitverse.ru/pkg-ru/imager.
+// Package imager — публичный фасад библиотеки github.com/pkg-ru/imager.
 //
 // Предоставляет высокоуровневый API для внешних приложений:
 //
@@ -20,14 +20,14 @@ import (
 	"os"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
-	"gitverse.ru/pkg-ru/imager/adapters/pixel"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/fs"
-	"gitverse.ru/pkg-ru/imager/adapters/videoframe/ffmpeg"
-	"gitverse.ru/pkg-ru/imager/app/learning"
-	"gitverse.ru/pkg-ru/imager/bootstrap"
-	"gitverse.ru/pkg-ru/imager/composition"
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/adapters/httpapi"
+	"github.com/pkg-ru/imager/adapters/pixel"
+	"github.com/pkg-ru/imager/adapters/storage/fs"
+	"github.com/pkg-ru/imager/adapters/videoframe/ffmpeg"
+	"github.com/pkg-ru/imager/app/learning"
+	"github.com/pkg-ru/imager/bootstrap"
+	"github.com/pkg-ru/imager/composition"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // ConfigDirEnv — env-переменная: путь к каталогу с настройками. Внутри
@@ -390,3 +390,4 @@ func (c learningCloser) Close() error {
 	c.s.Stop()
 	return nil
 }
+

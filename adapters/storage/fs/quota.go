@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // CacheOptions — конфигурация кэша результатов (квота + eviction).
@@ -298,3 +298,4 @@ func (c *cacheManager) snapshot() (bytes, objects int64) {
 	defer c.mu.RUnlock()
 	return c.totalBytes, c.totalObjects
 }
+

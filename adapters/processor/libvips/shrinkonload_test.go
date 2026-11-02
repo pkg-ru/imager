@@ -6,7 +6,7 @@ package libvips
 import (
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 func mustPlanShrink(t *testing.T, mutate func(p *processing.ProcessingPlan)) *processing.ProcessingPlan {
@@ -390,3 +390,4 @@ func TestShrinkOnLoadOptsDefault(t *testing.T) {
 		t.Error("explicit enabled=true must stay enabled")
 	}
 }
+

@@ -6,19 +6,19 @@ import (
 	"net/http"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/fs"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/app/adminsvc"
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
-	"gitverse.ru/pkg-ru/imager/app/learning"
-	"gitverse.ru/pkg-ru/imager/config"
-	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
-	"gitverse.ru/pkg-ru/imager/ports/metadata"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
-	"gitverse.ru/pkg-ru/imager/ports/storage"
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/adapters/httpapi"
+	"github.com/pkg-ru/imager/adapters/storage/fs"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/app/adminsvc"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/app/learning"
+	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/ports/metadata"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/storage"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // AppOptions — параметры сборки нового pipeline (composition root).
@@ -317,3 +317,4 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Learning:     learningSvc,
 	}, nil
 }
+

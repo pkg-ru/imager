@@ -19,7 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"gitverse.ru/pkg-ru/imager/ports/buffer"
+	"github.com/pkg-ru/imager/ports/buffer"
 )
 
 // ErrBufferLimit — сигнал превышения лимита размера буфера.
@@ -578,3 +578,4 @@ func NewBufferFactory(pool *BufferPool, dir string) *BufferFactory {
 func (f *BufferFactory) NewBuffer() (buffer.Buffer, error) {
 	return NewBuffer(BufferOptions{Pool: f.pool, Dir: f.dir})
 }
+

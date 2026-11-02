@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/internal/testutil"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // newMetaService строит Service для интеграционных тестов метаданных.
@@ -796,3 +796,4 @@ func TestMetaGateBoundsConcurrency(t *testing.T) {
 		s.metaGateRelease()
 	}
 }
+

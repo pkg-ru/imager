@@ -3,7 +3,7 @@ package asset
 import (
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // TestPresetResolveDifferentSourceFormats проверяет, что один пресет работает
@@ -584,3 +584,4 @@ func TestResolveAutoOutputFormat(t *testing.T) {
 		t.Fatal("Resolve png→webp: expected error, got nil")
 	}
 }
+

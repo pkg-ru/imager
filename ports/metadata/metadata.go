@@ -9,7 +9,7 @@ package metadata
 import (
 	"context"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/filemeta"
 )
 
 // UpdateFn — функция модификации метаданных для Store.Update.
@@ -55,3 +55,4 @@ type Store interface {
 	// родителя (sidecar больше не нужен).
 	Delete(ctx context.Context, assetKey string) error
 }
+

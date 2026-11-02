@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // TestConnOptionsAttempts — число попыток нормализуется до >= 1.
@@ -929,3 +929,4 @@ func TestBufferReadFromFile(t *testing.T) {
 		t.Errorf("reader got %d bytes, want %d", len(all), len(payload))
 	}
 }
+

@@ -18,7 +18,7 @@
 package libvips
 
 import (
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // shrinkOnLoadInfo — лёгкие метаданные исходника, достаточные для решения о
@@ -259,3 +259,4 @@ func resolveShrinkOnLoad(plan *processing.ProcessingPlan, src shrinkOnLoadInfo, 
 		return shrinkOnLoadDecision{JpegShrink: 1, Scale: scale}
 	}
 }
+

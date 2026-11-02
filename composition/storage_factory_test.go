@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 )
 
 func TestBuildSourceStoreEmptyKindReturnsNil(t *testing.T) {
@@ -113,3 +113,4 @@ func TestBuildResultStoreHTTPRejected(t *testing.T) {
 		t.Fatal("expected error for HTTP result store (source-only)")
 	}
 }
+

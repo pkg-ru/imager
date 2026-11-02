@@ -10,12 +10,12 @@ import (
 	"github.com/pkg-ru/dynamic"
 	"gopkg.in/yaml.v3"
 
-	"gitverse.ru/pkg-ru/imager/adapters/httpapi"
-	"gitverse.ru/pkg-ru/imager/adapters/processor/libvips"
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
-	"gitverse.ru/pkg-ru/imager/app/generatev2"
-	"gitverse.ru/pkg-ru/imager/config"
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/adapters/httpapi"
+	"github.com/pkg-ru/imager/adapters/processor/libvips"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/app/generatev2"
+	"github.com/pkg-ru/imager/config"
+	"github.com/pkg-ru/imager/domain/encoding"
 )
 
 // DefaultBufferMaxBytes — общий бюджет памяти процесса для spillable-буферов
@@ -1540,3 +1540,4 @@ func validateStorageConfig(cfg RemoteStorageConfig, role string) error {
 	}
 	return nil
 }
+

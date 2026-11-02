@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 // TestFileArtifactPathFromOSFile — artifact от *os.File отдаёт путь через
@@ -48,3 +48,4 @@ func (readSeekCloserStub) Close() error { return nil }
 
 // compile: fileArtifact должен удовлетворять интерфейсу с Path().
 var _ interface{ Path() string } = (*fileArtifact)(nil)
+

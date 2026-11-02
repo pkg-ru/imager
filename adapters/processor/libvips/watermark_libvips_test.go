@@ -22,7 +22,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makeGif собирает 2-кадровый GIF: кадр 0 — сплошной красный, кадр 1 —
@@ -562,3 +562,4 @@ func TestWatermarkRepeatAnimated(t *testing.T) {
 		}
 	}
 }
+

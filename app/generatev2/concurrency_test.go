@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // TestGenerateCacheStampedeSingleFlight проверяет, что при конкурентных
@@ -186,3 +186,4 @@ func TestGenerateCancelNoGoroutineLeak(t *testing.T) {
 		t.Fatal("Generate did not return after cancel (possible goroutine leak)")
 	}
 }
+

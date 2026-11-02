@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/coordination/singleflight"
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/internal/testutil"
-	"gitverse.ru/pkg-ru/imager/ports/coordinator"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/coordination/singleflight"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/ports/coordinator"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // testEnv — окружение для тестов.
@@ -823,3 +823,4 @@ func TestMapCoordinatorWaitTimeout(t *testing.T) {
 		t.Errorf("reason = %q, want wait timeout mention", oe.Reason)
 	}
 }
+

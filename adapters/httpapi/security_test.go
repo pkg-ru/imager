@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/asset"
 )
 
 // TestHandlerMaxURLLenRejected проверяет ограничение длины URL (request limit).
@@ -144,3 +144,4 @@ func TestHandlerVaryOriginOnAllowed(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Origin = %q", acao)
 	}
 }
+

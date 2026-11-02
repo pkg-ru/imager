@@ -12,7 +12,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // TestAPNGOutputStaticWithoutSpng фиксирует контракт APNG-выхода:
@@ -65,3 +65,4 @@ func TestAPNGOutputStaticWithoutSpng(t *testing.T) {
 		t.Error("APNG output contains acTL chunk, want static PNG without animation")
 	}
 }
+

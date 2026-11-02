@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/object"
 )
 
 func TestMapError(t *testing.T) {
@@ -53,3 +53,4 @@ func TestNotFoundConflict(t *testing.T) {
 		t.Fatal("Unsafe should wrap ErrUnsafePath")
 	}
 }
+

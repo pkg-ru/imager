@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"gitverse.ru/pkg-ru/imager/ports/bounded"
+	"github.com/pkg-ru/imager/ports/bounded"
 )
 
 // Регрессия: вывод ровно max байт должен читаться до EOF, а не отклоняться
@@ -77,3 +77,4 @@ func TestBoundedReaderReset(t *testing.T) {
 		t.Fatalf("after reset read %d bytes, want 32 (full data)", len(got))
 	}
 }
+

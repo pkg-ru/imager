@@ -9,7 +9,7 @@ import (
 	"io"
 	"sync"
 
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // testJPEG генерирует маленькое JPEG-изображение (4x4) в памяти. Используется
@@ -88,3 +88,4 @@ func (f *fakeVideoExtractor) setErr(err error) {
 }
 
 var _ videoframe.Extractor = (*fakeVideoExtractor)(nil)
+

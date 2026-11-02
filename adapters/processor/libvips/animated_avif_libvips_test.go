@@ -22,7 +22,7 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // TestAnimatedGifToAvifSequenceTrack — главный регрессионный тест: 2-кадровый
@@ -251,3 +251,4 @@ func TestAvifBenchmarkStaticVsAnimated(t *testing.T) {
 	t.Logf("bench: static avif (heifsave) = %v ms, animated avif (sequence) = %v ms, sizes %d/%d bytes",
 		elapsedS.Milliseconds(), elapsedA.Milliseconds(), len(resS.data), len(resA.data))
 }
+

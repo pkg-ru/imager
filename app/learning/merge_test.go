@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/domain/policy"
+	"github.com/pkg-ru/imager/domain/policy"
 )
 
 // fmts — хелпер построения dynamic.StringSlice.
@@ -404,3 +404,4 @@ func TestNormalizeState(t *testing.T) {
 		t.Errorf("output-formats = %#v, want sorted [avif webp]", formats)
 	}
 }
+

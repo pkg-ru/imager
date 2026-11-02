@@ -7,13 +7,13 @@ import (
 	"io"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/buffer"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
-	"gitverse.ru/pkg-ru/imager/ports/videoframe"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/buffer"
+	"github.com/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/ports/videoframe"
 )
 
 // videoExtractTimeout — собственный таймаут извлечения кадра из видео
@@ -281,3 +281,4 @@ func (s *Service) persistVideoFrameAsync(canonDir object.ObjectKey, metaKey stri
 		}
 	}()
 }
+

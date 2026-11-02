@@ -34,8 +34,8 @@ import (
 	"runtime"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/adapters/processor/shared"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/adapters/processor/shared"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // DefaultDetectionConcurrencyFactor — знаменатель дефолтного лимита
@@ -205,3 +205,4 @@ func (s *gateSlot) Release() {
 
 // detectionWaiting возвращает число ожидающих detection-слот (для метрик).
 func (g *detectionGate) detectionWaiting() int { return g.det.Waiting() }
+

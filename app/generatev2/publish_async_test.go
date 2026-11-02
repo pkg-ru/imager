@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/asset"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/internal/testutil"
-	"gitverse.ru/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/domain/asset"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/internal/testutil"
+	"github.com/pkg-ru/imager/observability"
 )
 
 // fakePubMetrics — observability.Metrics + PublishQueueMetrics со счётчиками
@@ -499,3 +499,4 @@ func TestSyncFallbackPublishSurvivesCanceledCtx(t *testing.T) {
 		t.Fatal("sync fallback did not publish object despite canceled ctx")
 	}
 }
+

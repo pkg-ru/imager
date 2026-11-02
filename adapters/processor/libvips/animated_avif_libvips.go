@@ -18,7 +18,7 @@ import (
 	"fmt"
 
 	"github.com/davidbyttow/govips/v2/vips"
-	"gitverse.ru/pkg-ru/imager/domain/encoding"
+	"github.com/pkg-ru/imager/domain/encoding"
 )
 
 // isAnimatedImage сообщает, является ли изображение анимацией (наличие
@@ -167,3 +167,4 @@ func (b *libvipsBackend) exportAnimatedAvif(img *vips.ImageRef, resolved encodin
 	}
 	return out, nil
 }
+

@@ -29,7 +29,7 @@ import (
 	"bytes"
 
 	"github.com/davidbyttow/govips/v2/vips"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/domain/processing"
 )
 
 // makeSolidPng генерирует сплошной PNG WxH заданного цвета.
@@ -291,3 +291,4 @@ func TestOpResizeLetterboxJpegDefaultWhite(t *testing.T) {
 		t.Errorf("left margin = (%d,%d,%d), want white", r, g, bl)
 	}
 }
+

@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/domain/object"
-	"gitverse.ru/pkg-ru/imager/domain/processing"
-	"gitverse.ru/pkg-ru/imager/ports/processor"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg-ru/imager/domain/processing"
+	"github.com/pkg-ru/imager/ports/processor"
 )
 
 // metaFlightPrefix — префикс singleflight-ключей метаданных.
@@ -565,3 +565,4 @@ func (s *Service) recordAssetCreationTime(ctx context.Context, assetKey object.O
 		}
 	}()
 }
+

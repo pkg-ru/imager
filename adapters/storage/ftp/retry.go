@@ -3,7 +3,7 @@ package ftp
 import (
 	"context"
 
-	"gitverse.ru/pkg-ru/imager/adapters/storage/remote"
+	"github.com/pkg-ru/imager/adapters/storage/remote"
 )
 
 // store — общая часть SourceStore и ResultStore: опции и доступ к пулу.
@@ -59,3 +59,4 @@ type pooledConn struct {
 	conn
 	*remote.Pooled[conn]
 }
+

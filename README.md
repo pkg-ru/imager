@@ -492,7 +492,7 @@ timing). Лимиты кадров/длительности задаются в 
 | Ресурс | Содержимое |
 |--------|------------|
 | [Демо](https://altuh.ru/demo/imager) | Онлайн-пример работы сервиса и клиентской части |
-| [imager-client](https://gitverse.ru/pkg-ru/imager-client) | Клиент для формирования asset URL |
+| [imager-client](https://github.com/pkg-ru/imager-client) | Клиент для формирования asset URL |
 | [docs/API.md](docs/API.md) | Формат URL, эндпоинты, заголовки, ошибки |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Полный справочник конфигурации |
 | [docs/INSTALLATION.md](docs/INSTALLATION.md) | Зависимости и инструкции по сборке |
@@ -627,3 +627,4 @@ Trivy (GitHub Actions, Docker Hub).
 © 2025 [Алтухов Владислав Владимирович](https://altuh.ru/about).
 
 Проект распространяется по лицензии [GNU General Public License v3.0](LICENSE).
+

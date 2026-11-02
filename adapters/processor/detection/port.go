@@ -3,8 +3,8 @@ package detection
 import (
 	"context"
 
-	"gitverse.ru/pkg-ru/imager/domain/filemeta"
-	"gitverse.ru/pkg-ru/imager/ports/detector"
+	"github.com/pkg-ru/imager/domain/filemeta"
+	"github.com/pkg-ru/imager/ports/detector"
 )
 
 // PortDetector is a thin adapter over detection.Detector implementing the
@@ -87,3 +87,4 @@ func objectsToFilemeta(boxes []Box) []filemeta.ObjectInfo {
 
 // compile-time check: PortDetector implements the application port.
 var _ detector.Detector = (*PortDetector)(nil)
+

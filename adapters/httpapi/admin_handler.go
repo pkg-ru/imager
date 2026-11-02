@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/pkg-ru/dynamic"
-	"gitverse.ru/pkg-ru/imager/observability"
-	"gitverse.ru/pkg-ru/imager/ports/admin"
+	"github.com/pkg-ru/imager/observability"
+	"github.com/pkg-ru/imager/ports/admin"
 )
 
 // AdminHandler — HTTP-обработчик административных эндпоинтов.
@@ -231,3 +231,4 @@ func (a *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, status
 		_, _ = w.Write(body)
 	}
 }
+
