@@ -317,4 +317,3 @@ func (r *Request) WithResolved(crop Crop, trim bool, size Size, dpr DPR, quality
 	cp.resolved = true
 	return &cp
 }
-

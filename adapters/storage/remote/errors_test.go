@@ -53,4 +53,3 @@ func TestNotFoundConflict(t *testing.T) {
 		t.Fatal("Unsafe should wrap ErrUnsafePath")
 	}
 }
-

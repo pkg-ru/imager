@@ -929,4 +929,3 @@ func TestBufferReadFromFile(t *testing.T) {
 		t.Errorf("reader got %d bytes, want %d", len(all), len(payload))
 	}
 }
-

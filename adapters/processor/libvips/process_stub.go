@@ -42,4 +42,3 @@ func (s *stubBackend) prepareRGB(_ context.Context, _ []byte) (*processor.RGBFra
 }
 
 func (s *stubBackend) close() error { return nil }
-

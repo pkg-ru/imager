@@ -298,4 +298,3 @@ func (s *SourceStore) metadata(key object.ObjectKey, resp *http.Response) object
 	}
 	return meta
 }
-

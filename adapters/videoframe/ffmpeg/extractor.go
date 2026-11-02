@@ -462,4 +462,3 @@ func nextJPEG(br *bufio.Reader) ([]byte, error) {
 func formatSeconds(t float64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", t), "0"), ".")
 }
-

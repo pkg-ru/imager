@@ -227,4 +227,3 @@ func TestWriteTimeoutTooSmall(t *testing.T) {
 		t.Errorf("WriteTimeoutTooSmall(0, 30s) = true, want false (0 = дефолт runtime)")
 	}
 }
-

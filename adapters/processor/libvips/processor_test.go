@@ -394,4 +394,3 @@ func TestOrphanMetricsGlobal(t *testing.T) {
 		t.Errorf("orphan inflight after decrement = %d, want 0", got)
 	}
 }
-

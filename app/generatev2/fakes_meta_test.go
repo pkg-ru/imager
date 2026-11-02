@@ -211,4 +211,3 @@ func (f *fakeMetaProcessorSized) Process(_ context.Context, _ processor.Input, _
 
 var _ processor.Processor = (*fakeMetaProcessorSized)(nil)
 var _ processor.RGBPreparer = (*fakeMetaProcessorSized)(nil)
-

@@ -231,4 +231,3 @@ func (a *AdminHandler) writeError(w http.ResponseWriter, r *http.Request, status
 		_, _ = w.Write(body)
 	}
 }
-

@@ -91,4 +91,3 @@ func TestCleanRelRejectsUnsafeKeys(t *testing.T) {
 		}
 	}
 }
-

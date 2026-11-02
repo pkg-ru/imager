@@ -119,4 +119,3 @@ type ArtifactFactory interface {
 	// NewArtifact создаёт Artifact поверх открытого ресурса.
 	NewArtifact(meta object.ObjectMetadata, closer io.Closer, seeker io.Seeker) object.Artifact
 }
-

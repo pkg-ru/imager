@@ -175,4 +175,3 @@ func TestBufferPoolCloseGuard(t *testing.T) {
 		t.Fatalf("Used() after release = %d, want 0 (clamped)", pool.Used())
 	}
 }
-

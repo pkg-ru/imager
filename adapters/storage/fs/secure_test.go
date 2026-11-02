@@ -504,4 +504,3 @@ func TestUnsafeErrorTyped(t *testing.T) {
 		t.Fatalf("expected unsafe path error, got %v", err)
 	}
 }
-

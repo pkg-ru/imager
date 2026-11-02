@@ -654,4 +654,3 @@ func TestMetadataDelete(t *testing.T) {
 		t.Fatalf("Delete idempotent: %v", err)
 	}
 }
-

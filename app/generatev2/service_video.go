@@ -281,4 +281,3 @@ func (s *Service) persistVideoFrameAsync(canonDir object.ObjectKey, metaKey stri
 		}
 	}()
 }
-

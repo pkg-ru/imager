@@ -355,4 +355,3 @@ func sortedKeys(m map[string]policy.PathPolicyConfig) []string {
 	sort.Strings(keys)
 	return keys
 }
-

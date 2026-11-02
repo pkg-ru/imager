@@ -791,4 +791,3 @@ func TestHandlerGenerateDetachedFromClientCancel(t *testing.T) {
 		t.Errorf("body = %q, want PNGDATA", body)
 	}
 }
-

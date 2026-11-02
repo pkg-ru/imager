@@ -113,4 +113,3 @@ func TestBuildResultStoreHTTPRejected(t *testing.T) {
 		t.Fatal("expected error for HTTP result store (source-only)")
 	}
 }
-

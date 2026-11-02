@@ -1484,4 +1484,3 @@ func ptrOr(v *int, def int) int {
 	}
 	return *v
 }
-

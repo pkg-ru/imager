@@ -63,4 +63,3 @@ func TestProcessRewindsConsumedSource(t *testing.T) {
 		t.Errorf("res.Size = %d, want %d", res.Size, out.Len())
 	}
 }
-

@@ -600,4 +600,3 @@ func codeForErr(err error) string {
 	}
 	return "error"
 }
-

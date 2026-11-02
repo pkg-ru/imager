@@ -861,4 +861,3 @@ func TestUpdatePathPoliciesEmptyState(t *testing.T) {
 		t.Errorf("path-policies key must remain:\n%s", got)
 	}
 }
-

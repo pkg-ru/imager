@@ -584,4 +584,3 @@ func TestResolveAutoOutputFormat(t *testing.T) {
 		t.Fatal("Resolve png→webp: expected error, got nil")
 	}
 }
-

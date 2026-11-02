@@ -1540,4 +1540,3 @@ func validateStorageConfig(cfg RemoteStorageConfig, role string) error {
 	}
 	return nil
 }
-

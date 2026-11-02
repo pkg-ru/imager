@@ -87,4 +87,3 @@ func objectsToFilemeta(boxes []Box) []filemeta.ObjectInfo {
 
 // compile-time check: PortDetector implements the application port.
 var _ detector.Detector = (*PortDetector)(nil)
-

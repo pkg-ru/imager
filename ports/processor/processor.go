@@ -152,4 +152,3 @@ type Processor interface {
 	// результат в out. Возвращает метаданные результата.
 	Process(ctx context.Context, in Input, out io.Writer) (*Result, error)
 }
-

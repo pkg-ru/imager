@@ -214,4 +214,3 @@ func resolvePNGQuantize(r encoding.ResolvedParams) pngQuantizeDecision {
 		Bitdepth: r.PaletteBitDepth,
 	}
 }
-

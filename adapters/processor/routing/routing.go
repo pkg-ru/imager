@@ -145,4 +145,3 @@ func (p *Processor) primaryCovered(plan *processing.ProcessingPlan) bool {
 	}
 	return true
 }
-

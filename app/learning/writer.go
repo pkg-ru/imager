@@ -564,4 +564,3 @@ func sortedCustomNames(m map[string]policy.PresetConfig) []string {
 	sort.Strings(keys)
 	return keys
 }
-

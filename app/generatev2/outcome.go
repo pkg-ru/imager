@@ -52,4 +52,3 @@ type OutcomeError = generation.OutcomeError
 func outcome(kind OutcomeKind, reason string, cause error) *OutcomeError {
 	return &OutcomeError{Kind: kind, Reason: reason, Cause: cause}
 }
-

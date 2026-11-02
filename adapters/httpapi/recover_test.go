@@ -211,4 +211,3 @@ func panicMetricValue(name string) int64 {
 	}
 	return iv.Value()
 }
-

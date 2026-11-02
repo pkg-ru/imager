@@ -176,4 +176,3 @@ func hasPrefixBoundary(key, prefix string) bool {
 	}
 	return key[len(prefix)] == '/'
 }
-

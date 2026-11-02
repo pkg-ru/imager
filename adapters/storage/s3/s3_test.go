@@ -706,4 +706,3 @@ func TestS3DeleteByPrefix(t *testing.T) {
 		t.Fatalf("second deleted = %d, want 0", n)
 	}
 }
-

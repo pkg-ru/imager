@@ -371,4 +371,3 @@ func TestInFlightTrueDuringGenerationFalseAfter(t *testing.T) {
 		t.Fatal("InFlight = true after generation, want false")
 	}
 }
-

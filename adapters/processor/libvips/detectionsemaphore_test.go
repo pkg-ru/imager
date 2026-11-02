@@ -282,4 +282,3 @@ func TestGateConcurrentHandoff(t *testing.T) {
 		t.Errorf("detection waiting after completion = %d, want 0", w)
 	}
 }
-

@@ -796,4 +796,3 @@ application:
 		t.Errorf("NotFound.Pixel = %v, want true", rc.HTTP.NotFound.Pixel)
 	}
 }
-

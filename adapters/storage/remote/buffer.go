@@ -578,4 +578,3 @@ func NewBufferFactory(pool *BufferPool, dir string) *BufferFactory {
 func (f *BufferFactory) NewBuffer() (buffer.Buffer, error) {
 	return NewBuffer(BufferOptions{Pool: f.pool, Dir: f.dir})
 }
-

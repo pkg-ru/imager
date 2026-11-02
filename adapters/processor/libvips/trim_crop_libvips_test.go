@@ -140,7 +140,7 @@ func (f *fakeDetector) DetectObjects(_ context.Context, _ []byte, width, height 
 func TestOpSmartCropTrim(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpSmartCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 100, Height: 50}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 100, Height: 50}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -173,7 +173,7 @@ func TestOpFaceCropTrimUsesTrimmedDimensions(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -208,7 +208,7 @@ func TestOpObjectCropTrimUsesTrimmedDimensions(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpObjectCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -244,7 +244,7 @@ func TestOpFaceCropWithReadyBoxes(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -285,7 +285,7 @@ func TestFaceCropDegradesToCenterCropOnDetectionOverload(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -410,7 +410,7 @@ func decodeGifFrameSize(t *testing.T, data []byte, frame int) (int, int) {
 func TestTrimAnimatedGifColorBorder(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -486,7 +486,7 @@ func makeTrimPngAlpha(t *testing.T, W, H, x0, y0, x1, y1 int) []byte {
 func TestTrimPngWithAlphaColorBorder(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -519,7 +519,7 @@ func TestOpFaceCropTrimReadyBoxesTranslation(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 60, Height: 40}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -571,7 +571,7 @@ func TestOpObjectCropTrimReadyBoxesPosition(t *testing.T) {
 	det := &fakeDetector{}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpObjectCrop, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 30, Height: 20}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 30, Height: 20}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -605,4 +605,3 @@ func TestOpObjectCropTrimReadyBoxesPosition(t *testing.T) {
 		t.Error("output lost the red object after trim+object-crop with ready boxes; trim-offset not applied to ready boxes")
 	}
 }
-

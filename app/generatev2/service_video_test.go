@@ -641,4 +641,3 @@ func (nilMetaStore) Exists(context.Context, string) (bool, error)               
 func (nilMetaStore) Save(context.Context, string, *filemeta.FileMetadata) error   { return nil }
 func (nilMetaStore) Update(context.Context, string, metadata.UpdateFn) error      { return nil }
 func (nilMetaStore) Delete(context.Context, string) error                         { return nil }
-

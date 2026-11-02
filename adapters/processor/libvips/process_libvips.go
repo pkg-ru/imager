@@ -874,7 +874,7 @@ func (b *libvipsBackend) withFrames(img *vips.ImageRef, fn func(f *vips.ImageRef
 	// возвращает частичный slice, closeFrames(false) закрывает всё (включая
 	// кадр, на котором fn упал — семантика совпадает с последовательным
 	// путём, где упавший кадр закрывался отдельно).
-	created, err := runFramesParallel[*vips.ImageRef](nil, n, b.frameWorkers, b.frameSem, makeFrame, fn)
+	created, err := runFramesParallel[*vips.ImageRef](context.TODO(), n, b.frameWorkers, b.frameSem, makeFrame, fn)
 	if err != nil {
 		frames = append(frames, created...)
 		closeFrames(false)

@@ -640,4 +640,3 @@ func metaFromInfo(key object.ObjectKey, info os.FileInfo) object.ObjectMetadata 
 		ModTime: info.ModTime(),
 	}
 }
-

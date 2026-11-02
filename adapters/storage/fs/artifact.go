@@ -61,4 +61,3 @@ func (a *fileStream) Close() error { return a.file.Close() }
 func (a *fileStream) Metadata() object.ObjectMetadata { return a.meta }
 
 var _ object.Stream = (*fileStream)(nil)
-

@@ -333,4 +333,3 @@ func TestBuildSingleflightWaitTimeoutDisabled(t *testing.T) {
 	<-waiterDone
 	<-ownerDone
 }
-

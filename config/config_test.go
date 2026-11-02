@@ -599,4 +599,3 @@ func TestValidateDefaultVideoErrors(t *testing.T) {
 		})
 	}
 }
-

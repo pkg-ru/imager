@@ -343,4 +343,3 @@ func ensureFSStores(ctx context.Context, sourceDir, resultDir string, srcCfg, re
 	}
 	return sources, results, nil
 }
-

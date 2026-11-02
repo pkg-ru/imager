@@ -81,4 +81,3 @@ func sequentialSafe(plan *processing.ProcessingPlan) bool {
 		return false
 	}
 }
-

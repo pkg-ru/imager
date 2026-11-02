@@ -31,7 +31,7 @@ import (
 func TestAnimatedGifToAvifSequenceTrack(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -60,7 +60,7 @@ func TestAnimatedGifToAvifSequenceTrack(t *testing.T) {
 func TestAnimatedGifToHeifStaticFirstFrame(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatHEIF,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -112,7 +112,7 @@ func TestStaticJpegToAvifAndHeifStaticPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plan, err := processing.NewProcessingPlan(
 				processing.OpResize, processing.FormatJPEG, tc.format,
-				processing.Size{Original: true}, 1, 0, nil, 0, 0,
+				processing.Size{Original: true}, 1, 0, nil, 0,
 			)
 			if err != nil {
 				t.Fatalf("NewProcessingPlan: %v", err)
@@ -215,14 +215,14 @@ func TestAvifBenchmarkStaticVsAnimated(t *testing.T) {
 	// Static: JPEG → AVIF (libvips heifsave).
 	planS, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatAVIF,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan(static): %v", err)
 	}
 	startS := time.Now()
 	resS, err := b.process(context.Background(), makeJpeg(t), planS, false, nil, nil)
-	elapsedS := time.Now().Sub(startS)
+	elapsedS := time.Since(startS)
 	if err != nil {
 		t.Fatalf("static avif process: %v", err)
 	}
@@ -233,14 +233,14 @@ func TestAvifBenchmarkStaticVsAnimated(t *testing.T) {
 	// Animated: GIF → AVIF (libheif sequence encoder).
 	planA, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan(animated): %v", err)
 	}
 	startA := time.Now()
 	resA, err := b.process(context.Background(), makeGif(t), planA, false, nil, nil)
-	elapsedA := time.Now().Sub(startA)
+	elapsedA := time.Since(startA)
 	if err != nil {
 		t.Fatalf("animated avif process: %v", err)
 	}
@@ -251,4 +251,3 @@ func TestAvifBenchmarkStaticVsAnimated(t *testing.T) {
 	t.Logf("bench: static avif (heifsave) = %v ms, animated avif (sequence) = %v ms, sizes %d/%d bytes",
 		elapsedS.Milliseconds(), elapsedA.Milliseconds(), len(resS.data), len(resA.data))
 }
-

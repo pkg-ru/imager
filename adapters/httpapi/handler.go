@@ -877,4 +877,3 @@ func outputFormat(escapedPath string) string {
 	}
 	return ext
 }
-

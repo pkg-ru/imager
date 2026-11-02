@@ -832,4 +832,3 @@ func TestDeleteAssetsKeepsLargestAIAssetOther(t *testing.T) {
 		t.Fatal("largest_ai_asset should remain when deleting a different asset")
 	}
 }
-

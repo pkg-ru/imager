@@ -513,4 +513,3 @@ func SplitPresetNameDPR(name string) (string, DPR, error) {
 	}
 	return name[:at], DPR(v), nil
 }
-

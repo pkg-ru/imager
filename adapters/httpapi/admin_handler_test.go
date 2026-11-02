@@ -381,4 +381,3 @@ func TestAdminDeleteAssetsDeletedCount(t *testing.T) {
 		t.Errorf("deleted = %v, want 2", got)
 	}
 }
-

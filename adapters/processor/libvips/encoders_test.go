@@ -257,4 +257,3 @@ func TestResolvePNGQuantizeFromResolved(t *testing.T) {
 }
 
 func intp(v int) *int { return &v }
-

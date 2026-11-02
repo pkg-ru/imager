@@ -182,4 +182,3 @@ func TestIsEngineUnavailable(t *testing.T) {
 		t.Fatal("*UnsupportedError must be detected")
 	}
 }
-

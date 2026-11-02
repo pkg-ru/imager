@@ -390,4 +390,3 @@ func TestShrinkOnLoadOptsDefault(t *testing.T) {
 		t.Error("explicit enabled=true must stay enabled")
 	}
 }
-

@@ -186,4 +186,3 @@ func TestGenerateCancelNoGoroutineLeak(t *testing.T) {
 		t.Fatal("Generate did not return after cancel (possible goroutine leak)")
 	}
 }
-

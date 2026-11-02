@@ -45,4 +45,3 @@ type Detector interface {
 	// Describe returns detector configuration for sidecar metadata.
 	Describe() DetectorInfo
 }
-

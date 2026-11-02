@@ -205,4 +205,3 @@ func (s *gateSlot) Release() {
 
 // detectionWaiting возвращает число ожидающих detection-слот (для метрик).
 func (g *detectionGate) detectionWaiting() int { return g.det.Waiting() }
-

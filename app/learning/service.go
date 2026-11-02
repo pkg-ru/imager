@@ -50,4 +50,3 @@ func (s *Service) Stop() {
 		s.recorder.Stop()
 	}
 }
-

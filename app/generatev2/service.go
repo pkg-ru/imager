@@ -1519,4 +1519,3 @@ func (s *artifactStream) Read(p []byte) (int, error) { return s.art.Read(p) }
 func (s *artifactStream) Close() error { return s.art.Close() }
 
 func (s *artifactStream) Metadata() object.ObjectMetadata { return s.art.Metadata() }
-

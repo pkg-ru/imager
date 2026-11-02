@@ -192,4 +192,3 @@ func (fakeDetector) Available() bool { return true }
 func (fakeDetector) Describe() detector.DetectorInfo { return detector.DetectorInfo{Kind: "fake"} }
 
 var _ detector.Detector = (*fakeDetector)(nil)
-

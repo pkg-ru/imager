@@ -387,4 +387,3 @@ func callUpdateFn(fn metadata.UpdateFn, m *filemeta.FileMetadata) (changed bool,
 	}()
 	return fn(m)
 }
-

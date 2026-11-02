@@ -170,4 +170,3 @@ func sizeMatches(s processing.Size, w, h int) bool {
 		return false
 	}
 }
-

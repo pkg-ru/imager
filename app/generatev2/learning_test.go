@@ -244,4 +244,3 @@ func TestLearningConcurrentRequests(t *testing.T) {
 		t.Fatalf("result objects = %d, want 0", stats.Objects)
 	}
 }
-

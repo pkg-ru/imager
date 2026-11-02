@@ -390,4 +390,3 @@ func (c learningCloser) Close() error {
 	c.s.Stop()
 	return nil
 }
-

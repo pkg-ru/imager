@@ -437,4 +437,3 @@ func (p *Policy) PathNames() []string {
 	sort.Strings(names)
 	return names
 }
-

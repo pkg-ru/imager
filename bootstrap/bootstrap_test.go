@@ -252,4 +252,3 @@ func TestFatalExits(t *testing.T) {
 		t.Fatalf("output = %q, want mention of 'bootstrap boom: 42'", out)
 	}
 }
-

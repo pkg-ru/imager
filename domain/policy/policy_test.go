@@ -502,4 +502,3 @@ func TestPresetsAccessor(t *testing.T) {
 		t.Error("expected preset banner in global set")
 	}
 }
-

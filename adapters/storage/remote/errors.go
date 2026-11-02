@@ -51,4 +51,3 @@ func Unsafe(key object.ObjectKey, err error) error {
 	}
 	return fmt.Errorf("unsafe path for key %q: %w", key, object.ErrUnsafePath)
 }
-

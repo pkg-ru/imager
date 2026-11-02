@@ -88,4 +88,3 @@ func (f *fakeVideoExtractor) setErr(err error) {
 }
 
 var _ videoframe.Extractor = (*fakeVideoExtractor)(nil)
-

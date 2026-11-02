@@ -475,4 +475,3 @@ func TestResultStoreNoSyncOptOut(t *testing.T) {
 		t.Errorf("durability: dirSyncs = %d, want >= 1", dirSyncs)
 	}
 }
-

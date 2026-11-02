@@ -259,4 +259,3 @@ func resolveShrinkOnLoad(plan *processing.ProcessingPlan, src shrinkOnLoadInfo, 
 		return shrinkOnLoadDecision{JpegShrink: 1, Scale: scale}
 	}
 }
-

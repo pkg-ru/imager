@@ -144,4 +144,3 @@ func TestHandlerVaryOriginOnAllowed(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Origin = %q", acao)
 	}
 }
-

@@ -33,4 +33,3 @@ func main() {
 		imager.Fatal("imager: %v", err)
 	}
 }
-

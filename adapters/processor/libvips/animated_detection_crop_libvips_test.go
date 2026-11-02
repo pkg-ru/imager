@@ -72,7 +72,7 @@ func TestDetectionCropAnimatedGifToGifReadyBoxes(t *testing.T) {
 	b, det := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -94,7 +94,7 @@ func TestDetectionCropAnimatedGifToWebpReadyBoxes(t *testing.T) {
 	b, det := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatGIF, processing.FormatWebP,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -118,7 +118,7 @@ func TestDetectionCropAnimatedGifToAvifReadyBoxes(t *testing.T) {
 	b, det := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatGIF, processing.FormatAVIF,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -146,7 +146,7 @@ func TestDetectionCropAnimatedSelfDetect(t *testing.T) {
 	b, det := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
 		processing.OpObjectCrop, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -179,7 +179,7 @@ func TestDetectionCropAnimatedFixModes(t *testing.T) {
 			b, _ := detBackend(t)
 			plan, err := processing.NewProcessingPlan(
 				tc.op, processing.FormatGIF, processing.FormatGIF,
-				processing.Size{Width: 32, Height: 16}, 1, 0, nil, 0, 0,
+				processing.Size{Width: 32, Height: 16}, 1, 0, nil, 0,
 			)
 			if err != nil {
 				t.Fatalf("NewProcessingPlan: %v", err)
@@ -209,7 +209,7 @@ func TestDetectionCropAnimatedWithWatermark(t *testing.T) {
 	b, _ := detBackend(t)
 	plan, err := processing.NewProcessingPlan(
 		processing.OpFaceCrop, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -229,4 +229,3 @@ func TestDetectionCropAnimatedWithWatermark(t *testing.T) {
 		}
 	}
 }
-

@@ -19,4 +19,3 @@ func IsConnErr(err error) bool {
 	}
 	return err != nil
 }
-

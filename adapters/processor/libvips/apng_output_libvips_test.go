@@ -29,7 +29,7 @@ func TestAPNGOutputStaticWithoutSpng(t *testing.T) {
 
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatAPNG,
-		processing.Size{Width: 32, Height: 32}, 1, 85, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -65,4 +65,3 @@ func TestAPNGOutputStaticWithoutSpng(t *testing.T) {
 		t.Error("APNG output contains acTL chunk, want static PNG without animation")
 	}
 }
-

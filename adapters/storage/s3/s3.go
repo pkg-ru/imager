@@ -874,4 +874,3 @@ func (r *ResultStore) List(ctx context.Context, prefix object.ObjectKey) ([]obje
 
 var _ storage.ResultStore = (*ResultStore)(nil)
 var _ storage.PrefixDeleter = (*ResultStore)(nil)
-

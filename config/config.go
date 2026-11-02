@@ -336,4 +336,3 @@ func (c *Config) Compile() (*Compiled, error) {
 		DefaultVideoAttempts:     c.Processing.DefaultVideoAttempts.Unwrap(),
 	}, nil
 }
-

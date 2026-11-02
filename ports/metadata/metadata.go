@@ -55,4 +55,3 @@ type Store interface {
 	// родителя (sidecar больше не нужен).
 	Delete(ctx context.Context, assetKey string) error
 }
-

@@ -93,4 +93,3 @@ func (f *fakeProcessor) setErr(err error) {
 	defer f.mu.Unlock()
 	f.procErr = err
 }
-

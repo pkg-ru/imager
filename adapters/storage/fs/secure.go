@@ -113,4 +113,3 @@ func isSymlink(info os.FileInfo) bool {
 func errUnsafeContainment() error {
 	return &unsafePathError{msg: "fs: key escapes root"}
 }
-

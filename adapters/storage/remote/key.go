@@ -56,4 +56,3 @@ func CanonicalKey(key object.ObjectKey) (string, error) {
 	}
 	return strings.Join(out, "/"), nil
 }
-

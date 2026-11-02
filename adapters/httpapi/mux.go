@@ -164,4 +164,3 @@ func ipAllowed(remoteAddr string, allowed []string) bool {
 	}
 	return false
 }
-

@@ -404,4 +404,3 @@ func TestNormalizeState(t *testing.T) {
 		t.Errorf("output-formats = %#v, want sorted [avif webp]", formats)
 	}
 }
-

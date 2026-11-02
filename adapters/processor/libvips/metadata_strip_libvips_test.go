@@ -132,7 +132,7 @@ func TestStripAllMetadataRemovesUserMetadata(t *testing.T) {
 func TestProcessStripsMetadataPng(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 4, Height: 4}, 1, 85, nil, 0, 0,
+		processing.Size{Width: 4, Height: 4}, 1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -173,7 +173,7 @@ func TestProcessStripsMetadataHeifJxl(t *testing.T) {
 	for _, c := range cases {
 		plan, err := processing.NewProcessingPlan(
 			processing.OpResize, processing.FormatPNG, c.fmt,
-			processing.Size{Width: 4, Height: 4}, 1, 85, nil, 0, 0,
+			processing.Size{Width: 4, Height: 4}, 1, 85, nil, 0,
 		)
 		if err != nil {
 			t.Fatalf("%s: NewProcessingPlan: %v", c.name, err)
@@ -211,4 +211,3 @@ func hasField(fields []string, name string) bool {
 	}
 	return false
 }
-

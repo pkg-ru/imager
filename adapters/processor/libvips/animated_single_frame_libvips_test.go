@@ -38,7 +38,7 @@ func makeJpegBackend(t *testing.T) backend {
 func TestAnimatedGifToJpegSingleFrame(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatJPEG,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -77,7 +77,7 @@ func TestAnimatedGifToJpegSingleFrame(t *testing.T) {
 func TestAnimatedGifToJpegResizeFirstFrame(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatJPEG,
-		processing.Size{Width: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -110,7 +110,7 @@ func TestAnimatedGifToJpegResizeFirstFrame(t *testing.T) {
 func TestAnimatedGifToJpegCropFirstFrame(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpCrop, processing.FormatGIF, processing.FormatJPEG,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -142,7 +142,7 @@ func TestAnimatedGifToJpegCropFirstFrame(t *testing.T) {
 func TestAnimatedGifToGifKeepsAnimation(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -167,4 +167,3 @@ func TestAnimatedGifToGifKeepsAnimation(t *testing.T) {
 		t.Errorf("frame 1 center = (%d,%d,%d), want blue", r, g, bl)
 	}
 }
-

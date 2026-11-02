@@ -808,4 +808,3 @@ func TestConfigLearningModeYAML(t *testing.T) {
 		})
 	}
 }
-

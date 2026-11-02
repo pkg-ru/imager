@@ -172,4 +172,3 @@ func gzipHandler(log observability.Logger, next http.Handler) http.Handler {
 		next.ServeHTTP(gw, r)
 	})
 }
-

@@ -86,4 +86,3 @@ func (r *Result) Close() error {
 type Generator interface {
 	Generate(ctx context.Context, req *asset.Request) (*Result, error)
 }
-

@@ -553,4 +553,3 @@ func (r *ResultStore) deleteDir(c conn, dir string) (int64, error) {
 
 var _ storage.ResultStore = (*ResultStore)(nil)
 var _ storage.PrefixDeleter = (*ResultStore)(nil)
-

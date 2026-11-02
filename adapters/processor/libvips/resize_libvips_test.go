@@ -54,7 +54,7 @@ func makeSolidPng(t *testing.T, W, H int, c color.RGBA) []byte {
 func TestOpResizeHeightOnly(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 0, Height: 200}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 0, Height: 200}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -81,7 +81,7 @@ func TestOpResizeHeightOnly(t *testing.T) {
 func TestOpResizeWidthOnly(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 200, Height: 0}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 0}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -110,7 +110,7 @@ func TestOpResizeWidthOnly(t *testing.T) {
 func TestOpResizeWidthOnlyTallSource(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 200, Height: 0}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 0}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -139,7 +139,7 @@ func TestOpResizeWidthOnlyTallSource(t *testing.T) {
 func TestOpResizeBothDimensions(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 200, Height: 200}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 200}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -187,7 +187,7 @@ func pngPixelAt(t *testing.T, data []byte, x, y int) (uint8, uint8, uint8, uint8
 func TestOpResizeLetterboxTransparent(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -224,7 +224,7 @@ func TestOpResizeLetterboxTransparent(t *testing.T) {
 func TestOpResizeLetterboxJpegBackground(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatJPEG,
-		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -266,7 +266,7 @@ func TestOpResizeLetterboxJpegBackground(t *testing.T) {
 func TestOpResizeLetterboxJpegDefaultWhite(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatJPEG,
-		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 200, Height: 100}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -291,4 +291,3 @@ func TestOpResizeLetterboxJpegDefaultWhite(t *testing.T) {
 		t.Errorf("left margin = (%d,%d,%d), want white", r, g, bl)
 	}
 }
-

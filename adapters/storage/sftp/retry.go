@@ -65,4 +65,3 @@ type pooledClient struct {
 	client
 	*remote.Pooled[client]
 }
-

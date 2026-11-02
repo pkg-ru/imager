@@ -535,4 +535,3 @@ func TestRecorderConcurrentObserveStop(t *testing.T) {
 		}
 	}
 }
-

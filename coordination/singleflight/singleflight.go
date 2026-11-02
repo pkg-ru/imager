@@ -228,4 +228,3 @@ func (g *Group) Acquire(ctx context.Context, key object.ObjectKey) (coordinator.
 }
 
 var _ coordinator.Keyed = (*Group)(nil)
-

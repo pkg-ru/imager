@@ -86,4 +86,3 @@ func RouteVipsLog(log observability.Logger, domain string, glibLevel int, messag
 		log.Debugf("%s", msg)
 	}
 }
-

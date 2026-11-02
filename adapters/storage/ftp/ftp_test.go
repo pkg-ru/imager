@@ -925,4 +925,3 @@ func TestServerConnAdapterFeature(t *testing.T) {
 		}
 	}
 }
-

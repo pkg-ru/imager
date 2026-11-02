@@ -499,4 +499,3 @@ func TestSyncFallbackPublishSurvivesCanceledCtx(t *testing.T) {
 		t.Fatal("sync fallback did not publish object despite canceled ctx")
 	}
 }
-

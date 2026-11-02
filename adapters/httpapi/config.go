@@ -396,4 +396,3 @@ func DefaultWriteTimeoutFor(generateTimeout time.Duration) time.Duration {
 func WriteTimeoutTooSmall(writeTimeout, generateTimeout time.Duration) bool {
 	return writeTimeout > 0 && writeTimeout <= generateTimeout
 }
-

@@ -207,4 +207,3 @@ func Fatal(format string, args ...any) {
 	logger.Errorf(format, args...)
 	os.Exit(1)
 }
-

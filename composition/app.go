@@ -317,4 +317,3 @@ func Build(ctx context.Context, opt AppOptions) (*App, error) {
 		Learning:     learningSvc,
 	}, nil
 }
-

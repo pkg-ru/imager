@@ -48,4 +48,3 @@ func (readSeekCloserStub) Close() error { return nil }
 
 // compile: fileArtifact должен удовлетворять интерфейсу с Path().
 var _ interface{ Path() string } = (*fileArtifact)(nil)
-

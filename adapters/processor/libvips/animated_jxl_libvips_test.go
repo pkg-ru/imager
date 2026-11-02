@@ -27,7 +27,7 @@ import (
 func TestAnimatedGifToJxlKeepsAnimation(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatJPEGXL,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -72,7 +72,7 @@ func TestAnimatedGifToJxlKeepsAnimation(t *testing.T) {
 func TestStaticJpegToJxlStaticPath(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEG, processing.FormatJPEGXL,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -106,7 +106,7 @@ func TestAnimatedJxlToWebpKeepsAnimation(t *testing.T) {
 	// Сначала GIF → JXL.
 	planJxl, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatJPEGXL,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan(jxl): %v", err)
@@ -120,7 +120,7 @@ func TestAnimatedJxlToWebpKeepsAnimation(t *testing.T) {
 	// Затем JXL → WebP.
 	planWebp, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatJPEGXL, processing.FormatWebP,
-		processing.Size{Original: true}, 1, 0, nil, 0, 0,
+		processing.Size{Original: true}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan(webp): %v", err)
@@ -147,4 +147,3 @@ func TestAnimatedJxlToWebpKeepsAnimation(t *testing.T) {
 		t.Errorf("pages = %d, want 2 (animation preserved through jxl roundtrip)", n)
 	}
 }
-

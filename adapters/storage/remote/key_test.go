@@ -46,4 +46,3 @@ func TestCanonicalKey(t *testing.T) {
 		})
 	}
 }
-

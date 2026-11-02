@@ -298,4 +298,3 @@ func (c *cacheManager) snapshot() (bytes, objects int64) {
 	defer c.mu.RUnlock()
 	return c.totalBytes, c.totalObjects
 }
-

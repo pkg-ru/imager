@@ -275,4 +275,3 @@ func (r *Recorder) flush() {
 		r.logger.Errorf("learning: write %s: %v", file, err)
 	}
 }
-

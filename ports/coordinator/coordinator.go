@@ -37,4 +37,3 @@ type KeyedLocker interface {
 	// отмены контекста.
 	Acquire(ctx context.Context, key object.ObjectKey) (Unlock, error)
 }
-

@@ -77,4 +77,3 @@ func TestBoundedReaderReset(t *testing.T) {
 		t.Fatalf("after reset read %d bytes, want 32 (full data)", len(got))
 	}
 }
-

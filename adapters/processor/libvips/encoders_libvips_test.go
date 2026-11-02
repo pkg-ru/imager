@@ -45,7 +45,7 @@ func pngBackendPlan(t *testing.T) *processing.ProcessingPlan {
 	t.Helper()
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatPNG, processing.FormatPNG,
-		processing.Size{Width: 8, Height: 8}, 1, 85, nil, 0, 0,
+		processing.Size{Width: 8, Height: 8}, 1, 85, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -204,4 +204,3 @@ func absFloat(v float64) float64 {
 	}
 	return v
 }
-

@@ -565,4 +565,3 @@ func (s *Service) recordAssetCreationTime(ctx context.Context, assetKey object.O
 		}
 	}()
 }
-

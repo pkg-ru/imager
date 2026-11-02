@@ -182,4 +182,3 @@ func enumerateAssets(ref *SourceRef, pol *policy.Policy, presets *asset.PresetSe
 
 	return urls, nil
 }
-

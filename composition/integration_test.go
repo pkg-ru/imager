@@ -302,4 +302,3 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want string) 
 		t.Errorf("error code = %q, want %q", env.Error.Code, want)
 	}
 }
-

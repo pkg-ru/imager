@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/sftp"
 	"github.com/pkg-ru/imager/adapters/storage/remote"
 	"github.com/pkg-ru/imager/domain/object"
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -874,4 +874,3 @@ func TestSFTPDeleteByPrefixErrors(t *testing.T) {
 		t.Errorf("rmdir error = %v, want ErrUnavailable", err)
 	}
 }
-

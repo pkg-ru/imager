@@ -231,4 +231,3 @@ func runFramesParallel[T any](ctx context.Context, n, workers int, sem *shared.S
 	// (Достижимо только при отмене ctx между итерациями пула.)
 	return frames, nil
 }
-

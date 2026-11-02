@@ -107,4 +107,3 @@ func TestGeneratePublishLossRecalRecalizesFromMetadata(t *testing.T) {
 		t.Fatalf("processor calls after recovery = %d, want 2 (regenerated)", got)
 	}
 }
-

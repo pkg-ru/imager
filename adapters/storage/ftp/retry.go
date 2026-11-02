@@ -59,4 +59,3 @@ type pooledConn struct {
 	conn
 	*remote.Pooled[conn]
 }
-

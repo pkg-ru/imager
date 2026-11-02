@@ -108,7 +108,7 @@ func TestWatermarkAppliedToEveryFrame(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -160,7 +160,7 @@ func TestWatermarkOpacity(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -228,7 +228,7 @@ func TestWatermarkOpacity(t *testing.T) {
 func TestWatermarkNoWatermark(t *testing.T) {
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -344,7 +344,7 @@ func TestWatermarkAnimatedOutputWebP(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatWebP,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -404,7 +404,7 @@ func TestWatermarkAnimatedOutputAPNG(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatAPNG,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -460,7 +460,7 @@ func TestWatermarkAnimatedCrop(t *testing.T) {
 	}
 	plan, err := processing.NewProcessingPlan(
 		processing.OpCrop, processing.FormatGIF, processing.FormatGIF,
-		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 16, Height: 16}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -520,7 +520,7 @@ func TestWatermarkRepeatAnimated(t *testing.T) {
 	wm.Opacity = 50
 	plan, err := processing.NewProcessingPlan(
 		processing.OpResize, processing.FormatGIF, processing.FormatWebP,
-		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0, 0,
+		processing.Size{Width: 32, Height: 32}, 1, 0, nil, 0,
 	)
 	if err != nil {
 		t.Fatalf("NewProcessingPlan: %v", err)
@@ -562,4 +562,3 @@ func TestWatermarkRepeatAnimated(t *testing.T) {
 		}
 	}
 }
-

@@ -73,4 +73,3 @@ func writeTemp(tmp *os.File, src io.Reader, ctx context.Context) (int64, error) 
 	n, err := io.CopyBuffer(tmp, src, *bufp)
 	return n, err
 }
-

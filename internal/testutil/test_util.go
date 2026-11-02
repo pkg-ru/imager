@@ -279,4 +279,3 @@ func (NopLogger) Errorf(string, ...any) {}
 func EmptyReader() io.Reader {
 	return strings.NewReader("")
 }
-

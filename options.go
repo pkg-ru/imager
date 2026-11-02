@@ -127,4 +127,3 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		AdminHandler: app.AdminHandler,
 	}, nil
 }
-
