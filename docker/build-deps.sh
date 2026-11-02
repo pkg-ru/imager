@@ -17,7 +17,7 @@
 set -u
 
 # Builder-stage dev packages (golang:1.27.0-alpine3.24 builder).
-BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
+BUILDER_PACKAGES="build-base pkgconf musl-dev vips-dev~=8.18 glib-dev libheif-dev libde265-dev~1.0 libjxl-dev librsvg-dev poppler-dev libraw-dev tzdata~=2026"
 
 # Runtime-stage packages (alpine:3.24 runtime). onnxruntime теперь в стабильном
 # community-репозитории 3.24 — edge-репозиторий для него не нужен.
@@ -34,7 +34,7 @@ RUNTIME_PACKAGES="vips-tools~=8.18 vips~=8.18 libheif~=1.23 libde265~1.0 libjxl~
 # 1.1.x обратно совместим с 1.0.x (ABI-стабильный), проходит constraint.
 # Оставляем libde265 только в стабильном репозитории — там версия 1.0.x/1.1.x,
 # ABI-совместимая с vips~=8.18.
-EDGE_PACKAGES="ffmpeg~=8.1 libraw~=0.22 libass~=0.17 nghttp2~=1.70"
+EDGE_PACKAGES="ffmpeg=8.1.2-r1 libraw=0.22.2-r0 libass=0.17.5-r0 nghttp2=1.70.0-r0"
 
 case "${1:-}" in
     install-builder)
@@ -53,6 +53,9 @@ case "${1:-}" in
         # после включения edge-репозиториев (см. Dockerfile: runtime-base).
         ;;
     install-edge)
+        # Edge-фиксы CVE (ffmpeg 8.1.2-r1, libraw 0.22.2, libass 0.17.5,
+        # nghttp2 1.70.0). ~= constraints удерживают апгрейд внутри той же
+        # major-версии, чтобы не сломать ABI-совместимость с пакетами из 3.24.
         # shellcheck disable=SC2086
         apk add --no-cache --upgrade $EDGE_PACKAGES
         ;;
